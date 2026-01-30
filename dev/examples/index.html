@@ -1,149 +1,102 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Examples · SimplePipelines.jl</title><meta name="title" content="Examples · SimplePipelines.jl"/><meta property="og:title" content="Examples · SimplePipelines.jl"/><meta property="twitter:title" content="Examples · SimplePipelines.jl"/><meta name="description" content="Documentation for SimplePipelines.jl."/><meta property="og:description" content="Documentation for SimplePipelines.jl."/><meta property="twitter:description" content="Documentation for SimplePipelines.jl."/><meta property="og:url" content="https://mashu.github.io/SimplePipelines.jl/examples/"/><meta property="twitter:url" content="https://mashu.github.io/SimplePipelines.jl/examples/"/><link rel="canonical" href="https://mashu.github.io/SimplePipelines.jl/examples/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SimplePipelines.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../tutorial/">Tutorial</a></li><li class="is-active"><a class="tocitem" href>Examples</a><ul class="internal"><li><a class="tocitem" href="#Basic-Pipeline"><span>Basic Pipeline</span></a></li><li><a class="tocitem" href="#Parallel-Processing"><span>Parallel Processing</span></a></li><li><a class="tocitem" href="#Julia-Computation"><span>Julia Computation</span></a></li><li><a class="tocitem" href="#Bioinformatics:-NGS-Alignment"><span>Bioinformatics: NGS Alignment</span></a></li><li><a class="tocitem" href="#Bioinformatics:-Multi-Sample-Variant-Calling"><span>Bioinformatics: Multi-Sample Variant Calling</span></a></li><li><a class="tocitem" href="#Error-Handling-with-Retry-and-Fallback"><span>Error Handling with Retry and Fallback</span></a></li><li><a class="tocitem" href="#Conditional-Branching"><span>Conditional Branching</span></a></li><li><a class="tocitem" href="#Complex-DAG"><span>Complex DAG</span></a></li><li><a class="tocitem" href="#Robust-Pipeline-(All-Features)"><span>Robust Pipeline (All Features)</span></a></li></ul></li><li><a class="tocitem" href="../api/">API Reference</a></li><li><a class="tocitem" href="../design/">Design</a></li><li><a class="tocitem" href="../development/">Development</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Examples</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Examples</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/mashu/SimplePipelines.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/mashu/SimplePipelines.jl/blob/main/docs/src/examples.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Examples"><a class="docs-heading-anchor" href="#Examples">Examples</a><a id="Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Examples" title="Permalink"></a></h1><h2 id="Basic-Pipeline"><a class="docs-heading-anchor" href="#Basic-Pipeline">Basic Pipeline</a><a id="Basic-Pipeline-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Pipeline" title="Permalink"></a></h2><p>A simple three-step workflow:</p><pre><code class="language-julia hljs">using SimplePipelines
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Examples · SimplePipelines.jl</title><meta name="title" content="Examples · SimplePipelines.jl"/><meta property="og:title" content="Examples · SimplePipelines.jl"/><meta property="twitter:title" content="Examples · SimplePipelines.jl"/><meta name="description" content="Documentation for SimplePipelines.jl."/><meta property="og:description" content="Documentation for SimplePipelines.jl."/><meta property="twitter:description" content="Documentation for SimplePipelines.jl."/><meta property="og:url" content="https://mashu.github.io/SimplePipelines.jl/examples/"/><meta property="twitter:url" content="https://mashu.github.io/SimplePipelines.jl/examples/"/><link rel="canonical" href="https://mashu.github.io/SimplePipelines.jl/examples/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SimplePipelines.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../tutorial/">Tutorial</a></li><li class="is-active"><a class="tocitem" href>Examples</a><ul class="internal"><li><a class="tocitem" href="#1.-Basics"><span>1. Basics</span></a></li><li><a class="tocitem" href="#2.-Control-flow"><span>2. Control flow</span></a></li><li><a class="tocitem" href="#3.-Complex-DAGs"><span>3. Complex DAGs</span></a></li><li><a class="tocitem" href="#4.-Bioinformatics"><span>4. Bioinformatics</span></a></li></ul></li><li><a class="tocitem" href="../api/">API Reference</a></li><li><a class="tocitem" href="../design/">Design</a></li><li><a class="tocitem" href="../development/">Development</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Examples</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Examples</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/mashu/SimplePipelines.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/mashu/SimplePipelines.jl/blob/main/docs/src/examples.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Examples"><a class="docs-heading-anchor" href="#Examples">Examples</a><a id="Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Examples" title="Permalink"></a></h1><p>This page shows pipeline patterns in order of increasing complexity. Each example has a flow diagram, a short goal, and runnable code.</p><p><strong>Contents</strong></p><ol><li><a href="#1-basics">Basics</a> — sequential, parallel, Julia + shell</li><li><a href="#2-control-flow">Control flow</a> — retry, fallback, branching</li><li><a href="#3-complex-dags">Complex DAGs</a> — multi-stage parallel, robust pipeline</li><li><a href="#4-bioinformatics">Bioinformatics</a> — immune repertoire (single &amp; multi-donor), variant calling</li></ol><hr/><h2 id="1.-Basics"><a class="docs-heading-anchor" href="#1.-Basics">1. Basics</a><a id="1.-Basics-1"></a><a class="docs-heading-anchor-permalink" href="#1.-Basics" title="Permalink"></a></h2><h3 id="1.1-Basic-Pipeline"><a class="docs-heading-anchor" href="#1.1-Basic-Pipeline">1.1 Basic Pipeline</a><a id="1.1-Basic-Pipeline-1"></a><a class="docs-heading-anchor-permalink" href="#1.1-Basic-Pipeline" title="Permalink"></a></h3><p><strong>Flow:</strong> Three steps in sequence.</p><pre><code class="nohighlight hljs">  download  ──►  process  ──►  upload</code></pre><p><strong>Goal:</strong> Download a file, process it, upload the result.</p><pre><code class="language-julia hljs">using SimplePipelines
 
 download = @step download = `curl -o data.txt https://example.com/data`
 process = @step process = `sort data.txt &gt; sorted.txt`
 upload = @step upload = `scp sorted.txt server:/data/`
 
 pipeline = download &gt;&gt; process &gt;&gt; upload
-run_pipeline(pipeline)</code></pre><h2 id="Parallel-Processing"><a class="docs-heading-anchor" href="#Parallel-Processing">Parallel Processing</a><a id="Parallel-Processing-1"></a><a class="docs-heading-anchor-permalink" href="#Parallel-Processing" title="Permalink"></a></h2><p>Process multiple files concurrently:</p><pre><code class="language-julia hljs">using SimplePipelines
+run_pipeline(pipeline)</code></pre><hr/><h3 id="1.2-Parallel-Processing"><a class="docs-heading-anchor" href="#1.2-Parallel-Processing">1.2 Parallel Processing</a><a id="1.2-Parallel-Processing-1"></a><a class="docs-heading-anchor-permalink" href="#1.2-Parallel-Processing" title="Permalink"></a></h3><p><strong>Flow:</strong> Three steps run in parallel, then one step merges.</p><pre><code class="nohighlight hljs">       ┌── file_a ──┐
+       ├── file_b ──┼──►  archive
+       └── file_c ──┘</code></pre><p><strong>Goal:</strong> Compress three files concurrently, then archive all outputs.</p><pre><code class="language-julia hljs">using SimplePipelines
 
-# Process each file independently
 file_a = @step a = `gzip -k file_a.txt`
 file_b = @step b = `gzip -k file_b.txt`
 file_c = @step c = `gzip -k file_c.txt`
-
-# Archive all compressed files
 archive = @step archive = `tar -cvf archive.tar *.gz`
 
-# Files compress in parallel, then archive
 pipeline = (file_a &amp; file_b &amp; file_c) &gt;&gt; archive
-run_pipeline(pipeline)</code></pre><h2 id="Julia-Computation"><a class="docs-heading-anchor" href="#Julia-Computation">Julia Computation</a><a id="Julia-Computation-1"></a><a class="docs-heading-anchor-permalink" href="#Julia-Computation" title="Permalink"></a></h2><p>Mix Julia computation with external tools:</p><pre><code class="language-julia hljs">using SimplePipelines
+run_pipeline(pipeline)</code></pre><hr/><h3 id="1.3-Julia-Shell"><a class="docs-heading-anchor" href="#1.3-Julia-Shell">1.3 Julia + Shell</a><a id="1.3-Julia-Shell-1"></a><a class="docs-heading-anchor-permalink" href="#1.3-Julia-Shell" title="Permalink"></a></h3><p><strong>Flow:</strong> Julia step → shell step → Julia step.</p><pre><code class="nohighlight hljs">  generate  ──►  process  ──►  report
+   (Julia)       (shell)      (Julia)</code></pre><p><strong>Goal:</strong> Generate data in Julia, run a shell tool, then summarize in Julia.</p><pre><code class="language-julia hljs">using SimplePipelines
+using DelimitedFiles
 
-# Generate data in Julia
 generate = @step generate = () -&gt; begin
-    data = rand(1000, 100)
+    data = rand(100, 10)
     writedlm(&quot;matrix.csv&quot;, data, &#39;,&#39;)
     return &quot;Generated $(size(data)) matrix&quot;
 end
 
-# Process with external tool
-process = @step process = `./analyze matrix.csv -o stats.json`
+process = @step process = `wc -l matrix.csv`
 
-# Load and report in Julia
 report = @step report = () -&gt; begin
-    stats = JSON.parsefile(&quot;stats.json&quot;)
-    println(&quot;Mean: $(stats[&quot;mean&quot;])&quot;)
-    println(&quot;Std:  $(stats[&quot;std&quot;])&quot;)
+    lines = read(&quot;matrix.csv&quot;, String)
+    nrows = count(==(&#39;\n&#39;), lines)
+    return &quot;Matrix has $nrows rows&quot;
 end
 
 pipeline = generate &gt;&gt; process &gt;&gt; report
-run_pipeline(pipeline)</code></pre><h2 id="Bioinformatics:-NGS-Alignment"><a class="docs-heading-anchor" href="#Bioinformatics:-NGS-Alignment">Bioinformatics: NGS Alignment</a><a id="Bioinformatics:-NGS-Alignment-1"></a><a class="docs-heading-anchor-permalink" href="#Bioinformatics:-NGS-Alignment" title="Permalink"></a></h2><p>A typical next-generation sequencing alignment workflow:</p><pre><code class="language-julia hljs">using SimplePipelines
+run_pipeline(pipeline)</code></pre><hr/><h2 id="2.-Control-flow"><a class="docs-heading-anchor" href="#2.-Control-flow">2. Control flow</a><a id="2.-Control-flow-1"></a><a class="docs-heading-anchor-permalink" href="#2.-Control-flow" title="Permalink"></a></h2><h3 id="2.1-Retry-and-Fallback"><a class="docs-heading-anchor" href="#2.1-Retry-and-Fallback">2.1 Retry and Fallback</a><a id="2.1-Retry-and-Fallback-1"></a><a class="docs-heading-anchor-permalink" href="#2.1-Retry-and-Fallback" title="Permalink"></a></h3><p><strong>Flow (retry then continue):</strong> Run a step up to N times, then continue.</p><pre><code class="nohighlight hljs">  [fetch^3]  ──►  process
+   (retry)</code></pre><p><strong>Flow (fallback):</strong> If primary fails, run fallback.</p><pre><code class="nohighlight hljs">   primary  ──►  (on success)  result
+      │
+      └──►  (on failure)  fallback  ──►  result</code></pre><p><strong>Goal:</strong> Retry flaky fetch; use fallback when primary step fails; combine retry and fallback.</p><pre><code class="language-julia hljs">using SimplePipelines
 
-# Quality control
-fastqc = @step fastqc = `fastqc -o qc/ reads.fq.gz`
+# Retry then continue
+fetch = @step fetch = `curl -f https://example.com/data -o data.json`
+process = @step process = `wc -c data.json`
+pipeline = Retry(fetch, 3, delay=1.0) &gt;&gt; process
 
-# Trim adapters
-trim = @step trim = `trimmomatic SE reads.fq.gz trimmed.fq.gz ILLUMINACLIP:adapters.fa:2:30:10`
-
-# Align to reference
-align = @step align = `bwa mem -t 8 reference.fa trimmed.fq.gz &gt; aligned.sam`
-
-# Convert and sort
-sort_bam = @step sort = `samtools sort -@ 4 -o sorted.bam aligned.sam`
-
-# Index
-index = @step index = `samtools index sorted.bam`
-
-# Full pipeline
-pipeline = fastqc &gt;&gt; trim &gt;&gt; align &gt;&gt; sort_bam &gt;&gt; index
-run_pipeline(Pipeline(pipeline, name=&quot;NGS Alignment&quot;))</code></pre><h2 id="Bioinformatics:-Multi-Sample-Variant-Calling"><a class="docs-heading-anchor" href="#Bioinformatics:-Multi-Sample-Variant-Calling">Bioinformatics: Multi-Sample Variant Calling</a><a id="Bioinformatics:-Multi-Sample-Variant-Calling-1"></a><a class="docs-heading-anchor-permalink" href="#Bioinformatics:-Multi-Sample-Variant-Calling" title="Permalink"></a></h2><p>Process multiple samples in parallel, then joint-call variants:</p><pre><code class="language-julia hljs">using SimplePipelines
-
-# Per-sample processing function
-function sample_pipeline(name, fastq)
-    trim = Step(Symbol(&quot;trim_&quot;, name), `trimmomatic SE $fastq $(name)_trimmed.fq.gz ...`)
-    align = Step(Symbol(&quot;align_&quot;, name), `bwa mem ref.fa $(name)_trimmed.fq.gz &gt; $(name).bam`)
-    sort = Step(Symbol(&quot;sort_&quot;, name), `samtools sort -o $(name)_sorted.bam $(name).bam`)
-    return trim &gt;&gt; align &gt;&gt; sort
-end
-
-# Build per-sample pipelines
-sample_a = sample_pipeline(&quot;A&quot;, &quot;sample_A.fq.gz&quot;)
-sample_b = sample_pipeline(&quot;B&quot;, &quot;sample_B.fq.gz&quot;)
-sample_c = sample_pipeline(&quot;C&quot;, &quot;sample_C.fq.gz&quot;)
-
-# Joint variant calling (after all samples)
-call = @step call = `bcftools mpileup -f ref.fa *_sorted.bam | bcftools call -mv -o variants.vcf`
-
-# Filter variants
-filter_vcf = @step filter = `bcftools filter -e &#39;QUAL&lt;20&#39; variants.vcf &gt; filtered.vcf`
-
-# Complete pipeline:
-#   (A &amp; B &amp; C) &gt;&gt; call &gt;&gt; filter
-pipeline = (sample_a &amp; sample_b &amp; sample_c) &gt;&gt; call &gt;&gt; filter_vcf
-
-run_pipeline(Pipeline(pipeline, name=&quot;Multi-Sample Variant Calling&quot;))</code></pre><h2 id="Error-Handling-with-Retry-and-Fallback"><a class="docs-heading-anchor" href="#Error-Handling-with-Retry-and-Fallback">Error Handling with Retry and Fallback</a><a id="Error-Handling-with-Retry-and-Fallback-1"></a><a class="docs-heading-anchor-permalink" href="#Error-Handling-with-Retry-and-Fallback" title="Permalink"></a></h2><p>Handle flaky operations gracefully:</p><pre><code class="language-julia hljs">using SimplePipelines
-
-# Retry a flaky API call up to 3 times
-fetch = @step fetch = `curl -f https://flaky-api.com/data -o data.json`
-pipeline = Retry(fetch, 3, delay=2.0) &gt;&gt; process
-
-# If primary method fails, use fallback
-fast = @step fast = `fast-tool data.csv`
-slow = @step slow = `slow-tool data.csv`
+# Fallback
+fast = @step fast = `sort data.csv &gt; sorted.csv`
+slow = @step slow = `cat data.csv &gt; sorted.csv`
 pipeline = fast | slow
 
-# Combine: retry primary, then fallback
-pipeline = Retry(fast, 3) | slow</code></pre><h2 id="Conditional-Branching"><a class="docs-heading-anchor" href="#Conditional-Branching">Conditional Branching</a><a id="Conditional-Branching-1"></a><a class="docs-heading-anchor-permalink" href="#Conditional-Branching" title="Permalink"></a></h2><p>Choose execution path at runtime:</p><pre><code class="language-julia hljs">using SimplePipelines
+# Retry then fallback
+pipeline = Retry(fast, 3) | slow</code></pre><hr/><h3 id="2.2-Conditional-Branching"><a class="docs-heading-anchor" href="#2.2-Conditional-Branching">2.2 Conditional Branching</a><a id="2.2-Conditional-Branching-1"></a><a class="docs-heading-anchor-permalink" href="#2.2-Conditional-Branching" title="Permalink"></a></h3><p><strong>Flow:</strong> One of two branches runs based on a condition.</p><pre><code class="nohighlight hljs">            ┌── if true  ──►  branch_a
+  condition ─┤
+            └── if false ──►  branch_b</code></pre><p><strong>Goal:</strong> Choose processing path by file size or environment (e.g. DEBUG).</p><pre><code class="language-julia hljs">using SimplePipelines
 
-# Different processing based on file size
-small_pipeline = @step small = `quick-process data.csv`
-large_pipeline = @step decompress = `gunzip data.csv.gz` &gt;&gt; @step process = `parallel-process data.csv`
+# By file size
+small_pipeline = @step small = `head -n 1000 data.csv &gt; sample.csv`
+large_pipeline = @step decompress = `gunzip -c data.csv.gz &gt; data.csv` &gt;&gt; @step process = `split -l 10000 data.csv chunk_`
 
 pipeline = Branch(
-    () -&gt; filesize(&quot;data.csv&quot;) &lt; 100_000_000,  # &lt; 100MB
+    () -&gt; filesize(&quot;data.csv&quot;) &lt; 100_000_000,
     small_pipeline,
     large_pipeline
 )
 
-# Environment-based branching
-debug_steps = @step debug = `./tool --verbose --debug data`
-prod_steps = @step prod = `./tool --quiet data`
+# By environment
+debug_steps = @step debug = `echo &quot;debug mode&quot;`
+prod_steps = @step prod = `echo &quot;production&quot;`
+pipeline = Branch(() -&gt; get(ENV, &quot;DEBUG&quot;, &quot;0&quot;) == &quot;1&quot;, debug_steps, prod_steps)</code></pre><hr/><h2 id="3.-Complex-DAGs"><a class="docs-heading-anchor" href="#3.-Complex-DAGs">3. Complex DAGs</a><a id="3.-Complex-DAGs-1"></a><a class="docs-heading-anchor-permalink" href="#3.-Complex-DAGs" title="Permalink"></a></h2><h3 id="3.1-Multi-stage-Parallel"><a class="docs-heading-anchor" href="#3.1-Multi-stage-Parallel">3.1 Multi-stage Parallel</a><a id="3.1-Multi-stage-Parallel-1"></a><a class="docs-heading-anchor-permalink" href="#3.1-Multi-stage-Parallel" title="Permalink"></a></h3><p><strong>Flow:</strong> Two parallel fetch+transform branches, then merge, analyze, then report and archive in parallel.</p><pre><code class="nohighlight hljs">  ┌── fetch_db   ──►  transform_db  ──┐
+  │                                    ├──►  merge  ──►  analyze  ──►  ┌── report
+  └── fetch_files ──►  transform_files ─┘                               └── archive</code></pre><p><strong>Goal:</strong> Fetch from two sources in parallel, process each, merge, analyze, then produce report and archive in parallel.</p><pre><code class="language-julia hljs">using SimplePipelines
 
-pipeline = Branch(() -&gt; get(ENV, &quot;DEBUG&quot;, &quot;0&quot;) == &quot;1&quot;, debug_steps, prod_steps)</code></pre><h2 id="Complex-DAG"><a class="docs-heading-anchor" href="#Complex-DAG">Complex DAG</a><a id="Complex-DAG-1"></a><a class="docs-heading-anchor-permalink" href="#Complex-DAG" title="Permalink"></a></h2><p>A workflow with multiple parallel stages:</p><pre><code class="language-julia hljs">using SimplePipelines
+fetch_db = @step db = `curl -s -o db_data.json https://example.com/export`
+fetch_files = @step files = `echo &quot;local_data&quot; &gt; local_data.txt`
 
-# Stage 1: Fetch from multiple sources (parallel)
-fetch_db = @step db = `curl -o db_data.json https://api.database.com/export`
-fetch_files = @step files = `rsync -av server:/data/ local_data/`
+transform_db = @step transform_db = `wc -c db_data.json &gt; db_size.txt`
+transform_files = @step transform_files = `wc -c local_data.txt &gt; files_size.txt`
 
-# Stage 2: Transform each source (parallel, after fetch)
-transform_db = @step transform_db = () -&gt; transform_database(&quot;db_data.json&quot;)
-transform_files = @step transform_files = () -&gt; transform_files(&quot;local_data/&quot;)
+merge = @step merge = `cat db_size.txt files_size.txt &gt; merged.txt`
+analyze = @step analyze = `wc -l merged.txt &gt; results.txt`
 
-# Stage 3: Merge and analyze (sequential)
-merge = @step merge = () -&gt; merge_datasets(&quot;transformed_db.csv&quot;, &quot;transformed_files.csv&quot;)
-analyze = @step analyze = `./analysis_tool merged.csv -o results/`
+report = @step report = `cat results.txt`
+archive = @step archive = `gzip -c merged.txt &gt; results.tar.gz`
 
-# Stage 4: Generate outputs (parallel)
-report = @step report = () -&gt; generate_report(&quot;results/&quot;)
-archive = @step archive = `tar -czvf results.tar.gz results/`
-
-# Build DAG
 db_branch = fetch_db &gt;&gt; transform_db
 files_branch = fetch_files &gt;&gt; transform_files
-
 pipeline = (db_branch &amp; files_branch) &gt;&gt; merge &gt;&gt; analyze &gt;&gt; (report &amp; archive)
 
-run_pipeline(pipeline)</code></pre><h2 id="Robust-Pipeline-(All-Features)"><a class="docs-heading-anchor" href="#Robust-Pipeline-(All-Features)">Robust Pipeline (All Features)</a><a id="Robust-Pipeline-(All-Features)-1"></a><a class="docs-heading-anchor-permalink" href="#Robust-Pipeline-(All-Features)" title="Permalink"></a></h2><p>Combining all operators for a production-ready workflow:</p><pre><code class="language-julia hljs">using SimplePipelines
+run_pipeline(pipeline)</code></pre><hr/><h3 id="3.2-Robust-Pipeline-(all-features)"><a class="docs-heading-anchor" href="#3.2-Robust-Pipeline-(all-features)">3.2 Robust Pipeline (all features)</a><a id="3.2-Robust-Pipeline-(all-features)-1"></a><a class="docs-heading-anchor-permalink" href="#3.2-Robust-Pipeline-(all-features)" title="Permalink"></a></h3><p><strong>Flow:</strong> Retry+fallback fetch → conditional process (small vs full) → report and notify in parallel (notify with retry).</p><pre><code class="nohighlight hljs">  [primary^3 | backup]  ──►  [small? quick : full]  ──►  report
+                                                      └── notify^2</code></pre><p><strong>Goal:</strong> Fetch with retry and fallback; branch on file size; run report and notify in parallel.</p><pre><code class="language-julia hljs">using SimplePipelines
 
-# Fetch with retry and fallback
-primary_source = @step primary = `curl -f https://main-api.com/data -o data.json`
-backup_source = @step backup = `curl -f https://backup-api.com/data -o data.json`
+primary_source = @step primary = `curl -sf https://example.com/data -o data.json`
+backup_source = @step backup = `echo &#39;{&quot;status&quot;:&quot;fallback&quot;}&#39; &gt; data.json`
 fetch = Retry(primary_source, 3, delay=1.0) | backup_source
 
-# Conditional processing
-quick_process = @step quick = `jq &#39;.items&#39; data.json &gt; processed.json`
-full_process = @step parse = `./parse data.json` &gt;&gt; @step validate = `./validate parsed.json`
+quick_process = @step quick = `wc -c data.json &gt; output.txt`
+full_process = @step parse = `wc -l data.json &gt; output.txt` &gt;&gt; @step validate = `wc -c output.txt &gt;&gt; output.txt`
 
 process = Branch(
     () -&gt; filesize(&quot;data.json&quot;) &lt; 1_000_000,
@@ -151,11 +104,57 @@ process = Branch(
     full_process
 )
 
-# Parallel outputs
-report = @step report = () -&gt; generate_report(&quot;processed.json&quot;)
-notify = @step notify = `curl -X POST https://slack.com/webhook -d &#39;{&quot;text&quot;:&quot;Done&quot;}&#39;`
+report = @step report = `cat output.txt`
+notify = @step notify = `echo &quot;Pipeline done&quot;`
 
-# Full pipeline
 pipeline = fetch &gt;&gt; process &gt;&gt; (report &amp; Retry(notify, 2))
+run_pipeline(Pipeline(pipeline, name=&quot;Robust ETL&quot;))</code></pre><hr/><h2 id="4.-Bioinformatics"><a class="docs-heading-anchor" href="#4.-Bioinformatics">4. Bioinformatics</a><a id="4.-Bioinformatics-1"></a><a class="docs-heading-anchor-permalink" href="#4.-Bioinformatics" title="Permalink"></a></h2><p><strong>Multiple donors / samples:</strong> Use <code>ForEach</code> with a <code>{wildcard}</code> pattern to automatically discover files and create parallel branches. The wildcard values propagate via normal Julia <code>$()</code> interpolation.</p><h3 id="4.1-Immune-Repertoire-(single-donor)"><a class="docs-heading-anchor" href="#4.1-Immune-Repertoire-(single-donor)">4.1 Immune Repertoire (single donor)</a><a id="4.1-Immune-Repertoire-(single-donor)-1"></a><a class="docs-heading-anchor-permalink" href="#4.1-Immune-Repertoire-(single-donor)" title="Permalink"></a></h3><p><strong>Flow:</strong> Paired-end FASTQ → merge (PEAR) → FASTQ→FASTA → IgBLAST (V/D/J) → Julia filter by identity.</p><pre><code class="nohighlight hljs">  R1.fastq ──┐
+             ├──►  pear  ──►  to_fasta  ──►  igblast  ──►  filter_identity  ──►  igblast_filtered.tsv
+  R2.fastq ──┘</code></pre><p><strong>Goal:</strong> Merge paired-end reads, run IgBLAST with V/D/J references, filter rows by <code>v_identity</code> and <code>j_identity</code> &gt; 90% in Julia.</p><pre><code class="language-julia hljs">using SimplePipelines
+using DelimitedFiles
 
-run_pipeline(Pipeline(pipeline, name=&quot;Robust ETL&quot;))</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../tutorial/">« Tutorial</a><a class="docs-footer-nextpage" href="../api/">API Reference »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 30 January 2026 09:50">Friday 30 January 2026</span>. Using Julia version 1.12.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+pear = @step pear = `pear -f R1.fastq -r R2.fastq -o merged`
+to_fasta = @step to_fasta = `seqtk seq -A merged.assembled.fastq &gt; merged.assembled.fasta`
+igblast = @step igblast = `igblastn -query merged.assembled.fasta -germline_db_V V.fasta -germline_db_D D.fasta -germline_db_J J.fasta -outfmt 7 -out igblast.tsv`
+
+filter_identity = @step filter_identity = () -&gt; begin
+    data, header_row = readdlm(&quot;igblast.tsv&quot;, &#39;\t&#39;, header=true)
+    header = vec(header_row)
+    v_idx = findfirst(isequal(&quot;v_identity&quot;), header)
+    j_idx = findfirst(isequal(&quot;j_identity&quot;), header)
+    to_float(x) = something(tryparse(Float64, string(x)), 0.0)
+    filtered = [r for r in eachrow(data) if to_float(r[v_idx]) &gt; 90.0 &amp;&amp; to_float(r[j_idx]) &gt; 90.0]
+    writedlm(&quot;igblast_filtered.tsv&quot;, vcat(header&#39;, filtered), &#39;\t&#39;)
+    return &quot;Filtered $(length(filtered)) sequences&quot;
+end
+
+pipeline = pear &gt;&gt; to_fasta &gt;&gt; igblast &gt;&gt; filter_identity
+run_pipeline(Pipeline(pipeline, name=&quot;Immune Repertoire&quot;))</code></pre><hr/><h3 id="4.2-Immune-Repertoire-(multiple-donors)"><a class="docs-heading-anchor" href="#4.2-Immune-Repertoire-(multiple-donors)">4.2 Immune Repertoire (multiple donors)</a><a id="4.2-Immune-Repertoire-(multiple-donors)-1"></a><a class="docs-heading-anchor-permalink" href="#4.2-Immune-Repertoire-(multiple-donors)" title="Permalink"></a></h3><p><strong>Flow:</strong> <code>ForEach</code> discovers files matching pattern → one parallel branch per donor.</p><pre><code class="nohighlight hljs">  ForEach(&quot;fastq/{donor}_R1.fq.gz&quot;)
+       │
+       ├── donor1: pear → fasta → igblast  ──┐
+       ├── donor2: pear → fasta → igblast  ──┼── (parallel)
+       └── donorN: pear → fasta → igblast  ──┘</code></pre><p><strong>Goal:</strong> Run the same pipeline for every donor; files discovered automatically.</p><pre><code class="language-julia hljs">using SimplePipelines
+
+# ForEach: pattern discovery + parallel branches in one construct
+pipeline = ForEach(&quot;fastq/{donor}_R1.fq.gz&quot;) do donor
+    `pear -f fastq/$(donor)_R1.fq.gz -r fastq/$(donor)_R2.fq.gz -o $(donor)_merged` &gt;&gt;
+    `seqtk seq -A $(donor)_merged.assembled.fastq &gt; $(donor).fasta` &gt;&gt;
+    `igblastn -query $(donor).fasta -germline_db_V V.fasta -out $(donor)_igblast.tsv`
+end
+
+run_pipeline(pipeline)</code></pre><hr/><h3 id="4.3-Variant-Calling"><a class="docs-heading-anchor" href="#4.3-Variant-Calling">4.3 Variant Calling</a><a id="4.3-Variant-Calling-1"></a><a class="docs-heading-anchor-permalink" href="#4.3-Variant-Calling" title="Permalink"></a></h3><p><strong>Flow:</strong> Paired-end reads → FastQC → trim → BWA (GRCh38) → sort/index → bcftools call → index → filter.</p><pre><code class="nohighlight hljs">  R1.fq.gz ──┐
+             ├──►  fastqc  ──►  trim  ──►  align  ──►  index  ──►  call  ──►  index_vcf  ──►  filter_vcf
+  R2.fq.gz ──┘</code></pre><p><strong>Goal:</strong> QC, trim, align to GRCh38, call variants with bcftools, filter by quality.</p><pre><code class="language-julia hljs">using SimplePipelines
+
+fastqc = @step fastqc = `fastqc -o qc/ R1.fq.gz R2.fq.gz`
+trim = @step trim = `trimmomatic PE R1.fq.gz R2.fq.gz R1_trimmed.fq.gz R1_unpaired.fq.gz R2_trimmed.fq.gz R2_unpaired.fq.gz ILLUMINACLIP:adapters.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36`
+
+align = @step align = `bwa mem -t 8 GRCh38.fa R1_trimmed.fq.gz R2_trimmed.fq.gz | samtools sort -@ 4 -o aligned.bam -`
+index = @step index = `samtools index aligned.bam`
+
+call = @step call = `bcftools mpileup -f GRCh38.fa aligned.bam | bcftools call -mv -Oz -o variants.vcf.gz`
+index_vcf = @step index_vcf = `bcftools index variants.vcf.gz`
+filter_vcf = @step filter_vcf = `bcftools filter -i &#39;QUAL&gt;=20&#39; variants.vcf.gz -Oz -o filtered.vcf.gz`
+
+pipeline = fastqc &gt;&gt; trim &gt;&gt; align &gt;&gt; index &gt;&gt; call &gt;&gt; index_vcf &gt;&gt; filter_vcf
+run_pipeline(Pipeline(pipeline, name=&quot;Variant Calling&quot;))</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../tutorial/">« Tutorial</a><a class="docs-footer-nextpage" href="../api/">API Reference »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 30 January 2026 10:20">Friday 30 January 2026</span>. Using Julia version 1.12.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
