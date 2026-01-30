@@ -363,7 +363,105 @@ using Test
         @test contains(sprint(show, p), "Pipeline")
         @test contains(sprint(show, p), "test")
     end
-    
+
+    @testset "Display (print_dag and MIME text/plain)" begin
+        a = @step a = `echo a`
+        b = @step b = `echo b`
+        c = @step c = `echo c`
+
+        # print_dag(io, node, indent) writes DAG to io
+        io = IOBuffer()
+        print_dag(io, a, 0)
+        out = String(take!(io))
+        @test occursin("a", out)
+        @test !occursin("Sequence", out)
+
+        seq = a >> b
+        io = IOBuffer()
+        print_dag(io, seq, 0)
+        out = String(take!(io))
+        @test occursin("Sequence", out)
+        @test occursin("a", out)
+        @test occursin("b", out)
+
+        par = a & b
+        io = IOBuffer()
+        print_dag(io, par, 0)
+        out = String(take!(io))
+        @test occursin("Parallel", out)
+        @test occursin("a", out)
+        @test occursin("b", out)
+
+        ret = a^2
+        io = IOBuffer()
+        print_dag(io, ret, 0)
+        out = String(take!(io))
+        @test occursin("Retry", out)
+        @test occursin("a", out)
+
+        fall = a | b
+        io = IOBuffer()
+        print_dag(io, fall, 0)
+        out = String(take!(io))
+        @test occursin("Fallback", out)
+        @test occursin("primary", out)
+        @test occursin("fallback", out)
+        @test occursin("a", out)
+        @test occursin("b", out)
+
+        br = Branch(() -> true, a, b)
+        io = IOBuffer()
+        print_dag(io, br, 0)
+        out = String(take!(io))
+        @test occursin("Branch", out)
+        @test occursin("if_true", out)
+        @test occursin("if_false", out)
+
+        tmo = Timeout(a, 5.0)
+        io = IOBuffer()
+        print_dag(io, tmo, 0)
+        out = String(take!(io))
+        @test occursin("Timeout", out)
+        @test occursin("5.0", out)
+        @test occursin("a", out)
+
+        red = Reduce((xs -> join(xs, "\n")), a & b)
+        io = IOBuffer()
+        print_dag(io, red, 0)
+        out = String(take!(io))
+        @test occursin("Reduce", out)
+        @test occursin("Parallel", out)
+        @test occursin("a", out)
+        @test occursin("b", out)
+
+        # show(io, MIME("text/plain"), node) uses print_dag
+        p = Pipeline(seq, name="mytest")
+        io = IOBuffer()
+        show(io, MIME("text/plain"), p)
+        out = String(take!(io))
+        @test occursin("Pipeline", out)
+        @test occursin("mytest", out)
+        @test occursin("Sequence", out)
+        @test occursin("a", out)
+        @test occursin("b", out)
+
+        io = IOBuffer()
+        show(io, MIME("text/plain"), seq)
+        out = String(take!(io))
+        @test occursin("Sequence", out)
+        @test occursin("a", out)
+        @test occursin("b", out)
+
+        # print_dag(node; indent=0) and print_dag(io, node, indent) entry points
+        io = IOBuffer()
+        print_dag(io, (a >> b) >> c, 0)
+        out = String(take!(io))
+        @test occursin("Sequence", out)
+        @test occursin("a", out)
+        @test occursin("b", out)
+        @test occursin("c", out)
+    end
+
     @testset "Base.run" begin
         s = @step test = `echo "run test"`
         p = Pipeline(s, name="run_test")

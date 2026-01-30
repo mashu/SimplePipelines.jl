@@ -824,13 +824,17 @@ end
 
 """
     print_dag(node; indent=0)
+    print_dag(io, node, indent=0)
 
-Print the DAG structure of a pipeline node.
+Print the DAG structure of a pipeline node. In the REPL, pipelines and nodes show this
+structure by default (via `show(io, MIME(\"text/plain\"), x)`).
 
 # Examples
 ```julia
 pipeline = (a & b) >> c >> (d & e)
 print_dag(pipeline)
+# Or just display in REPL:
+pipeline
 # Output:
 # Sequence:
 #   Parallel:
@@ -842,75 +846,73 @@ print_dag(pipeline)
 #     e
 ```
 """
-print_dag(node::AbstractNode) = print_dag(node, 0)
+print_dag(node::AbstractNode; indent::Int=0) = print_dag(stdout, node, indent)
 
-function print_dag(step::Step, indent::Int)
+# Single descent over the DAG: each node type prints its label and recurses into children.
+function print_dag(io::IO, step::Step, indent::Int)
     prefix = "  " ^ indent
-    println(prefix, step.name)
-    isempty(step.inputs) || println(prefix, "  ← ", join(step.inputs, ", "))
-    isempty(step.outputs) || println(prefix, "  → ", join(step.outputs, ", "))
+    print(io, prefix, step.name, "\n")
+    isempty(step.inputs) || print(io, prefix, "  ← ", join(step.inputs, ", "), "\n")
+    isempty(step.outputs) || print(io, prefix, "  → ", join(step.outputs, ", "), "\n")
     nothing
 end
 
-function print_dag(seq::Sequence, indent::Int)
+function print_dag(io::IO, seq::Sequence, indent::Int)
     prefix = "  " ^ indent
-    println(prefix, "Sequence:")
-    _print_dag_nodes(seq.nodes, indent + 1)
+    print(io, prefix, "Sequence:\n")
+    print_dag_nodes(io, seq.nodes, indent + 1)
     nothing
 end
 
-function print_dag(par::Parallel, indent::Int)
+function print_dag(io::IO, par::Parallel, indent::Int)
     prefix = "  " ^ indent
-    println(prefix, "Parallel:")
-    _print_dag_nodes(par.nodes, indent + 1)
+    print(io, prefix, "Parallel:\n")
+    print_dag_nodes(io, par.nodes, indent + 1)
     nothing
 end
 
-# Tuple recursion for printing
-@inline _print_dag_nodes(::Tuple{}, indent) = nothing
-@inline function _print_dag_nodes(nodes::Tuple, indent)
-    print_dag(first(nodes), indent)
-    _print_dag_nodes(Base.tail(nodes), indent)
+@inline print_dag_nodes(io::IO, ::Tuple{}, indent) = nothing
+@inline function print_dag_nodes(io::IO, nodes::Tuple, indent)
+    print_dag(io, first(nodes), indent)
+    print_dag_nodes(io, Base.tail(nodes), indent)
 end
 
-function print_dag(r::Retry, indent::Int)
+function print_dag(io::IO, r::Retry, indent::Int)
     prefix = "  " ^ indent
-    println(prefix, "Retry(max=$(r.max_attempts), delay=$(r.delay)s):")
-    print_dag(r.node, indent + 1)
+    print(io, prefix, "Retry(max=$(r.max_attempts), delay=$(r.delay)s):\n")
+    print_dag(io, r.node, indent + 1)
     nothing
 end
 
-function print_dag(f::Fallback, indent::Int)
+function print_dag(io::IO, f::Fallback, indent::Int)
     prefix = "  " ^ indent
-    println(prefix, "Fallback:")
-    println(prefix, "  primary:")
-    print_dag(f.primary, indent + 2)
-    println(prefix, "  fallback:")
-    print_dag(f.fallback, indent + 2)
+    print(io, prefix, "Fallback:\n", prefix, "  primary:\n")
+    print_dag(io, f.primary, indent + 2)
+    print(io, prefix, "  fallback:\n")
+    print_dag(io, f.fallback, indent + 2)
     nothing
 end
 
-function print_dag(b::Branch, indent::Int)
+function print_dag(io::IO, b::Branch, indent::Int)
     prefix = "  " ^ indent
-    println(prefix, "Branch:")
-    println(prefix, "  if_true:")
-    print_dag(b.if_true, indent + 2)
-    println(prefix, "  if_false:")
-    print_dag(b.if_false, indent + 2)
+    print(io, prefix, "Branch:\n", prefix, "  if_true:\n")
+    print_dag(io, b.if_true, indent + 2)
+    print(io, prefix, "  if_false:\n")
+    print_dag(io, b.if_false, indent + 2)
     nothing
 end
 
-function print_dag(t::Timeout, indent::Int)
+function print_dag(io::IO, t::Timeout, indent::Int)
     prefix = "  " ^ indent
-    println(prefix, "Timeout($(t.seconds)s):")
-    print_dag(t.node, indent + 1)
+    print(io, prefix, "Timeout($(t.seconds)s):\n")
+    print_dag(io, t.node, indent + 1)
     nothing
 end
 
-function print_dag(r::Reduce, indent::Int)
+function print_dag(io::IO, r::Reduce, indent::Int)
     prefix = "  " ^ indent
-    println(prefix, "Reduce($(r.name)):")
-    print_dag(r.node, indent + 1)
+    print(io, prefix, "Reduce($(r.name)):\n")
+    print_dag(io, r.node, indent + 1)
     nothing
 end
 
@@ -962,9 +964,10 @@ count_steps(r::Reduce) = count_steps(r.node) + 1  # +1 for the reduce step itsel
 @inline _count_steps(nodes::Tuple) = count_steps(first(nodes)) + _count_steps(Base.tail(nodes))
 
 #==============================================================================#
-# Display
+# Display: default is DAG tree (REPL); one-line for string/compact
 #==============================================================================#
 
+# One-line (string, compact)
 Base.show(io::IO, s::Step) = print(io, "Step(:", s.name, ")")
 Base.show(io::IO, s::Sequence) = print(io, "Sequence(", join(s.nodes, " >> "), ")")
 Base.show(io::IO, p::Parallel) = print(io, "Parallel(", join(p.nodes, " & "), ")")
@@ -974,6 +977,10 @@ Base.show(io::IO, b::Branch) = print(io, "Branch(?, ", b.if_true, ", ", b.if_fal
 Base.show(io::IO, t::Timeout) = print(io, "Timeout(", t.node, ", ", t.seconds, "s)")
 Base.show(io::IO, r::Reduce) = print(io, "Reduce(:", r.name, ", ", r.node, ")")
 Base.show(io::IO, p::Pipeline) = print(io, "Pipeline(\"", p.name, "\", ", count_steps(p.root), " steps)")
+
+# REPL / display: DAG tree (default when you type the variable)
+Base.show(io::IO, ::MIME"text/plain", p::Pipeline) = (print(io, "Pipeline: ", p.name, " (", count_steps(p.root), " steps)\n"); print_dag(io, p.root, 0))
+Base.show(io::IO, ::MIME"text/plain", node::AbstractNode) = print_dag(io, node, 0)
 
 #==============================================================================#
 # Map Helper - Fan-out over collection
