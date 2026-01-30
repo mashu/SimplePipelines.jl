@@ -2,7 +2,7 @@ module SimplePipelines
 
 export Step, @step, Sequence, Parallel, Pipeline
 export Retry, Fallback, Branch, Timeout
-export Map
+export Map, Reduce
 export run_pipeline, count_steps, steps, print_dag
 
 import Base: >>, &, |, ^
@@ -185,6 +185,38 @@ struct Timeout{N<:AbstractNode} <: AbstractNode
     node::N
     seconds::Float64
 end
+
+"""
+    Reduce{F<:Function, N<:AbstractNode}
+
+Run a node (typically Parallel) and combine outputs with a reducing function.
+The function receives a vector of outputs from successful steps.
+
+# Examples
+```julia
+# Combine parallel outputs
+Reduce(a & b & c) do outputs
+    join(outputs, "\\n")
+end
+
+# With a named function
+Reduce(combine_results, process_a & process_b)
+
+# In a pipeline
+fetch >> Reduce(merge, analyze_a & analyze_b) >> report
+```
+"""
+struct Reduce{F<:Function, N<:AbstractNode} <: AbstractNode
+    reducer::F
+    node::N
+    name::Symbol
+end
+
+@inline Reduce(f::Function, node::AbstractNode; name::Symbol=:reduce) = 
+    Reduce{typeof(f), typeof(node)}(f, node, name)
+
+# Curried form for do-block: Reduce(node) do outputs ... end
+@inline Reduce(node::AbstractNode; name::Symbol=:reduce) = f -> Reduce(f, node; name=name)
 
 #==============================================================================#
 # Composition Operators - Pure multiple dispatch, no type checks
@@ -635,6 +667,42 @@ function run_node(t::Timeout, verbosity)
     end
 end
 
+@inline print_reduce(::Silent, ::Symbol) = nothing
+@inline print_reduce(::Verbose, name::Symbol) = println("⊕ Reducing: $name")
+
+function run_node(r::Reduce, verbosity)
+    start = time()
+    
+    # Run the inner node
+    results = run_node(r.node, verbosity)
+    
+    # Collect outputs from successful steps
+    outputs = String[res.output for res in results if res.success]
+    
+    # If any step failed, propagate failure
+    if length(outputs) < length(results)
+        failed = first(res for res in results if !res.success)
+        return vcat(results, [StepResult(Step(r.name, r.reducer), false, time() - start, 
+            "Reduce aborted: upstream step failed")])
+    end
+    
+    print_reduce(verbosity, r.name)
+    
+    # Apply reducer
+    local reduced_output::String
+    try
+        result = r.reducer(outputs)
+        reduced_output = result === nothing ? "" : string(result)
+    catch e
+        return vcat(results, [StepResult(Step(r.name, r.reducer), false, time() - start,
+            "Reduce error: $(sprint(showerror, e))")])
+    end
+    
+    # Return all results plus the reduce result
+    reduce_result = StepResult(Step(r.name, r.reducer), true, time() - start, reduced_output)
+    return vcat(results, [reduce_result])
+end
+
 #==============================================================================#
 # Pipeline - Top-level interface
 #==============================================================================#
@@ -815,6 +883,13 @@ function print_dag(t::Timeout, indent::Int)
     nothing
 end
 
+function print_dag(r::Reduce, indent::Int)
+    prefix = "  " ^ indent
+    println(prefix, "Reduce($(r.name)):")
+    print_dag(r.node, indent + 1)
+    nothing
+end
+
 #==============================================================================#
 # Utilities
 #==============================================================================#
@@ -831,6 +906,7 @@ steps(r::Retry) = steps(r.node)
 steps(f::Fallback) = vcat(steps(f.primary), steps(f.fallback))
 steps(b::Branch) = vcat(steps(b.if_true), steps(b.if_false))
 steps(t::Timeout) = steps(t.node)
+steps(r::Reduce) = steps(r.node)
 
 function _collect_steps(nodes::Tuple)
     result = Step[]
@@ -856,6 +932,7 @@ count_steps(r::Retry) = count_steps(r.node)
 count_steps(f::Fallback) = count_steps(f.primary) + count_steps(f.fallback)
 count_steps(b::Branch) = max(count_steps(b.if_true), count_steps(b.if_false))
 count_steps(t::Timeout) = count_steps(t.node)
+count_steps(r::Reduce) = count_steps(r.node) + 1  # +1 for the reduce step itself
 
 @inline _count_steps(::Tuple{}) = 0
 @inline _count_steps(nodes::Tuple) = count_steps(first(nodes)) + _count_steps(Base.tail(nodes))
@@ -871,6 +948,7 @@ Base.show(io::IO, r::Retry) = print(io, "Retry(", r.node, ", ", r.max_attempts, 
 Base.show(io::IO, f::Fallback) = print(io, "(", f.primary, " | ", f.fallback, ")")
 Base.show(io::IO, b::Branch) = print(io, "Branch(?, ", b.if_true, ", ", b.if_false, ")")
 Base.show(io::IO, t::Timeout) = print(io, "Timeout(", t.node, ", ", t.seconds, "s)")
+Base.show(io::IO, r::Reduce) = print(io, "Reduce(:", r.name, ", ", r.node, ")")
 Base.show(io::IO, p::Pipeline) = print(io, "Pipeline(\"", p.name, "\", ", count_steps(p.root), " steps)")
 
 #==============================================================================#

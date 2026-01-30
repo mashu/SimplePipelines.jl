@@ -22,6 +22,7 @@
 │   Timeout(a, seconds)             Fail if exceeds time limit      │
 │   Branch(cond, a, b)              Conditional: a if true, else b  │
 │   Map(f, items)                   Fan-out: parallel over items    │
+│   Reduce(f, a & b)                Combine parallel outputs        │
 │   Retry(a, n, delay=1.0)          Retry with delay between        │
 │                                                                   │
 │ EXECUTION                                                         │

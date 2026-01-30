@@ -602,6 +602,49 @@ using Test
         @test all(r -> r.success, results)
     end
     
+    @testset "Reduce" begin
+        # Basic reduce - combine parallel outputs
+        a = @step a = `echo "output_a"`
+        b = @step b = `echo "output_b"`
+        
+        r = Reduce(a & b, name=:combine) do outputs
+            join(outputs, ",")
+        end
+        
+        results = run_pipeline(r, verbose=false)
+        @test length(results) == 3  # a, b, reduce
+        @test all(res -> res.success, results)
+        @test contains(results[end].output, "output_a")
+        @test contains(results[end].output, "output_b")
+        
+        # Reduce with function
+        r2 = Reduce(length, a & b)
+        results2 = run_pipeline(r2, verbose=false)
+        @test results2[end].success
+        @test results2[end].output == "2"  # 2 outputs
+        
+        # Reduce in pipeline
+        fetch = @step fetch = `echo "data"`
+        analyze_a = @step aa = `echo "result_a"`
+        analyze_b = @step ab = `echo "result_b"`
+        report = @step report = `echo "done"`
+        
+        pipeline = fetch >> Reduce(outputs -> join(outputs, "+"), analyze_a & analyze_b) >> report
+        results3 = run_pipeline(pipeline, verbose=false)
+        @test all(res -> res.success, results3)
+        
+        # Utilities
+        @test count_steps(r) == 3  # a, b, reduce
+        @test length(steps(r)) == 2  # a, b (reduce is synthetic)
+        
+        # show
+        @test contains(sprint(show, r), "Reduce")
+        
+        # print_dag
+        print_dag(r)
+        @test true
+    end
+    
     @testset "Operator composability" begin
         a = @step a = `echo a`
         b = @step b = `echo b`

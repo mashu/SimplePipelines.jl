@@ -11,6 +11,7 @@ Retry
 Fallback
 Branch
 Timeout
+Reduce
 Pipeline
 ```
 

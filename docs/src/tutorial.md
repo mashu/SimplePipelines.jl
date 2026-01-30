@@ -195,6 +195,25 @@ end >> merge_results
 # (process_sample_A & process_sample_B & process_sample_C) >> merge_results
 ```
 
+## Reduce (Combine)
+
+Collect outputs from parallel steps and combine them:
+
+```julia
+# Combine parallel outputs with a function
+pipeline = Reduce(analyze_a & analyze_b) do outputs
+    join(outputs, "\n")
+end
+
+# Using a named function
+pipeline = Reduce(combine_results, step_a & step_b & step_c)
+
+# In a pipeline: fetch -> parallel analysis -> reduce -> report
+pipeline = fetch >> Reduce(merge, analyze_a & analyze_b) >> report
+```
+
+The reducer function receives a `Vector{String}` of outputs from all successful parallel steps.
+
 ## Running Pipelines
 
 ```julia
