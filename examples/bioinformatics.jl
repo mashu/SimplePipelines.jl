@@ -31,7 +31,7 @@ end
 # ForEach: discovers files, creates parallel branches - just return Cmd!
 cd(dir) do
     pipeline = ForEach("{donor}_R1.fq.gz") do donor
-        Cmd(["sh", "-c", "echo '[Processing $donor]'"])
+        sh("echo '[Processing $donor]'")
     end
     println("Pipeline structure (3 donors discovered):")
     print_dag(pipeline)

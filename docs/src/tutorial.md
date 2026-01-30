@@ -191,7 +191,7 @@ Apply a function to each item, creating parallel steps:
 # Process files in parallel (list supplied in code)
 samples = ["sample_A", "sample_B", "sample_C"]
 pipeline = Map(samples) do s
-    Step(Symbol("process_", s), Cmd(["sh", "-c", "analyze $s.fastq"]))
+    Step(Symbol("process_", s), sh("analyze $s.fastq"))
 end >> merge_results
 ```
 
@@ -200,24 +200,24 @@ end >> merge_results
 Discover files by pattern, create parallel branches automatically:
 
 ```julia
-# Single step per file - return Cmd (use Cmd(["sh","-c",...]) for interpolation)
+# Single step per file - use sh("...") for interpolation
 ForEach("{sample}.fastq") do sample
-    Cmd(["sh", "-c", "process $(sample).fastq"])
+    sh("process $(sample).fastq")
 end
 
 # Multi-step per file - chain with >>
 ForEach("fastq/{sample}_R1.fq.gz") do sample
-    Cmd(["sh", "-c", "pear $(sample)_R1 $(sample)_R2"]) >> Cmd(["sh", "-c", "analyze $(sample)"])
+    sh("pear $(sample)_R1 $(sample)_R2") >> sh("analyze $(sample)")
 end
 
 # Multiple wildcards
 ForEach("data/{project}/{sample}.csv") do project, sample
-    Cmd(["sh", "-c", "process $(project)/$(sample).csv"])
+    sh("process $(project)/$(sample).csv")
 end
 
 # Chain with downstream merge
 ForEach("{id}.fastq") do id
-    Cmd(["sh", "-c", "align $(id).fastq"])
+    sh("align $(id).fastq")
 end >> @step merge = sh"merge *.bam"
 ```
 

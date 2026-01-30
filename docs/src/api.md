@@ -37,10 +37,11 @@ Map
 ForEach
 ```
 
-## String Macros
+## Shell helpers
 
 ```@docs
 @sh_str
+sh
 ```
 
 ## Execution

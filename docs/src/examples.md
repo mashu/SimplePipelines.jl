@@ -304,9 +304,9 @@ using SimplePipelines
 
 # ForEach: pattern discovery + parallel branches in one construct
 pipeline = ForEach("fastq/{donor}_R1.fq.gz") do donor
-    Cmd(["sh", "-c", "pear -f fastq/$(donor)_R1.fq.gz -r fastq/$(donor)_R2.fq.gz -o $(donor)_merged"]) >>
-    Cmd(["sh", "-c", "seqtk seq -A $(donor)_merged.assembled.fastq > $(donor).fasta"]) >>
-    Cmd(["sh", "-c", "igblastn -query $(donor).fasta -germline_db_V V.fasta -germline_db_D D.fasta -germline_db_J J.fasta -outfmt 7 -out $(donor)_igblast.tsv"])
+    sh("pear -f fastq/$(donor)_R1.fq.gz -r fastq/$(donor)_R2.fq.gz -o $(donor)_merged") >>
+    sh("seqtk seq -A $(donor)_merged.assembled.fastq > $(donor).fasta") >>
+    sh("igblastn -query $(donor).fasta -germline_db_V V.fasta -germline_db_D D.fasta -germline_db_J J.fasta -outfmt 7 -out $(donor)_igblast.tsv")
 end
 
 run_pipeline(pipeline)

@@ -14,7 +14,7 @@ using Test
         
         # Actually runs with shell features
         tmp = "/tmp/simplepipelines_test_sh_$(getpid()).txt"
-        p = Cmd(["sh", "-c", "echo test > $tmp"])
+        p = sh("echo test > $tmp")
         step = Step(:test, p)
         result = SimplePipelines.run_node(step, SimplePipelines.Silent())
         @test result[1].success

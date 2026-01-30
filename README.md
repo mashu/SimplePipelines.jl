@@ -32,7 +32,7 @@ run_pipeline(pipeline)
 ## Interface
 
 ```
-Commands:   `cmd arg`   basic command    sh"cmd > file"  shell features
+Commands:   sh"cmd"     shell (redirection, pipes)   sh("$(var)")  with interpolation
 
 Operators:  a >> b      sequential       a^3             retry 3x
             a & b       parallel         a | b           fallback
@@ -46,7 +46,7 @@ Control:    Branch(cond, a, b)           Timeout(a, 30.0)
 ```julia
 # Discover files, create parallel branches automatically
 ForEach("data/{sample}_R1.fq.gz") do sample
-    Cmd(["sh", "-c", "pear -f $(sample)_R1.fq.gz -r $(sample)_R2.fq.gz"]) >> Cmd(["sh", "-c", "process $(sample)"])
+    sh("pear -f $(sample)_R1.fq.gz -r $(sample)_R2.fq.gz") >> sh("process $(sample)")
 end
 ```
 

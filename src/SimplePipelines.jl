@@ -4,7 +4,7 @@ export Step, @step, Sequence, Parallel, Pipeline
 export Retry, Fallback, Branch, Timeout
 export Map, Reduce, ForEach
 export run_pipeline, count_steps, steps, print_dag
-export @sh_str
+export @sh_str, sh
 
 import Base: >>, &, |, ^
 
@@ -16,19 +16,24 @@ using Base.Threads: @spawn, fetch
 
 """
     sh"command"
+    sh(command::String)
 
-String macro for shell commands using redirection, pipes, or other shell features.
-Julia's backticks don't support `>`, `|`, etc. - this wraps in `sh -c "..."`.
+Shell commands: use `sh"..."` for literals, `sh("...")` when you need interpolation.
+Julia's backticks `` `cmd` `` don't allow `>`, `|`, etc., so we use the short `sh` form
+(two characters) and wrap in `sh -c "..."`.
 
 # Examples
 ```julia
-@step sort = sh"sort data.txt > sorted.txt"
-@step count = sh"cat file.txt | grep pattern | wc -l"
+sh"sort data.txt > sorted.txt"           # literal
+sh("pear -f $(sample)_R1 -r $(sample)_R2")  # with interpolation
 ```
 """
 macro sh_str(s)
     Cmd(["sh", "-c", s])
 end
+
+""" Run a shell command string (with interpolation). Use instead of `` Cmd([\"sh\", \"-c\", ...]) ``. """
+sh(s::String) = Cmd(["sh", "-c", s])
 
 #==============================================================================#
 # Core Types - Fully parametric for zero-overhead dispatch
@@ -1019,25 +1024,20 @@ parallel branch for each match. Extracted values are passed to your function.
 
 # Examples
 ```julia
-# Single file per match - just return a Cmd
-ForEach("{sample}.fastq") do sample
-    `process \$(sample).fastq`
-end
-
-# Multi-step pipeline - chain with >>
-ForEach("fastq/{sample}_R1.fq.gz") do sample
-    `pear -f \$(sample)_R1 -r \$(sample)_R2` >> `analyze \$(sample)`
+# With interpolation use sh(\"...\") for shell commands
+ForEach("data/{sample}_R1.fq.gz") do sample
+    sh("pear -f \$(sample)_R1 -r \$(sample)_R2") >> sh("process \$(sample)")
 end
 
 # Multiple wildcards
 ForEach("data/{project}/{sample}.csv") do project, sample
-    `process \$(project)/\$(sample).csv`
+    sh("process \$(project)/\$(sample).csv")
 end
 
-# Chain ForEach with downstream steps
+# Chain with downstream step
 ForEach("{id}.fastq") do id
-    `align \$(id).fastq`
-end >> @step merge = `merge *.bam`
+    sh("align \$(id).fastq")
+end >> @step merge = sh"merge *.bam"
 ```
 """
 function ForEach(f::Function, pattern::String)
