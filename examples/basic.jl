@@ -76,7 +76,62 @@ println()
 run_pipeline(pipeline)
 
 
-println("\n═══ Example 6: Dry Run ═══\n")
+println("\n═══ Example 6: Fallback ═══\n")
+
+# If primary fails, run fallback
+primary = @step primary = `false`  # Always fails
+fallback = @step fallback = `echo "Fallback succeeded"`
+
+pipeline = primary | fallback
+run_pipeline(pipeline)
+
+
+println("\n═══ Example 7: Retry ═══\n")
+
+# Retry a flaky step (simulated here)
+attempt_count = Ref(0)
+flaky = @step flaky = () -> begin
+    attempt_count[] += 1
+    if attempt_count[] < 3
+        error("Attempt $(attempt_count[]) failed")
+    end
+    println("  Success on attempt $(attempt_count[])!")
+    return "ok"
+end
+
+pipeline = Retry(flaky, 3)
+run_pipeline(pipeline)
+
+
+println("\n═══ Example 8: Branch (Conditional) ═══\n")
+
+# Choose path based on condition
+use_fast = Ref(true)
+
+fast_path = @step fast = `echo "Taking fast path"`
+slow_path = @step slow = `echo "Taking slow path"`
+
+pipeline = Branch(() -> use_fast[], fast_path, slow_path)
+
+println("With use_fast=true:")
+run_pipeline(pipeline)
+
+use_fast[] = false
+println("\nWith use_fast=false:")
+run_pipeline(pipeline)
+
+
+println("\n═══ Example 9: Combined Error Handling ═══\n")
+
+# Robust pipeline: retry primary, fallback if all retries fail
+primary = @step primary = `false`  # Always fails
+backup = @step backup = `echo "Backup method succeeded"`
+
+pipeline = Retry(primary, 2) | backup
+run_pipeline(pipeline)
+
+
+println("\n═══ Example 10: Dry Run ═══\n")
 
 # Preview what would execute without running
 complex = (`step 1` >> `step 2`) & (`step 3` >> `step 4`) >> `step 5`

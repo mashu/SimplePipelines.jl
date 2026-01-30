@@ -14,6 +14,7 @@ makedocs(
         "Examples" => "examples.md",
         "API Reference" => "api.md",
         "Design" => "design.md",
+        "Development" => "development.md",
     ],
     checkdocs = :exports,
 )

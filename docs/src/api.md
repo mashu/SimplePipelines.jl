@@ -7,6 +7,9 @@ SimplePipelines.AbstractNode
 Step
 Sequence
 Parallel
+Retry
+Fallback
+Branch
 Pipeline
 ```
 

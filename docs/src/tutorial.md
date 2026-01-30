@@ -121,6 +121,53 @@ pipeline = (branch_a & branch_b & branch_c) >> merge
 
 This pattern is common for processing multiple samples/files independently before combining results.
 
+## Fallback: `|`
+
+The `|` operator provides fallback behavior—if the primary fails, run the fallback:
+
+```julia
+# If fast method fails, use slow method
+pipeline = fast_method | slow_method
+
+# Chain multiple fallbacks
+pipeline = method_a | method_b | method_c
+```
+
+## Retry
+
+Retry a node up to N times on failure:
+
+```julia
+# Retry up to 3 times
+pipeline = Retry(flaky_api_call, 3)
+
+# Retry with delay between attempts
+pipeline = Retry(network_request, 5, delay=2.0)
+
+# Combine with fallback
+pipeline = Retry(primary, 3) | fallback
+```
+
+## Branch (Conditional)
+
+Execute different branches based on a runtime condition:
+
+```julia
+# Branch based on file size
+pipeline = Branch(
+    () -> filesize("data.txt") > 1_000_000,
+    large_file_pipeline,
+    small_file_pipeline
+)
+
+# Branch based on environment
+pipeline = Branch(
+    () -> haskey(ENV, "DEBUG"),
+    debug_steps,
+    normal_steps
+)
+```
+
 ## Running Pipelines
 
 ```julia

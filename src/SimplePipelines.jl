@@ -1,9 +1,10 @@
 module SimplePipelines
 
 export Step, @step, Sequence, Parallel, Pipeline
+export Retry, Fallback, Branch
 export run_pipeline, count_steps, steps, print_dag
 
-import Base: >>, &
+import Base: >>, &, |
 
 using Base.Threads: @spawn, fetch
 
@@ -96,6 +97,72 @@ end
 
 @inline Parallel(nodes::Vararg{AbstractNode}) = Parallel(nodes)
 
+"""
+    Retry{N<:AbstractNode}
+
+Retry a node up to `max_attempts` times on failure, with optional delay between attempts.
+
+# Examples
+```julia
+# Retry up to 3 times
+Retry(flaky_step, 3)
+
+# Retry with delay between attempts
+Retry(api_call, 5, delay=2.0)
+
+# Using | operator for simple fallback (try once, then fallback)
+risky_step | safe_fallback
+```
+"""
+struct Retry{N<:AbstractNode} <: AbstractNode
+    node::N
+    max_attempts::Int
+    delay::Float64
+end
+
+@inline Retry(node::AbstractNode, max_attempts::Int=3; delay::Real=0.0) = 
+    Retry(node, max_attempts, Float64(delay))
+
+"""
+    Fallback{A<:AbstractNode, B<:AbstractNode}
+
+Try the primary node; if it fails, run the fallback node.
+Created with the `|` operator.
+
+# Examples
+```julia
+# If fast_method fails, use slow_method
+fast_method | slow_method
+
+# Chain multiple fallbacks
+method_a | method_b | method_c
+```
+"""
+struct Fallback{A<:AbstractNode, B<:AbstractNode} <: AbstractNode
+    primary::A
+    fallback::B
+end
+
+"""
+    Branch{C<:Function, T<:AbstractNode, F<:AbstractNode}
+
+Conditional execution: run `if_true` when `condition()` returns true, otherwise `if_false`.
+
+# Examples
+```julia
+# Branch based on file size
+Branch(() -> filesize("data.txt") > 1_000_000, large_file_pipeline, small_file_pipeline)
+
+# Branch based on environment
+Branch(() -> haskey(ENV, "DEBUG"), debug_steps, normal_steps)
+```
+"""
+struct Branch{C<:Function, T<:AbstractNode, F<:AbstractNode} <: AbstractNode
+    condition::C
+    if_true::T
+    if_false::F
+end
+
 #==============================================================================#
 # Composition Operators - Pure multiple dispatch, no type checks
 #==============================================================================#
@@ -173,6 +240,35 @@ Supports chaining: `a & b & c` creates a single parallel group.
 @inline (&)(a::Parallel, b::Function) = Parallel((a.nodes..., Step(b)))
 @inline (&)(a::Cmd, b::Function) = Parallel((Step(a), Step(b)))
 @inline (&)(a::Function, b::Cmd) = Parallel((Step(a), Step(b)))
+
+"""
+    a | b
+
+Create a [`Fallback`](@ref): if `a` fails, run `b`.
+
+# Examples
+```julia
+# Try primary, fallback to secondary on failure
+primary_method | fallback_method
+
+# Chain multiple fallbacks
+fast | medium | slow
+```
+"""
+@inline (|)(a::AbstractNode, b::AbstractNode) = Fallback(a, b)
+@inline (|)(a::Fallback, b::AbstractNode) = Fallback(a.primary, Fallback(a.fallback, b))
+
+# Lift Cmd to Step
+@inline (|)(a::Cmd, b::Cmd) = Fallback(Step(a), Step(b))
+@inline (|)(a::Cmd, b::AbstractNode) = Fallback(Step(a), b)
+@inline (|)(a::AbstractNode, b::Cmd) = Fallback(a, Step(b))
+
+# Lift Function to Step
+@inline (|)(a::Function, b::Function) = Fallback(Step(a), Step(b))
+@inline (|)(a::Function, b::AbstractNode) = Fallback(Step(a), b)
+@inline (|)(a::AbstractNode, b::Function) = Fallback(a, Step(b))
+@inline (|)(a::Cmd, b::Function) = Fallback(Step(a), Step(b))
+@inline (|)(a::Function, b::Cmd) = Fallback(Step(a), Step(b))
 
 #==============================================================================#
 # Step Macro - Compile-time transformation only
@@ -412,6 +508,62 @@ end
 end
 
 #==============================================================================#
+# Retry, Fallback, Branch Execution
+#==============================================================================#
+
+@inline print_retry(::Silent, ::Int, ::Int) = nothing
+@inline print_retry(::Verbose, attempt::Int, max::Int) = println("↻ Attempt $attempt/$max")
+
+@inline print_retry_fail(::Silent, ::Float64) = nothing
+@inline print_retry_fail(::Verbose, delay::Float64) = 
+    delay > 0 ? println("  Failed, retrying in $(delay)s...") : println("  Failed, retrying...")
+
+function run_node(r::Retry, verbosity)
+    local results::Vector{StepResult}
+    
+    for attempt in 1:r.max_attempts
+        print_retry(verbosity, attempt, r.max_attempts)
+        results = run_node(r.node, verbosity)
+        
+        # Success - return immediately
+        all(res -> res.success, results) && return results
+        
+        # Failure - maybe retry
+        if attempt < r.max_attempts
+            print_retry_fail(verbosity, r.delay)
+            r.delay > 0 && sleep(r.delay)
+        end
+    end
+    
+    return results
+end
+
+@inline print_fallback(::Silent) = nothing
+@inline print_fallback(::Verbose) = println("↯ Primary failed, trying fallback...")
+
+function run_node(f::Fallback, verbosity)
+    results = run_node(f.primary, verbosity)
+    
+    # If primary succeeded, return
+    all(r -> r.success, results) && return results
+    
+    # Primary failed, try fallback
+    print_fallback(verbosity)
+    return run_node(f.fallback, verbosity)
+end
+
+@inline print_branch(::Silent, ::Bool) = nothing
+@inline print_branch(::Verbose, cond::Bool) = 
+    println("? Condition: $(cond ? "true → if_true branch" : "false → if_false branch")")
+
+function run_node(b::Branch, verbosity)
+    cond_result = b.condition()
+    print_branch(verbosity, cond_result)
+    
+    return cond_result ? run_node(b.if_true, verbosity) : run_node(b.if_false, verbosity)
+end
+
+#==============================================================================#
 # Pipeline - Top-level interface
 #==============================================================================#
 
@@ -557,6 +709,33 @@ end
     _print_dag_nodes(Base.tail(nodes), indent)
 end
 
+function print_dag(r::Retry, indent::Int)
+    prefix = "  " ^ indent
+    println(prefix, "Retry(max=$(r.max_attempts), delay=$(r.delay)s):")
+    print_dag(r.node, indent + 1)
+    nothing
+end
+
+function print_dag(f::Fallback, indent::Int)
+    prefix = "  " ^ indent
+    println(prefix, "Fallback:")
+    println(prefix, "  primary:")
+    print_dag(f.primary, indent + 2)
+    println(prefix, "  fallback:")
+    print_dag(f.fallback, indent + 2)
+    nothing
+end
+
+function print_dag(b::Branch, indent::Int)
+    prefix = "  " ^ indent
+    println(prefix, "Branch:")
+    println(prefix, "  if_true:")
+    print_dag(b.if_true, indent + 2)
+    println(prefix, "  if_false:")
+    print_dag(b.if_false, indent + 2)
+    nothing
+end
+
 #==============================================================================#
 # Utilities
 #==============================================================================#
@@ -569,6 +748,9 @@ Flatten all steps from a pipeline node into a vector.
 steps(step::Step) = [step]
 steps(seq::Sequence) = _collect_steps(seq.nodes)
 steps(par::Parallel) = _collect_steps(par.nodes)
+steps(r::Retry) = steps(r.node)
+steps(f::Fallback) = vcat(steps(f.primary), steps(f.fallback))
+steps(b::Branch) = vcat(steps(b.if_true), steps(b.if_false))
 
 function _collect_steps(nodes::Tuple)
     result = Step[]
@@ -590,6 +772,9 @@ Count total steps in a pipeline node.
 count_steps(::Step) = 1
 count_steps(seq::Sequence) = _count_steps(seq.nodes)
 count_steps(par::Parallel) = _count_steps(par.nodes)
+count_steps(r::Retry) = count_steps(r.node)
+count_steps(f::Fallback) = count_steps(f.primary) + count_steps(f.fallback)
+count_steps(b::Branch) = max(count_steps(b.if_true), count_steps(b.if_false))
 
 @inline _count_steps(::Tuple{}) = 0
 @inline _count_steps(nodes::Tuple) = count_steps(first(nodes)) + _count_steps(Base.tail(nodes))
@@ -601,6 +786,9 @@ count_steps(par::Parallel) = _count_steps(par.nodes)
 Base.show(io::IO, s::Step) = print(io, "Step(:", s.name, ")")
 Base.show(io::IO, s::Sequence) = print(io, "Sequence(", join(s.nodes, " >> "), ")")
 Base.show(io::IO, p::Parallel) = print(io, "Parallel(", join(p.nodes, " & "), ")")
+Base.show(io::IO, r::Retry) = print(io, "Retry(", r.node, ", ", r.max_attempts, ")")
+Base.show(io::IO, f::Fallback) = print(io, "(", f.primary, " | ", f.fallback, ")")
+Base.show(io::IO, b::Branch) = print(io, "Branch(?, ", b.if_true, ", ", b.if_false, ")")
 Base.show(io::IO, p::Pipeline) = print(io, "Pipeline(\"", p.name, "\", ", count_steps(p.root), " steps)")
 
 end # module SimplePipelines

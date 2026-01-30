@@ -20,6 +20,10 @@ Minimal, type-stable DAG pipelines for Julia.
 │                                                             │
 │  a >> b                       Sequential: a then b          │
 │  a & b                        Parallel: a and b together    │
+│  a | b                        Fallback: b runs if a fails   │
+│                                                             │
+│  Retry(node, n)               Retry up to n times           │
+│  Branch(cond, a, b)           Conditional: a if true, b if  │
 │                                                             │
 │  run_pipeline(pipeline)       Execute the pipeline          │
 │                                                             │

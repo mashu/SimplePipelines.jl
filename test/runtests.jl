@@ -420,4 +420,119 @@ using Test
         p = Pipeline(seq, name="test")
         @test isconcretetype(typeof(p))
     end
+    
+    @testset "Retry" begin
+        # Retry that succeeds on first try
+        s = @step ok = `echo "success"`
+        r = Retry(s, 3)
+        results = run_pipeline(r, verbose=false)
+        @test length(results) == 1
+        @test results[1].success
+        
+        # Retry with delay
+        r2 = Retry(s, 2, delay=0.01)
+        results2 = run_pipeline(r2, verbose=false)
+        @test results2[1].success
+        
+        # Retry that always fails
+        fail = @step fail = `false`
+        r3 = Retry(fail, 2)
+        results3 = run_pipeline(r3, verbose=false)
+        @test !results3[1].success
+        
+        # Utilities
+        @test count_steps(r) == 1
+        @test length(steps(r)) == 1
+        
+        # show
+        @test contains(sprint(show, r), "Retry")
+    end
+    
+    @testset "Fallback operator |" begin
+        success_step = @step ok = `echo "primary"`
+        fail_step = @step fail = `false`
+        fallback_step = @step fallback = `echo "fallback"`
+        
+        # Primary succeeds - fallback not used
+        f1 = success_step | fallback_step
+        results1 = run_pipeline(f1, verbose=false)
+        @test length(results1) == 1
+        @test results1[1].success
+        @test contains(results1[1].output, "primary")
+        
+        # Primary fails - fallback used
+        f2 = fail_step | fallback_step
+        results2 = run_pipeline(f2, verbose=false)
+        @test results2[end].success
+        @test contains(results2[end].output, "fallback")
+        
+        # Chain fallbacks
+        f3 = fail_step | fail_step | success_step
+        @test f3 isa Fallback
+        
+        # With Cmd directly
+        f4 = `false` | `echo "backup"`
+        @test f4 isa Fallback
+        
+        # Utilities
+        @test count_steps(f1) == 2
+        @test length(steps(f1)) == 2
+        
+        # show
+        @test contains(sprint(show, f1), "|")
+    end
+    
+    @testset "Branch" begin
+        flag = Ref(true)
+        
+        true_branch = @step true_branch = `echo "true path"`
+        false_branch = @step false_branch = `echo "false path"`
+        
+        b = Branch(() -> flag[], true_branch, false_branch)
+        
+        # Condition true
+        flag[] = true
+        results1 = run_pipeline(b, verbose=false)
+        @test results1[1].success
+        @test contains(results1[1].output, "true path")
+        
+        # Condition false
+        flag[] = false
+        results2 = run_pipeline(b, verbose=false)
+        @test results2[1].success
+        @test contains(results2[1].output, "false path")
+        
+        # Utilities
+        @test count_steps(b) == 1  # max of branches
+        @test length(steps(b)) == 2  # both branches
+        
+        # show
+        @test contains(sprint(show, b), "Branch")
+    end
+    
+    @testset "Retry + Fallback composition" begin
+        # Combine: retry a flaky step, if all retries fail use fallback
+        flaky = @step flaky = `false`
+        safe = @step safe = `echo "safe"`
+        
+        pipeline = Retry(flaky, 2) | safe
+        results = run_pipeline(pipeline, verbose=false)
+        
+        # Should have run flaky twice, then safe
+        @test results[end].success
+        @test contains(results[end].output, "safe")
+    end
+    
+    @testset "print_dag for new types" begin
+        s = @step s = `echo test`
+        r = Retry(s, 3, delay=1.0)
+        f = s | s
+        b = Branch(() -> true, s, s)
+        
+        # Just verify they don't error
+        print_dag(r)
+        print_dag(f)
+        print_dag(b)
+        @test true
+    end
 end

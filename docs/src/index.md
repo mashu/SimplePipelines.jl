@@ -14,6 +14,10 @@
 │                                                             │
 │  a >> b                       Sequential: a then b          │
 │  a & b                        Parallel: a and b together    │
+│  a | b                        Fallback: b runs if a fails   │
+│                                                             │
+│  Retry(node, n)               Retry up to n times           │
+│  Branch(cond, a, b)           Conditional: a if true, b if  │
 │                                                             │
 │  run_pipeline(pipeline)       Execute the pipeline          │
 │                                                             │
@@ -98,6 +102,6 @@ pipeline = (branch1 & branch2 & branch3) >> merge
 ## Contents
 
 ```@contents
-Pages = ["tutorial.md", "examples.md", "api.md", "design.md"]
+Pages = ["tutorial.md", "examples.md", "api.md", "design.md", "development.md"]
 Depth = 2
 ```

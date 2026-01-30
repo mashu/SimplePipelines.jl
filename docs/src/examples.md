@@ -123,6 +123,50 @@ pipeline = (sample_a & sample_b & sample_c) >> call >> filter_vcf
 run_pipeline(Pipeline(pipeline, name="Multi-Sample Variant Calling"))
 ```
 
+## Error Handling with Retry and Fallback
+
+Handle flaky operations gracefully:
+
+```julia
+using SimplePipelines
+
+# Retry a flaky API call up to 3 times
+fetch = @step fetch = `curl -f https://flaky-api.com/data -o data.json`
+pipeline = Retry(fetch, 3, delay=2.0) >> process
+
+# If primary method fails, use fallback
+fast = @step fast = `fast-tool data.csv`
+slow = @step slow = `slow-tool data.csv`
+pipeline = fast | slow
+
+# Combine: retry primary, then fallback
+pipeline = Retry(fast, 3) | slow
+```
+
+## Conditional Branching
+
+Choose execution path at runtime:
+
+```julia
+using SimplePipelines
+
+# Different processing based on file size
+small_pipeline = @step small = `quick-process data.csv`
+large_pipeline = @step decompress = `gunzip data.csv.gz` >> @step process = `parallel-process data.csv`
+
+pipeline = Branch(
+    () -> filesize("data.csv") < 100_000_000,  # < 100MB
+    small_pipeline,
+    large_pipeline
+)
+
+# Environment-based branching
+debug_steps = @step debug = `./tool --verbose --debug data`
+prod_steps = @step prod = `./tool --quiet data`
+
+pipeline = Branch(() -> get(ENV, "DEBUG", "0") == "1", debug_steps, prod_steps)
+```
+
 ## Complex DAG
 
 A workflow with multiple parallel stages:
@@ -146,20 +190,43 @@ analyze = @step analyze = `./analysis_tool merged.csv -o results/`
 report = @step report = () -> generate_report("results/")
 archive = @step archive = `tar -czvf results.tar.gz results/`
 
-# Build DAG:
-#   (fetch_db >> transform_db) & (fetch_files >> transform_files)
-#   >> merge >> analyze
-#   >> (report & archive)
-
+# Build DAG
 db_branch = fetch_db >> transform_db
 files_branch = fetch_files >> transform_files
 
 pipeline = (db_branch & files_branch) >> merge >> analyze >> (report & archive)
 
-# Preview structure
-println("Pipeline structure:")
-print_dag(pipeline)
-
-# Execute
 run_pipeline(pipeline)
+```
+
+## Robust Pipeline (All Features)
+
+Combining all operators for a production-ready workflow:
+
+```julia
+using SimplePipelines
+
+# Fetch with retry and fallback
+primary_source = @step primary = `curl -f https://main-api.com/data -o data.json`
+backup_source = @step backup = `curl -f https://backup-api.com/data -o data.json`
+fetch = Retry(primary_source, 3, delay=1.0) | backup_source
+
+# Conditional processing
+quick_process = @step quick = `jq '.items' data.json > processed.json`
+full_process = @step parse = `./parse data.json` >> @step validate = `./validate parsed.json`
+
+process = Branch(
+    () -> filesize("data.json") < 1_000_000,
+    quick_process,
+    full_process
+)
+
+# Parallel outputs
+report = @step report = () -> generate_report("processed.json")
+notify = @step notify = `curl -X POST https://slack.com/webhook -d '{"text":"Done"}'`
+
+# Full pipeline
+pipeline = fetch >> process >> (report & Retry(notify, 2))
+
+run_pipeline(Pipeline(pipeline, name="Robust ETL"))
 ```
