@@ -12,7 +12,7 @@ using Test
         s2 = Step(:mystep, `echo world`)
         @test s2.name == :mystep
         
-        # With dependencies
+        # With dependencies (vector inputs)
         s3 = Step(:process, `cat input.txt`, ["input.txt"], ["output.txt"])
         @test s3.inputs == ["input.txt"]
         @test s3.outputs == ["output.txt"]
@@ -48,34 +48,155 @@ using Test
         s1 = @step a = `echo a`
         s2 = @step b = `echo b`
         s3 = @step c = `echo c`
+        f = () -> "func"
         
         # Basic sequence
         seq = s1 >> s2
         @test seq isa Sequence
         @test length(seq.nodes) == 2
         
-        # Chaining
+        # Chaining (Sequence >> AbstractNode)
         seq3 = s1 >> s2 >> s3
         @test length(seq3.nodes) == 3
         
         # Direct Cmd chaining
         seq_cmd = `echo 1` >> `echo 2`
         @test seq_cmd isa Sequence
+        
+        # AbstractNode >> Sequence
+        seq_ns = s1 >> (s2 >> s3)
+        @test length(seq_ns.nodes) == 3
+        
+        # Sequence >> Sequence
+        seq_ss = (s1 >> s2) >> (s2 >> s3)
+        @test length(seq_ss.nodes) == 4
+        
+        # AbstractNode >> Cmd
+        seq_nc = s1 >> `echo cmd`
+        @test seq_nc isa Sequence
+        
+        # Cmd >> Sequence
+        seq_cs = `echo cmd` >> (s1 >> s2)
+        @test length(seq_cs.nodes) == 3
+        
+        # Function >> Function
+        seq_ff = f >> f
+        @test seq_ff isa Sequence
+        
+        # Function >> AbstractNode
+        seq_fn = f >> s1
+        @test seq_fn isa Sequence
+        
+        # AbstractNode >> Function
+        seq_nf = s1 >> f
+        @test seq_nf isa Sequence
+        
+        # Function >> Sequence
+        seq_fs = f >> (s1 >> s2)
+        @test length(seq_fs.nodes) == 3
+        
+        # Sequence >> Function
+        seq_sf = (s1 >> s2) >> f
+        @test length(seq_sf.nodes) == 3
+        
+        # Cmd >> Function
+        seq_cf = `echo cmd` >> f
+        @test seq_cf isa Sequence
+        
+        # Function >> Cmd
+        seq_fc = f >> `echo cmd`
+        @test seq_fc isa Sequence
     end
     
     @testset "Parallel operator &" begin
         s1 = @step a = `echo a`
         s2 = @step b = `echo b`
         s3 = @step c = `echo c`
+        f = () -> "func"
         
         # Basic parallel
         par = s1 & s2
         @test par isa Parallel
         @test length(par.nodes) == 2
         
-        # Chaining
+        # Chaining (Parallel & AbstractNode)
         par3 = s1 & s2 & s3
         @test length(par3.nodes) == 3
+        
+        # AbstractNode & Parallel
+        par_np = s1 & (s2 & s3)
+        @test length(par_np.nodes) == 3
+        
+        # Parallel & Parallel
+        par_pp = (s1 & s2) & (s2 & s3)
+        @test length(par_pp.nodes) == 4
+        
+        # Cmd & Cmd
+        par_cc = `echo 1` & `echo 2`
+        @test par_cc isa Parallel
+        
+        # Cmd & AbstractNode
+        par_cn = `echo cmd` & s1
+        @test par_cn isa Parallel
+        
+        # AbstractNode & Cmd
+        par_nc = s1 & `echo cmd`
+        @test par_nc isa Parallel
+        
+        # Cmd & Parallel
+        par_cp = `echo cmd` & (s1 & s2)
+        @test length(par_cp.nodes) == 3
+        
+        # Parallel & Cmd (via chaining)
+        par_pc = (s1 & s2) & `echo cmd`
+        @test length(par_pc.nodes) == 3
+        
+        # Function & Function
+        par_ff = f & f
+        @test par_ff isa Parallel
+        
+        # Function & AbstractNode
+        par_fn = f & s1
+        @test par_fn isa Parallel
+        
+        # AbstractNode & Function
+        par_nf = s1 & f
+        @test par_nf isa Parallel
+        
+        # Function & Parallel
+        par_fp = f & (s1 & s2)
+        @test length(par_fp.nodes) == 3
+        
+        # Parallel & Function
+        par_pf = (s1 & s2) & f
+        @test length(par_pf.nodes) == 3
+        
+        # Cmd & Function
+        par_cf = `echo cmd` & f
+        @test par_cf isa Parallel
+        
+        # Function & Cmd
+        par_fc = f & `echo cmd`
+        @test par_fc isa Parallel
+    end
+    
+    @testset "Constructors" begin
+        s1 = @step a = `echo a`
+        s2 = @step b = `echo b`
+        s3 = @step c = `echo c`
+        
+        # Sequence vararg constructor
+        seq = Sequence(s1, s2, s3)
+        @test length(seq.nodes) == 3
+        
+        # Parallel vararg constructor
+        par = Parallel(s1, s2, s3)
+        @test length(par.nodes) == 3
+        
+        # Pipeline vararg constructor
+        p = Pipeline(s1, s2, s3, name="vararg")
+        @test p.name == "vararg"
+        @test count_steps(p.root) == 3
     end
     
     @testset "Complex DAG" begin
@@ -99,6 +220,10 @@ using Test
         p = Pipeline(s1 >> s2, name="test")
         @test p.name == "test"
         @test count_steps(p.root) == 2
+        
+        # Default name
+        p2 = Pipeline(s1 >> s2)
+        @test p2.name == "pipeline"
     end
     
     @testset "Step execution" begin
@@ -138,6 +263,29 @@ using Test
         
         @test results[1].success
         @test counter[] == 1
+        
+        # Function returning nothing
+        f_nothing = () -> nothing
+        s_nothing = Step(:nothing_func, f_nothing)
+        results_nothing = run_pipeline(s_nothing, verbose=false)
+        @test results_nothing[1].success
+        @test results_nothing[1].output == ""
+    end
+    
+    @testset "Verbose execution" begin
+        s = @step test = `echo "verbose test"`
+        
+        # Just run with verbose=true to exercise the code path
+        results = run_pipeline(s, verbose=true)
+        @test results[1].success
+    end
+    
+    @testset "Verbose parallel" begin
+        par = `echo a` & `echo b`
+        
+        # Just run with verbose=true to exercise the code path
+        results = run_pipeline(par, verbose=true)
+        @test all(r -> r.success, results)
     end
     
     @testset "Utility functions" begin
@@ -149,14 +297,112 @@ using Test
         
         @test count_steps(dag) == 3
         @test length(steps(dag)) == 3
+        
+        # count_steps for single step
+        @test count_steps(a) == 1
     end
     
     @testset "Dry run" begin
         dag = `echo a` >> (`echo b` & `echo c`) >> `echo d`
         
-        # Should not error, just print structure
+        # Dry run with verbose (exercises print_dag)
+        results = run_pipeline(dag, dry_run=true, verbose=true)
+        @test isempty(results)
+        
+        # Dry run without verbose
         results = run_pipeline(dag, dry_run=true, verbose=false)
         @test isempty(results)
+    end
+    
+    @testset "print_dag" begin
+        a = Step(:a, `echo a`, ["in.txt"], ["out.txt"])
+        b = @step b = `echo b`
+        c = @step c = `echo c`
+        
+        dag = a >> (b & c)
+        
+        # Just call print_dag to exercise code path
+        print_dag(dag)
+        @test true  # If we get here, it worked
+    end
+    
+    @testset "Base.show" begin
+        a = @step a = `echo a`
+        b = @step b = `echo b`
+        
+        seq = a >> b
+        par = a & b
+        p = Pipeline(seq, name="test")
+        
+        # Test show methods
+        @test contains(sprint(show, a), "Step")
+        @test contains(sprint(show, a), ":a")
+        @test contains(sprint(show, seq), "Sequence")
+        @test contains(sprint(show, par), "Parallel")
+        @test contains(sprint(show, p), "Pipeline")
+        @test contains(sprint(show, p), "test")
+    end
+    
+    @testset "Base.run" begin
+        s = @step test = `echo "run test"`
+        p = Pipeline(s, name="run_test")
+        
+        # Base.run should work like run_pipeline
+        results = run(p, verbose=false)
+        @test length(results) == 1
+        @test results[1].success
+    end
+    
+    @testset "Error handling - missing input" begin
+        # Cmd step with missing input file
+        s_cmd = Step(:cmd_missing, `cat nonexistent.txt`, ["nonexistent_file_12345.txt"], String[])
+        results = run_pipeline(s_cmd, verbose=false)
+        @test !results[1].success
+        @test contains(results[1].output, "Missing input file")
+        
+        # Function step with missing input file
+        s_func = Step(:func_missing, () -> "test", ["nonexistent_file_12345.txt"], String[])
+        results_func = run_pipeline(s_func, verbose=false)
+        @test !results_func[1].success
+        @test contains(results_func[1].output, "Missing input file")
+    end
+    
+    @testset "Error handling - command failure" begin
+        # Command that fails
+        s = @step fail = `false`
+        results = run_pipeline(s, verbose=false)
+        @test !results[1].success
+        @test contains(results[1].output, "Error")
+    end
+    
+    @testset "Error handling - function throws" begin
+        # Function that throws
+        s = Step(:throws, () -> error("intentional error"))
+        results = run_pipeline(s, verbose=false)
+        @test !results[1].success
+        @test contains(results[1].output, "intentional error")
+    end
+    
+    @testset "Error handling - verbose failure" begin
+        s = @step fail = `false`
+        
+        # Run with verbose to exercise failure printing
+        results = run_pipeline(s, verbose=true)
+        @test !results[1].success
+    end
+    
+    @testset "Sequence stops on failure" begin
+        # First step fails, second should not run
+        counter = Ref(0)
+        fail_step = @step fail = `false`
+        count_step = Step(:count, () -> (counter[] += 1; "done"))
+        
+        seq = fail_step >> count_step
+        results = run_pipeline(seq, verbose=false)
+        
+        @test length(results) == 1  # Only first step ran
+        @test !results[1].success
+        @test counter[] == 0  # Second step never executed
     end
     
     @testset "Type stability" begin

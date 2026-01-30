@@ -58,7 +58,7 @@ end
 @inline Step(name::Symbol, work::F) where {F} = Step{F}(name, work, String[], String[])
 @inline Step(work::F) where {F} = Step{F}(gensym(:step), work, String[], String[])
 @inline Step(name::Symbol, work::F, inputs, outputs) where {F} = 
-    Step{F}(name, work, Vector{String}(inputs), Vector{String}(outputs))
+    Step{F}(name, work, collect(String, inputs), collect(String, outputs))
 
 """
     Sequence{T<:Tuple}
