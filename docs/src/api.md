@@ -10,6 +10,7 @@ Parallel
 Retry
 Fallback
 Branch
+Timeout
 Pipeline
 ```
 
@@ -24,6 +25,14 @@ Pipeline
 ```@docs
 >>
 &
+|
+^
+```
+
+## Functions
+
+```@docs
+Map
 ```
 
 ## Execution

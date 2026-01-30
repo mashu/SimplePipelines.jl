@@ -1,10 +1,11 @@
 module SimplePipelines
 
 export Step, @step, Sequence, Parallel, Pipeline
-export Retry, Fallback, Branch
+export Retry, Fallback, Branch, Timeout
+export Map
 export run_pipeline, count_steps, steps, print_dag
 
-import Base: >>, &, |
+import Base: >>, &, |, ^
 
 using Base.Threads: @spawn, fetch
 
@@ -163,6 +164,28 @@ struct Branch{C<:Function, T<:AbstractNode, F<:AbstractNode} <: AbstractNode
     if_false::F
 end
 
+"""
+    Timeout{N<:AbstractNode}
+
+Fail if a node doesn't complete within the specified time.
+
+# Examples
+```julia
+# 30 second timeout
+Timeout(long_step, 30.0)
+
+# Combine with retry and fallback
+Retry(Timeout(primary, 10.0), 3) | fallback
+
+# Using ^ operator: step^3 = retry 3 times
+Timeout(api_call, 5.0)^3 | backup
+```
+"""
+struct Timeout{N<:AbstractNode} <: AbstractNode
+    node::N
+    seconds::Float64
+end
+
 #==============================================================================#
 # Composition Operators - Pure multiple dispatch, no type checks
 #==============================================================================#
@@ -269,6 +292,27 @@ fast | medium | slow
 @inline (|)(a::AbstractNode, b::Function) = Fallback(a, Step(b))
 @inline (|)(a::Cmd, b::Function) = Fallback(Step(a), Step(b))
 @inline (|)(a::Function, b::Cmd) = Fallback(Step(a), Step(b))
+
+"""
+    a^n
+
+Create a [`Retry`](@ref) that attempts `a` up to `n` times.
+
+# Examples
+```julia
+# Retry step up to 3 times
+flaky_step^3
+
+# Combine with fallback
+flaky_step^3 | backup
+
+# With timeout
+Timeout(api_call, 5.0)^3
+```
+"""
+@inline (^)(a::AbstractNode, n::Int) = Retry(a, n)
+@inline (^)(a::Cmd, n::Int) = Retry(Step(a), n)
+@inline (^)(a::Function, n::Int) = Retry(Step(a), n)
 
 #==============================================================================#
 # Step Macro - Compile-time transformation only
@@ -563,6 +607,34 @@ function run_node(b::Branch, verbosity)
     return cond_result ? run_node(b.if_true, verbosity) : run_node(b.if_false, verbosity)
 end
 
+@inline print_timeout(::Silent, ::Float64) = nothing
+@inline print_timeout(::Verbose, secs::Float64) = println("⏱ Timeout: $(secs)s")
+
+@inline print_timeout_fail(::Silent) = nothing
+@inline print_timeout_fail(::Verbose) = println("  ✗ Timeout exceeded")
+
+function run_node(t::Timeout, verbosity)
+    print_timeout(verbosity, t.seconds)
+    
+    # Run in a task
+    result_channel = Channel{Vector{StepResult}}(1)
+    task = @async put!(result_channel, run_node(t.node, verbosity))
+    
+    # Wait with timeout
+    deadline = time() + t.seconds
+    while !isready(result_channel) && time() < deadline
+        sleep(0.01)
+    end
+    
+    if isready(result_channel)
+        return take!(result_channel)
+    else
+        # Timeout - return failure
+        print_timeout_fail(verbosity)
+        return [StepResult(Step(:timeout, `true`), false, t.seconds, "Timeout after $(t.seconds)s")]
+    end
+end
+
 #==============================================================================#
 # Pipeline - Top-level interface
 #==============================================================================#
@@ -736,6 +808,13 @@ function print_dag(b::Branch, indent::Int)
     nothing
 end
 
+function print_dag(t::Timeout, indent::Int)
+    prefix = "  " ^ indent
+    println(prefix, "Timeout($(t.seconds)s):")
+    print_dag(t.node, indent + 1)
+    nothing
+end
+
 #==============================================================================#
 # Utilities
 #==============================================================================#
@@ -751,6 +830,7 @@ steps(par::Parallel) = _collect_steps(par.nodes)
 steps(r::Retry) = steps(r.node)
 steps(f::Fallback) = vcat(steps(f.primary), steps(f.fallback))
 steps(b::Branch) = vcat(steps(b.if_true), steps(b.if_false))
+steps(t::Timeout) = steps(t.node)
 
 function _collect_steps(nodes::Tuple)
     result = Step[]
@@ -775,6 +855,7 @@ count_steps(par::Parallel) = _count_steps(par.nodes)
 count_steps(r::Retry) = count_steps(r.node)
 count_steps(f::Fallback) = count_steps(f.primary) + count_steps(f.fallback)
 count_steps(b::Branch) = max(count_steps(b.if_true), count_steps(b.if_false))
+count_steps(t::Timeout) = count_steps(t.node)
 
 @inline _count_steps(::Tuple{}) = 0
 @inline _count_steps(nodes::Tuple) = count_steps(first(nodes)) + _count_steps(Base.tail(nodes))
@@ -789,6 +870,40 @@ Base.show(io::IO, p::Parallel) = print(io, "Parallel(", join(p.nodes, " & "), ")
 Base.show(io::IO, r::Retry) = print(io, "Retry(", r.node, ", ", r.max_attempts, ")")
 Base.show(io::IO, f::Fallback) = print(io, "(", f.primary, " | ", f.fallback, ")")
 Base.show(io::IO, b::Branch) = print(io, "Branch(?, ", b.if_true, ", ", b.if_false, ")")
+Base.show(io::IO, t::Timeout) = print(io, "Timeout(", t.node, ", ", t.seconds, "s)")
 Base.show(io::IO, p::Pipeline) = print(io, "Pipeline(\"", p.name, "\", ", count_steps(p.root), " steps)")
+
+#==============================================================================#
+# Map Helper - Fan-out over collection
+#==============================================================================#
+
+"""
+    Map(f, items) -> Parallel
+
+Apply function `f` to each item, creating parallel steps.
+
+# Examples
+```julia
+# Process files in parallel
+Map(["a.txt", "b.txt", "c.txt"]) do file
+    @step Symbol(file) = `process \$file`
+end
+
+# With named steps
+samples = ["sample_A", "sample_B", "sample_C"]
+Map(samples) do s
+    Step(Symbol("process_", s), `analyze \$s.fastq`)
+end >> merge_step
+```
+"""
+function Map(f::Function, items)
+    nodes = [f(item) for item in items]
+    isempty(nodes) && error("Map requires at least one item")
+    length(nodes) == 1 && return first(nodes)
+    return reduce(&, nodes)
+end
+
+# Curried form: Map(items) do ... end
+Map(f::Function) = items -> Map(f, items)
 
 end # module SimplePipelines

@@ -5,34 +5,54 @@
 ## Interface
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    SimplePipelines.jl                       │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  @step name = `command`       Create a shell step           │
-│  @step name = () -> expr      Create a Julia step           │
-│                                                             │
-│  a >> b                       Sequential: a then b          │
-│  a & b                        Parallel: a and b together    │
-│  a | b                        Fallback: b runs if a fails   │
-│                                                             │
-│  Retry(node, n)               Retry up to n times           │
-│  Branch(cond, a, b)           Conditional: a if true, b if  │
-│                                                             │
-│  run_pipeline(pipeline)       Execute the pipeline          │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────┐
+│                       SimplePipelines.jl                          │
+├───────────────────────────────────────────────────────────────────┤
+│ STEPS                                                             │
+│   @step name = `command`          Shell command step              │
+│   @step name = () -> expr         Julia function step             │
+│                                                                   │
+│ OPERATORS                                                         │
+│   a >> b                          Sequential: a then b            │
+│   a & b                           Parallel: a and b together      │
+│   a | b                           Fallback: b if a fails          │
+│   a^n                             Retry: up to n attempts         │
+│                                                                   │
+│ CONTROL FLOW                                                      │
+│   Timeout(a, seconds)             Fail if exceeds time limit      │
+│   Branch(cond, a, b)              Conditional: a if true, else b  │
+│   Map(f, items)                   Fan-out: parallel over items    │
+│   Retry(a, n, delay=1.0)          Retry with delay between        │
+│                                                                   │
+│ EXECUTION                                                         │
+│   run_pipeline(p)                 Run pipeline, return results    │
+│   run_pipeline(p, verbose=false)  Run silently                    │
+│   run_pipeline(p, dry_run=true)   Preview without executing       │
+│                                                                   │
+│ RESULTS                                                           │
+│   results[i].success              Did step succeed?               │
+│   results[i].duration             Execution time (seconds)        │
+│   results[i].output               Captured output or error        │
+│                                                                   │
+│ UTILITIES                                                         │
+│   print_dag(node)                 Visualize DAG structure         │
+│   count_steps(node)               Count total steps               │
+│   steps(node)                     Get all steps as vector         │
+│                                                                   │
+└───────────────────────────────────────────────────────────────────┘
 ```
 
 ## Overview
 
 SimplePipelines.jl lets you define and execute directed acyclic graph (DAG) pipelines
-using two operators:
+using intuitive operators:
 
 | Operator | Meaning | Example |
 |----------|---------|---------|
 | `>>` | Sequential (a then b) | `download >> process >> upload` |
 | `&` | Parallel (a and b together) | `sample_a & sample_b & sample_c` |
+| `\|` | Fallback (b if a fails) | `fast_method \| slow_method` |
+| `^n` | Retry (up to n times) | `flaky_step^3` |
 
 ## Quick Start
 
@@ -94,9 +114,11 @@ pipeline = (branch1 & branch2 & branch3) >> merge
 
 ## Features
 
-- **Two operators** - `>>` for sequence, `&` for parallel
+- **Intuitive operators** - `>>` sequence, `&` parallel, `|` fallback, `^` retry
+- **Control flow** - `Timeout`, `Branch`, `Map` for complex workflows
 - **Type-stable** - Zero runtime type checks, full compile-time specialization
 - **Minimal overhead** - `@inline` functions and tuple recursion
+- **Composable** - All operators work together seamlessly
 - **Unified interface** - Shell commands and Julia functions compose seamlessly
 
 ## Contents

@@ -133,19 +133,19 @@ pipeline = fast_method | slow_method
 pipeline = method_a | method_b | method_c
 ```
 
-## Retry
+## Retry: `^` or `Retry()`
 
 Retry a node up to N times on failure:
 
 ```julia
-# Retry up to 3 times
-pipeline = Retry(flaky_api_call, 3)
+# Using ^ operator (concise)
+pipeline = flaky_api_call^3
 
-# Retry with delay between attempts
+# Using Retry() with delay between attempts
 pipeline = Retry(network_request, 5, delay=2.0)
 
 # Combine with fallback
-pipeline = Retry(primary, 3) | fallback
+pipeline = primary^3 | fallback
 ```
 
 ## Branch (Conditional)
@@ -166,6 +166,33 @@ pipeline = Branch(
     debug_steps,
     normal_steps
 )
+```
+
+## Timeout
+
+Fail if a node exceeds a time limit:
+
+```julia
+# 30 second timeout
+pipeline = Timeout(long_running_step, 30.0)
+
+# Combine with retry and fallback
+pipeline = Timeout(api_call, 5.0)^3 | backup
+```
+
+## Map (Fan-out)
+
+Apply a function to each item, creating parallel steps:
+
+```julia
+# Process files in parallel
+samples = ["sample_A", "sample_B", "sample_C"]
+pipeline = Map(samples) do s
+    Step(Symbol("process_", s), `analyze $s.fastq`)
+end >> merge_results
+
+# Equivalent to:
+# (process_sample_A & process_sample_B & process_sample_C) >> merge_results
 ```
 
 ## Running Pipelines

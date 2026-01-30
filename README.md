@@ -6,69 +6,7 @@
 [![Build Status](https://github.com/mashu/SimplePipelines.jl/workflows/CI/badge.svg)](https://github.com/mashu/SimplePipelines.jl/actions)
 [![codecov](https://codecov.io/gh/mashu/SimplePipelines.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/mashu/SimplePipelines.jl)
 
-Minimal, type-stable DAG pipelines for Julia.
-
-## Interface
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    SimplePipelines.jl                       │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  @step name = `command`       Create a shell step           │
-│  @step name = () -> expr      Create a Julia step           │
-│                                                             │
-│  a >> b                       Sequential: a then b          │
-│  a & b                        Parallel: a and b together    │
-│  a | b                        Fallback: b runs if a fails   │
-│                                                             │
-│  Retry(node, n)               Retry up to n times           │
-│  Branch(cond, a, b)           Conditional: a if true, b if  │
-│                                                             │
-│  run_pipeline(pipeline)       Execute the pipeline          │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Quick Example
-
-```julia
-using SimplePipelines
-
-# Define steps
-download = @step download = `curl -o data.txt https://example.com/data`
-process_a = @step process_a = `tool_a data.txt`
-process_b = @step process_b = `tool_b data.txt`
-merge = @step merge = () -> combine_results()
-
-# Build DAG: download -> (process_a & process_b) -> merge
-#
-#            ┌─ process_a ─┐
-#  download ─┤             ├─ merge
-#            └─ process_b ─┘
-
-pipeline = download >> (process_a & process_b) >> merge
-run_pipeline(pipeline)
-```
-
-## Complex Branching
-
-For graphs with multiple convergence points, compose sub-pipelines:
-
-```julia
-#     ┌─ b ─┐     ┌─ e ─┐
-#  a ─┤     ├─ d ─┤     ├─ g
-#     └─ c ─┘     └─ f ─┘
-
-# Build in stages
-stage1 = a
-stage2 = b & c
-stage3 = d
-stage4 = e & f
-stage5 = g
-
-pipeline = stage1 >> stage2 >> stage3 >> stage4 >> stage5
-```
+Minimal, type-stable DAG pipelines for Julia. Build workflows with shell commands and Julia functions using intuitive operators.
 
 ## Installation
 
@@ -77,6 +15,46 @@ using Pkg
 Pkg.add("SimplePipelines")
 ```
 
+## Interface Overview
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│                       SimplePipelines.jl                          │
+├───────────────────────────────────────────────────────────────────┤
+│ STEPS                                                             │
+│   @step name = `command`          Shell command step              │
+│   @step name = () -> expr         Julia function step             │
+│                                                                   │
+│ OPERATORS                                                         │
+│   a >> b                          Sequential: a then b            │
+│   a & b                           Parallel: a and b together      │
+│   a | b                           Fallback: b if a fails          │
+│   a^n                             Retry: up to n attempts         │
+│                                                                   │
+│ CONTROL FLOW                                                      │
+│   Timeout(a, seconds)             Fail if exceeds time limit      │
+│   Branch(cond, a, b)              Conditional: a if true, else b  │
+│   Map(f, items)                   Fan-out: parallel over items    │
+│   Retry(a, n, delay=1.0)          Retry with delay between        │
+│                                                                   │
+│ EXECUTION                                                         │
+│   run_pipeline(p)                 Run pipeline, return results    │
+│   run_pipeline(p, verbose=false)  Run silently                    │
+│   run_pipeline(p, dry_run=true)   Preview without executing       │
+│                                                                   │
+│ RESULTS                                                           │
+│   results[i].success              Did step succeed?               │
+│   results[i].duration             Execution time (seconds)        │
+│   results[i].output               Captured output or error        │
+│                                                                   │
+│ UTILITIES                                                         │
+│   print_dag(node)                 Visualize DAG structure         │
+│   count_steps(node)               Count total steps               │
+│   steps(node)                     Get all steps as vector         │
+│                                                                   │
+└───────────────────────────────────────────────────────────────────┘
+```
+
 ## Documentation
 
-See the [documentation](https://mashu.github.io/SimplePipelines.jl/dev) for the full tutorial and API reference.
+See the [full documentation](https://mashu.github.io/SimplePipelines.jl/dev) for tutorials, examples, and API reference.

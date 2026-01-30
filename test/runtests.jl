@@ -528,11 +528,112 @@ using Test
         r = Retry(s, 3, delay=1.0)
         f = s | s
         b = Branch(() -> true, s, s)
+        t = Timeout(s, 5.0)
         
         # Just verify they don't error
         print_dag(r)
         print_dag(f)
         print_dag(b)
+        print_dag(t)
         @test true
+    end
+    
+    @testset "Retry ^ operator" begin
+        s = @step s = `echo "test"`
+        
+        # ^ creates Retry
+        r = s^3
+        @test r isa Retry
+        @test r.max_attempts == 3
+        
+        # Works with Cmd directly
+        r2 = `echo "cmd"`^2
+        @test r2 isa Retry
+        @test r2.max_attempts == 2
+        
+        # Composable with fallback
+        fallback = @step fb = `echo "fallback"`
+        pipeline = s^3 | fallback
+        @test pipeline isa Fallback
+        
+        # Run it
+        results = run_pipeline(r, verbose=false)
+        @test results[1].success
+    end
+    
+    @testset "Timeout" begin
+        # Fast step completes
+        fast = @step fast = `echo "quick"`
+        t = Timeout(fast, 5.0)
+        results = run_pipeline(t, verbose=false)
+        @test results[1].success
+        
+        # Utilities
+        @test count_steps(t) == 1
+        @test length(steps(t)) == 1
+        
+        # show
+        @test contains(sprint(show, t), "Timeout")
+        
+        # Composable
+        fallback = @step fb = `echo "fallback"`
+        pipeline = Timeout(fast, 5.0)^3 | fallback
+        @test pipeline isa Fallback
+    end
+    
+    @testset "Map" begin
+        # Basic map over items
+        items = ["a", "b", "c"]
+        parallel = Map(items) do x
+            Step(Symbol(x), `echo $x`)
+        end
+        @test parallel isa Parallel
+        @test count_steps(parallel) == 3
+        
+        # Single item returns single node
+        single = Map(["only"]) do x
+            Step(:only, `echo $x`)
+        end
+        @test single isa Step
+        
+        # Execute map
+        results = run_pipeline(parallel, verbose=false)
+        @test length(results) == 3
+        @test all(r -> r.success, results)
+    end
+    
+    @testset "Operator composability" begin
+        a = @step a = `echo a`
+        b = @step b = `echo b`
+        c = @step c = `echo c`
+        d = @step d = `echo d`
+        
+        # All operators compose
+        p1 = (a >> b) | c
+        @test p1 isa Fallback
+        
+        p2 = (a & b)^3
+        @test p2 isa Retry
+        
+        p3 = Timeout(a | b, 5.0) >> c
+        @test p3 isa Sequence
+        
+        p4 = (a^2 | b) >> (c & d)
+        @test p4 isa Sequence
+        
+        p5 = Branch(() -> true, a^2, b | c) >> d
+        @test p5 isa Sequence
+        
+        # Complex nested composition
+        complex = (
+            (a^3 | b) >> 
+            Timeout(c & d, 10.0) >> 
+            Branch(() -> true, a, b)
+        )
+        @test complex isa Sequence
+        
+        # All should execute
+        results = run_pipeline(p1, verbose=false)
+        @test !isempty(results)
     end
 end
