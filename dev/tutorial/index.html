@@ -12,14 +12,21 @@ step = @step sort = sh&quot;sort data.txt | uniq &gt; sorted.txt&quot;</code></p
 step = @step () -&gt; process_data()
 
 # Named function step
-step = @step analyze = () -&gt; run_analysis(&quot;data.csv&quot;)</code></pre><h3 id="File-Dependencies-(Optional)"><a class="docs-heading-anchor" href="#File-Dependencies-(Optional)">File Dependencies (Optional)</a><a id="File-Dependencies-(Optional)-1"></a><a class="docs-heading-anchor-permalink" href="#File-Dependencies-(Optional)" title="Permalink"></a></h3><p>Track input/output files for validation:</p><pre><code class="language-julia hljs">@step align(&quot;reads.fq&quot; =&gt; &quot;aligned.bam&quot;) = sh&quot;bwa mem ref.fa reads.fq &gt; aligned.bam&quot;  # sh&quot;...&quot; for redirection</code></pre><h2 id="Sequential-Execution:"><a class="docs-heading-anchor" href="#Sequential-Execution:">Sequential Execution: <code>&gt;&gt;</code></a><a id="Sequential-Execution:-1"></a><a class="docs-heading-anchor-permalink" href="#Sequential-Execution:" title="Permalink"></a></h2><p>The <code>&gt;&gt;</code> operator chains steps—each waits for the previous to complete:</p><pre><code class="language-julia hljs"># Three steps in order
-pipeline = step_a &gt;&gt; step_b &gt;&gt; step_c
+step = @step analyze = () -&gt; run_analysis(&quot;data.csv&quot;)</code></pre><h3 id="File-Dependencies-(Optional)"><a class="docs-heading-anchor" href="#File-Dependencies-(Optional)">File Dependencies (Optional)</a><a id="File-Dependencies-(Optional)-1"></a><a class="docs-heading-anchor-permalink" href="#File-Dependencies-(Optional)" title="Permalink"></a></h3><p>Track input/output files for validation:</p><pre><code class="language-julia hljs">@step align(&quot;reads.fq&quot; =&gt; &quot;aligned.bam&quot;) = sh&quot;bwa mem ref.fa reads.fq &gt; aligned.bam&quot;  # sh&quot;...&quot; for redirection</code></pre><h2 id="Sequential-Execution:"><a class="docs-heading-anchor" href="#Sequential-Execution:">Sequential Execution: <code>&gt;&gt;</code></a><a id="Sequential-Execution:-1"></a><a class="docs-heading-anchor-permalink" href="#Sequential-Execution:" title="Permalink"></a></h2><p>The <code>&gt;&gt;</code> operator chains steps—each waits for the previous to complete:</p><pre><code class="language-julia hljs"># Chain commands directly (anonymous steps)
+pipeline = sh&quot;download data.txt&quot; &gt;&gt; sh&quot;process data.txt&quot; &gt;&gt; sh&quot;upload results.txt&quot;
 
-# Chain commands directly
-pipeline = sh&quot;download data.txt&quot; &gt;&gt; sh&quot;process data.txt&quot; &gt;&gt; sh&quot;upload results.txt&quot;</code></pre><h2 id="Parallel-Execution:-and"><a class="docs-heading-anchor" href="#Parallel-Execution:-and">Parallel Execution: <code>&amp;</code></a><a id="Parallel-Execution:-and-1"></a><a class="docs-heading-anchor-permalink" href="#Parallel-Execution:-and" title="Permalink"></a></h2><p>The <code>&amp;</code> operator groups steps to run concurrently:</p><pre><code class="language-julia hljs"># Three steps in parallel
-parallel = step_a &amp; step_b &amp; step_c
+# Or define named steps, then chain
+step_a = @step step_a = sh&quot;download data.txt&quot;
+step_b = @step step_b = sh&quot;process data.txt&quot;
+step_c = @step step_c = sh&quot;upload results.txt&quot;
+pipeline = step_a &gt;&gt; step_b &gt;&gt; step_c</code></pre><h2 id="Parallel-Execution:-and"><a class="docs-heading-anchor" href="#Parallel-Execution:-and">Parallel Execution: <code>&amp;</code></a><a id="Parallel-Execution:-and-1"></a><a class="docs-heading-anchor-permalink" href="#Parallel-Execution:-and" title="Permalink"></a></h2><p>The <code>&amp;</code> operator groups steps to run concurrently:</p><pre><code class="language-julia hljs"># Parallel steps (anonymous)
+parallel = sh&quot;task_a&quot; &amp; sh&quot;task_b&quot; &amp; sh&quot;task_c&quot;
 
-# Process samples in parallel, then merge
+# Named steps in parallel, then merge
+sample_1 = @step s1 = sh&quot;process sample1&quot;
+sample_2 = @step s2 = sh&quot;process sample2&quot;
+sample_3 = @step s3 = sh&quot;process sample3&quot;
+merge_results = @step merge = sh&quot;merge outputs&quot;
 pipeline = (sample_1 &amp; sample_2 &amp; sample_3) &gt;&gt; merge_results</code></pre><h2 id="Complex-DAGs"><a class="docs-heading-anchor" href="#Complex-DAGs">Complex DAGs</a><a id="Complex-DAGs-1"></a><a class="docs-heading-anchor-permalink" href="#Complex-DAGs" title="Permalink"></a></h2><p>Combine <code>&gt;&gt;</code> and <code>&amp;</code> for arbitrary graphs.</p><h3 id="Diamond-Pattern"><a class="docs-heading-anchor" href="#Diamond-Pattern">Diamond Pattern</a><a id="Diamond-Pattern-1"></a><a class="docs-heading-anchor-permalink" href="#Diamond-Pattern" title="Permalink"></a></h3><pre><code class="nohighlight hljs">       ┌── analyze_a ──┐
  fetch─┤               ├── report
        └── analyze_b ──┘</code></pre><pre><code class="language-julia hljs">fetch = @step fetch = sh&quot;echo &#39;a,b\n1,2&#39; &gt; data.csv&quot;
@@ -28,7 +35,7 @@ analyze_b = @step b = sh&quot;wc -c data.csv&quot;
 report = @step report = () -&gt; &quot;done&quot;
 
 pipeline = fetch &gt;&gt; (analyze_a &amp; analyze_b) &gt;&gt; report
-run_pipeline(pipeline)</code></pre><h3 id="Multi-Stage-Parallel"><a class="docs-heading-anchor" href="#Multi-Stage-Parallel">Multi-Stage Parallel</a><a id="Multi-Stage-Parallel-1"></a><a class="docs-heading-anchor-permalink" href="#Multi-Stage-Parallel" title="Permalink"></a></h3><p>For graphs with multiple fork-join points, compose in stages:</p><pre><code class="nohighlight hljs">     ┌─ b ─┐     ┌─ e ─┐
+execute(pipeline)</code></pre><h3 id="Multi-Stage-Parallel"><a class="docs-heading-anchor" href="#Multi-Stage-Parallel">Multi-Stage Parallel</a><a id="Multi-Stage-Parallel-1"></a><a class="docs-heading-anchor-permalink" href="#Multi-Stage-Parallel" title="Permalink"></a></h3><p>For graphs with multiple fork-join points, compose in stages:</p><pre><code class="nohighlight hljs">     ┌─ b ─┐     ┌─ e ─┐
   a ─┤     ├─ d ─┤     ├─ g
      └─ c ─┘     └─ f ─┘</code></pre><pre><code class="language-julia hljs">a = @step a = sh&quot;step_a&quot;
 b = @step b = sh&quot;step_b&quot;
@@ -42,22 +49,40 @@ pipeline = a &gt;&gt; (b &amp; c) &gt;&gt; d &gt;&gt; (e &amp; f) &gt;&gt; g</co
   │                        │
   ├─ fetch_b &gt;&gt; process_b ─┼── merge
   │                        │
-  └─ fetch_c &gt;&gt; process_c ─┘</code></pre><pre><code class="language-julia hljs">branch_a = fetch_a &gt;&gt; process_a
+  └─ fetch_c &gt;&gt; process_c ─┘</code></pre><pre><code class="language-julia hljs">fetch_a = @step fetch_a = sh&quot;fetch sample_a&quot;
+process_a = @step process_a = sh&quot;process sample_a&quot;
+fetch_b = @step fetch_b = sh&quot;fetch sample_b&quot;
+process_b = @step process_b = sh&quot;process sample_b&quot;
+fetch_c = @step fetch_c = sh&quot;fetch sample_c&quot;
+process_c = @step process_c = sh&quot;process sample_c&quot;
+merge = @step merge = sh&quot;merge results&quot;
+
+branch_a = fetch_a &gt;&gt; process_a
 branch_b = fetch_b &gt;&gt; process_b
 branch_c = fetch_c &gt;&gt; process_c
-
 pipeline = (branch_a &amp; branch_b &amp; branch_c) &gt;&gt; merge</code></pre><p>This pattern is common for processing multiple samples/files independently before combining results.</p><h2 id="Fallback:"><a class="docs-heading-anchor" href="#Fallback:">Fallback: <code>|</code></a><a id="Fallback:-1"></a><a class="docs-heading-anchor-permalink" href="#Fallback:" title="Permalink"></a></h2><p>The <code>|</code> operator provides fallback behavior—if the primary fails, run the fallback:</p><pre><code class="language-julia hljs"># If fast method fails, use slow method
+fast_method = @step fast = sh&quot;fast_tool input.txt&quot;
+slow_method = @step slow = sh&quot;slow_tool input.txt&quot;
 pipeline = fast_method | slow_method
 
 # Chain multiple fallbacks
-pipeline = method_a | method_b | method_c</code></pre><h2 id="Retry:-or-Retry()"><a class="docs-heading-anchor" href="#Retry:-or-Retry()">Retry: <code>^</code> or <code>Retry()</code></a><a id="Retry:-or-Retry()-1"></a><a class="docs-heading-anchor-permalink" href="#Retry:-or-Retry()" title="Permalink"></a></h2><p>Retry a node up to N times on failure:</p><pre><code class="language-julia hljs"># Using ^ operator (concise)
+method_a = @step a = sh&quot;method_a input&quot;
+method_b = @step b = sh&quot;method_b input&quot;
+method_c = @step c = sh&quot;method_c input&quot;
+pipeline = method_a | method_b | method_c</code></pre><h2 id="Retry:-or-Retry()"><a class="docs-heading-anchor" href="#Retry:-or-Retry()">Retry: <code>^</code> or <code>Retry()</code></a><a id="Retry:-or-Retry()-1"></a><a class="docs-heading-anchor-permalink" href="#Retry:-or-Retry()" title="Permalink"></a></h2><p>Retry a node up to N times on failure:</p><pre><code class="language-julia hljs"># Using ^ operator (concise) – retry flaky step up to 3 times
+flaky_api_call = @step api = sh&quot;echo &#39;mock response&#39;&quot;
 pipeline = flaky_api_call^3
 
 # Using Retry() with delay between attempts
+network_request = @step fetch = sh&quot;echo &#39;data&#39;&quot;
 pipeline = Retry(network_request, 5, delay=2.0)
 
 # Combine with fallback
+primary = @step primary = sh&quot;echo primary&quot;
+fallback = @step fallback = sh&quot;echo fallback&quot;
 pipeline = primary^3 | fallback</code></pre><h2 id="Branch-(Conditional)"><a class="docs-heading-anchor" href="#Branch-(Conditional)">Branch (Conditional)</a><a id="Branch-(Conditional)-1"></a><a class="docs-heading-anchor-permalink" href="#Branch-(Conditional)" title="Permalink"></a></h2><p>Execute different branches based on a runtime condition:</p><pre><code class="language-julia hljs"># Branch based on file size
+large_file_pipeline = @step large = sh&quot;process_large data.txt&quot;
+small_file_pipeline = @step small = sh&quot;process_small data.txt&quot;
 pipeline = Branch(
     () -&gt; filesize(&quot;data.txt&quot;) &gt; 1_000_000,
     large_file_pipeline,
@@ -65,6 +90,8 @@ pipeline = Branch(
 )
 
 # Branch based on environment
+debug_steps = @step debug = sh&quot;run with verbose logging&quot;
+normal_steps = @step normal = sh&quot;run quietly&quot;
 pipeline = Branch(
     () -&gt; haskey(ENV, &quot;DEBUG&quot;),
     debug_steps,
@@ -100,22 +127,28 @@ pipeline = Reduce(analyze_a &amp; analyze_b) do outputs
     join(outputs, &quot;\n&quot;)
 end
 
-# Using a named function
+# Using a named function (define reducer and steps first)
+combine_results(outputs) = join(outputs, &quot;\n&quot;)
+step_a = @step a = sh&quot;echo result_a&quot;
+step_b = @step b = sh&quot;echo result_b&quot;
+step_c = @step c = sh&quot;echo result_c&quot;
 pipeline = Reduce(combine_results, step_a &amp; step_b &amp; step_c)
 
 # In a pipeline: fetch -&gt; parallel analysis -&gt; reduce -&gt; report
-pipeline = fetch &gt;&gt; Reduce(merge, analyze_a &amp; analyze_b) &gt;&gt; report</code></pre><p>The reducer function receives a <code>Vector{String}</code> of outputs from all successful parallel steps.</p><h2 id="Running-Pipelines"><a class="docs-heading-anchor" href="#Running-Pipelines">Running Pipelines</a><a id="Running-Pipelines-1"></a><a class="docs-heading-anchor-permalink" href="#Running-Pipelines" title="Permalink"></a></h2><pre><code class="language-julia hljs"># Basic execution
-results = run_pipeline(pipeline)
+pipeline = fetch &gt;&gt; Reduce(merge, analyze_a &amp; analyze_b) &gt;&gt; report</code></pre><p>The reducer function receives a <code>Vector{String}</code> of outputs from all successful parallel steps.</p><h2 id="Running-Pipelines"><a class="docs-heading-anchor" href="#Running-Pipelines">Running Pipelines</a><a id="Running-Pipelines-1"></a><a class="docs-heading-anchor-permalink" href="#Running-Pipelines" title="Permalink"></a></h2><p>Use <code>execute(pipeline)</code> to run:</p><pre><code class="language-julia hljs"># Basic execution
+results = execute(pipeline)
 
 # Silent (no progress output)
-results = run_pipeline(pipeline, verbose=false)
+results = execute(pipeline, verbose=false)
 
 # Dry run (preview structure)
-run_pipeline(pipeline, dry_run=true)
+execute(pipeline, dry_run=true)
 
 # Named pipeline
+step_a = @step a = sh&quot;first&quot;
+step_b = @step b = sh&quot;second&quot;
 p = Pipeline(step_a &gt;&gt; step_b, name=&quot;My Workflow&quot;)
-run_pipeline(p)</code></pre><h2 id="Checking-Results"><a class="docs-heading-anchor" href="#Checking-Results">Checking Results</a><a id="Checking-Results-1"></a><a class="docs-heading-anchor-permalink" href="#Checking-Results" title="Permalink"></a></h2><pre><code class="language-julia hljs">results = run_pipeline(pipeline)
+execute(p)</code></pre><h2 id="Checking-Results"><a class="docs-heading-anchor" href="#Checking-Results">Checking Results</a><a id="Checking-Results-1"></a><a class="docs-heading-anchor-permalink" href="#Checking-Results" title="Permalink"></a></h2><pre><code class="language-julia hljs">results = execute(pipeline)
 
 for r in results
     if r.success
@@ -144,11 +177,11 @@ post = @step post = () -&gt; begin
 end
 
 pipeline = prep &gt;&gt; external &gt;&gt; post
-run_pipeline(pipeline)</code></pre><h2 id="Utilities"><a class="docs-heading-anchor" href="#Utilities">Utilities</a><a id="Utilities-1"></a><a class="docs-heading-anchor-permalink" href="#Utilities" title="Permalink"></a></h2><pre><code class="language-julia hljs"># Count steps in a pipeline
+execute(pipeline)</code></pre><h2 id="Utilities"><a class="docs-heading-anchor" href="#Utilities">Utilities</a><a id="Utilities-1"></a><a class="docs-heading-anchor-permalink" href="#Utilities" title="Permalink"></a></h2><pre><code class="language-julia hljs"># Count steps in a pipeline
 n = count_steps(pipeline)
 
 # Get all steps as a vector
 all_steps = steps(pipeline)
 
 # Print DAG structure
-print_dag(pipeline)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../examples/">Examples »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 30 January 2026 11:14">Friday 30 January 2026</span>. Using Julia version 1.12.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+print_dag(pipeline)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../examples/">Examples »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 30 January 2026 11:55">Friday 30 January 2026</span>. Using Julia version 1.12.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

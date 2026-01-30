@@ -6,7 +6,7 @@ process = @step process = sh&quot;sort data.txt &gt; sorted.txt&quot;
 upload = @step upload = sh&quot;cp sorted.txt uploaded.txt&quot;
 
 pipeline = download &gt;&gt; process &gt;&gt; upload
-run_pipeline(pipeline)</code></pre><hr/><h3 id="1.2-Parallel-Processing"><a class="docs-heading-anchor" href="#1.2-Parallel-Processing">1.2 Parallel Processing</a><a id="1.2-Parallel-Processing-1"></a><a class="docs-heading-anchor-permalink" href="#1.2-Parallel-Processing" title="Permalink"></a></h3><p><strong>Flow:</strong> Three steps run in parallel, then one step merges.</p><pre><code class="nohighlight hljs">       ┌── file_a ──┐
+execute(pipeline)</code></pre><hr/><h3 id="1.2-Parallel-Processing"><a class="docs-heading-anchor" href="#1.2-Parallel-Processing">1.2 Parallel Processing</a><a id="1.2-Parallel-Processing-1"></a><a class="docs-heading-anchor-permalink" href="#1.2-Parallel-Processing" title="Permalink"></a></h3><p><strong>Flow:</strong> Three steps run in parallel, then one step merges.</p><pre><code class="nohighlight hljs">       ┌── file_a ──┐
        ├── file_b ──┼──►  archive
        └── file_c ──┘</code></pre><p><strong>Goal:</strong> Create three files, compress them concurrently, then archive (runnable as-is).</p><pre><code class="language-julia hljs">using SimplePipelines
 
@@ -16,7 +16,7 @@ file_c = @step c = sh&quot;echo content_c &gt; file_c.txt &amp;&amp; gzip -k fil
 archive = @step archive = sh&quot;tar -cvf archive.tar file_a.txt.gz file_b.txt.gz file_c.txt.gz&quot;
 
 pipeline = (file_a &amp; file_b &amp; file_c) &gt;&gt; archive
-run_pipeline(pipeline)</code></pre><hr/><h3 id="1.3-Julia-Shell"><a class="docs-heading-anchor" href="#1.3-Julia-Shell">1.3 Julia + Shell</a><a id="1.3-Julia-Shell-1"></a><a class="docs-heading-anchor-permalink" href="#1.3-Julia-Shell" title="Permalink"></a></h3><p><strong>Flow:</strong> Julia step → shell step → Julia step.</p><pre><code class="nohighlight hljs">  generate  ──►  process  ──►  report
+execute(pipeline)</code></pre><hr/><h3 id="1.3-Julia-Shell"><a class="docs-heading-anchor" href="#1.3-Julia-Shell">1.3 Julia + Shell</a><a id="1.3-Julia-Shell-1"></a><a class="docs-heading-anchor-permalink" href="#1.3-Julia-Shell" title="Permalink"></a></h3><p><strong>Flow:</strong> Julia step → shell step → Julia step.</p><pre><code class="nohighlight hljs">  generate  ──►  process  ──►  report
    (Julia)       (shell)      (Julia)</code></pre><p><strong>Goal:</strong> Generate data in Julia, run a shell tool, then summarize in Julia.</p><pre><code class="language-julia hljs">using SimplePipelines
 using DelimitedFiles
 
@@ -35,7 +35,7 @@ report = @step report = () -&gt; begin
 end
 
 pipeline = generate &gt;&gt; process &gt;&gt; report
-run_pipeline(pipeline)</code></pre><hr/><h2 id="2.-Control-flow"><a class="docs-heading-anchor" href="#2.-Control-flow">2. Control flow</a><a id="2.-Control-flow-1"></a><a class="docs-heading-anchor-permalink" href="#2.-Control-flow" title="Permalink"></a></h2><h3 id="2.1-Retry-and-Fallback"><a class="docs-heading-anchor" href="#2.1-Retry-and-Fallback">2.1 Retry and Fallback</a><a id="2.1-Retry-and-Fallback-1"></a><a class="docs-heading-anchor-permalink" href="#2.1-Retry-and-Fallback" title="Permalink"></a></h3><p><strong>Flow (retry then continue):</strong> Run a step up to N times, then continue.</p><pre><code class="nohighlight hljs">  [fetch^3]  ──►  process
+execute(pipeline)</code></pre><hr/><h2 id="2.-Control-flow"><a class="docs-heading-anchor" href="#2.-Control-flow">2. Control flow</a><a id="2.-Control-flow-1"></a><a class="docs-heading-anchor-permalink" href="#2.-Control-flow" title="Permalink"></a></h2><h3 id="2.1-Retry-and-Fallback"><a class="docs-heading-anchor" href="#2.1-Retry-and-Fallback">2.1 Retry and Fallback</a><a id="2.1-Retry-and-Fallback-1"></a><a class="docs-heading-anchor-permalink" href="#2.1-Retry-and-Fallback" title="Permalink"></a></h3><p><strong>Flow (retry then continue):</strong> Run a step up to N times, then continue.</p><pre><code class="nohighlight hljs">  [fetch^3]  ──►  process
    (retry)</code></pre><p><strong>Flow (fallback):</strong> If primary fails, run fallback.</p><pre><code class="nohighlight hljs">   primary  ──►  (on success)  result
       │
       └──►  (on failure)  fallback  ──►  result</code></pre><p><strong>Goal:</strong> Retry flaky fetch; use fallback when primary step fails; combine retry and fallback.</p><pre><code class="language-julia hljs">using SimplePipelines
@@ -46,19 +46,19 @@ process = @step process = sh&quot;wc -c data.json&quot;
 pipeline = Retry(fetch, 3, delay=0.1) &gt;&gt; process
 
 # Fallback (create data.csv first so both branches have input)
-run_pipeline(@step _ = sh&quot;(echo &#39;a,b&#39;; echo &#39;1,2&#39;) &gt; data.csv&quot;, verbose=false)
+execute(@step setup = sh&quot;(echo &#39;a,b&#39;; echo &#39;1,2&#39;) &gt; data.csv&quot;, verbose=false)
 fast = @step fast = sh&quot;sort data.csv &gt; sorted.csv&quot;
 slow = @step slow = sh&quot;cat data.csv &gt; sorted.csv&quot;
 pipeline = fast | slow
 
 # Retry then fallback
 pipeline = Retry(fast, 3) | slow
-run_pipeline(pipeline)</code></pre><hr/><h3 id="2.2-Conditional-Branching"><a class="docs-heading-anchor" href="#2.2-Conditional-Branching">2.2 Conditional Branching</a><a id="2.2-Conditional-Branching-1"></a><a class="docs-heading-anchor-permalink" href="#2.2-Conditional-Branching" title="Permalink"></a></h3><p><strong>Flow:</strong> One of two branches runs based on a condition.</p><pre><code class="nohighlight hljs">            ┌── if true  ──►  branch_a
+execute(pipeline)</code></pre><hr/><h3 id="2.2-Conditional-Branching"><a class="docs-heading-anchor" href="#2.2-Conditional-Branching">2.2 Conditional Branching</a><a id="2.2-Conditional-Branching-1"></a><a class="docs-heading-anchor-permalink" href="#2.2-Conditional-Branching" title="Permalink"></a></h3><p><strong>Flow:</strong> One of two branches runs based on a condition.</p><pre><code class="nohighlight hljs">            ┌── if true  ──►  branch_a
   condition ─┤
             └── if false ──►  branch_b</code></pre><p><strong>Goal:</strong> Choose processing path by file size or environment (e.g. DEBUG).</p><pre><code class="language-julia hljs">using SimplePipelines
 
 # Create data.csv so the branch condition has a file to check
-run_pipeline(@step _ = sh&quot;(echo &#39;a,b&#39;; echo &#39;1,2&#39;; echo &#39;3,4&#39;) &gt; data.csv&quot;, verbose=false)
+execute(@step setup = sh&quot;(echo &#39;a,b&#39;; echo &#39;1,2&#39;; echo &#39;3,4&#39;) &gt; data.csv&quot;, verbose=false)
 
 # By file size
 small_pipeline = @step small = sh&quot;head -n 1000 data.csv &gt; sample.csv&quot;
@@ -68,13 +68,13 @@ pipeline = Branch(
     small_pipeline,
     large_pipeline
 )
-run_pipeline(pipeline)
+execute(pipeline)
 
 # By environment
 debug_steps = @step debug = sh&quot;echo &#39;debug mode&#39;&quot;
 prod_steps = @step prod = sh&quot;echo &#39;production&#39;&quot;
 pipeline = Branch(() -&gt; get(ENV, &quot;DEBUG&quot;, &quot;0&quot;) == &quot;1&quot;, debug_steps, prod_steps)
-run_pipeline(pipeline)</code></pre><hr/><h2 id="3.-Complex-DAGs"><a class="docs-heading-anchor" href="#3.-Complex-DAGs">3. Complex DAGs</a><a id="3.-Complex-DAGs-1"></a><a class="docs-heading-anchor-permalink" href="#3.-Complex-DAGs" title="Permalink"></a></h2><h3 id="3.1-Multi-stage-Parallel"><a class="docs-heading-anchor" href="#3.1-Multi-stage-Parallel">3.1 Multi-stage Parallel</a><a id="3.1-Multi-stage-Parallel-1"></a><a class="docs-heading-anchor-permalink" href="#3.1-Multi-stage-Parallel" title="Permalink"></a></h3><p><strong>Flow:</strong> Two parallel fetch+transform branches, then merge, analyze, then report and archive in parallel.</p><pre><code class="nohighlight hljs">  ┌── fetch_db   ──►  transform_db  ──┐
+execute(pipeline)</code></pre><hr/><h2 id="3.-Complex-DAGs"><a class="docs-heading-anchor" href="#3.-Complex-DAGs">3. Complex DAGs</a><a id="3.-Complex-DAGs-1"></a><a class="docs-heading-anchor-permalink" href="#3.-Complex-DAGs" title="Permalink"></a></h2><h3 id="3.1-Multi-stage-Parallel"><a class="docs-heading-anchor" href="#3.1-Multi-stage-Parallel">3.1 Multi-stage Parallel</a><a id="3.1-Multi-stage-Parallel-1"></a><a class="docs-heading-anchor-permalink" href="#3.1-Multi-stage-Parallel" title="Permalink"></a></h3><p><strong>Flow:</strong> Two parallel fetch+transform branches, then merge, analyze, then report and archive in parallel.</p><pre><code class="nohighlight hljs">  ┌── fetch_db   ──►  transform_db  ──┐
   │                                    ├──►  merge  ──►  analyze  ──►  ┌── report
   └── fetch_files ──►  transform_files ─┘                               └── archive</code></pre><p><strong>Goal:</strong> Fetch from two sources in parallel (here: create two files), process each, merge, analyze, then report and archive (runnable without network).</p><pre><code class="language-julia hljs">using SimplePipelines
 
@@ -94,7 +94,7 @@ db_branch = fetch_db &gt;&gt; transform_db
 files_branch = fetch_files &gt;&gt; transform_files
 pipeline = (db_branch &amp; files_branch) &gt;&gt; merge &gt;&gt; analyze &gt;&gt; (report &amp; archive)
 
-run_pipeline(pipeline)</code></pre><hr/><h3 id="3.2-Robust-Pipeline-(all-features)"><a class="docs-heading-anchor" href="#3.2-Robust-Pipeline-(all-features)">3.2 Robust Pipeline (all features)</a><a id="3.2-Robust-Pipeline-(all-features)-1"></a><a class="docs-heading-anchor-permalink" href="#3.2-Robust-Pipeline-(all-features)" title="Permalink"></a></h3><p><strong>Flow:</strong> Retry+fallback fetch → conditional process (small vs full) → report and notify in parallel (notify with retry).</p><pre><code class="nohighlight hljs">  [primary^3 | backup]  ──►  [small? quick : full]  ──►  report
+execute(pipeline)</code></pre><hr/><h3 id="3.2-Robust-Pipeline-(all-features)"><a class="docs-heading-anchor" href="#3.2-Robust-Pipeline-(all-features)">3.2 Robust Pipeline (all features)</a><a id="3.2-Robust-Pipeline-(all-features)-1"></a><a class="docs-heading-anchor-permalink" href="#3.2-Robust-Pipeline-(all-features)" title="Permalink"></a></h3><p><strong>Flow:</strong> Retry+fallback fetch → conditional process (small vs full) → report and notify in parallel (notify with retry).</p><pre><code class="nohighlight hljs">  [primary^3 | backup]  ──►  [small? quick : full]  ──►  report
                                                       └── notify^2</code></pre><p><strong>Goal:</strong> Fetch with retry and fallback; branch on file size; run report and notify in parallel (runnable without network).</p><pre><code class="language-julia hljs">using SimplePipelines
 
 primary_source = @step primary = sh&quot;echo &#39;{\&quot;status\&quot;:\&quot;ok\&quot;}&#39; &gt; data.json&quot;
@@ -114,7 +114,7 @@ report = @step report = sh&quot;cat output.txt&quot;
 notify = @step notify = sh&quot;echo &#39;Pipeline done&#39;&quot;
 
 pipeline = fetch &gt;&gt; process &gt;&gt; (report &amp; Retry(notify, 2))
-run_pipeline(Pipeline(pipeline, name=&quot;Robust ETL&quot;))</code></pre><hr/><h2 id="4.-Bioinformatics"><a class="docs-heading-anchor" href="#4.-Bioinformatics">4. Bioinformatics</a><a id="4.-Bioinformatics-1"></a><a class="docs-heading-anchor-permalink" href="#4.-Bioinformatics" title="Permalink"></a></h2><p><strong>Multiple donors / samples:</strong> Use <code>ForEach</code> with a <code>{wildcard}</code> pattern to automatically discover files and create parallel branches. The wildcard values propagate via normal Julia <code>$()</code> interpolation.</p><p><strong>Note:</strong> Examples below use real tool names (PEAR, IgBLAST, BWA, etc.). They are runnable only if those tools are installed and input files exist; otherwise use <code>echo</code> placeholders as in the <a href="https://github.com/mashu/SimplePipelines.jl/blob/main/examples/bioinformatics.jl">basic examples</a>.</p><h3 id="4.1-Immune-Repertoire-(single-donor)"><a class="docs-heading-anchor" href="#4.1-Immune-Repertoire-(single-donor)">4.1 Immune Repertoire (single donor)</a><a id="4.1-Immune-Repertoire-(single-donor)-1"></a><a class="docs-heading-anchor-permalink" href="#4.1-Immune-Repertoire-(single-donor)" title="Permalink"></a></h3><p><strong>Flow:</strong> Paired-end FASTQ → merge (PEAR) → FASTQ→FASTA → IgBLAST (V/D/J) → Julia filter by identity.</p><pre><code class="nohighlight hljs">  R1.fastq ──┐
+execute(Pipeline(pipeline, name=&quot;Robust ETL&quot;))</code></pre><hr/><h2 id="4.-Bioinformatics"><a class="docs-heading-anchor" href="#4.-Bioinformatics">4. Bioinformatics</a><a id="4.-Bioinformatics-1"></a><a class="docs-heading-anchor-permalink" href="#4.-Bioinformatics" title="Permalink"></a></h2><p><strong>Multiple donors / samples:</strong> Use <code>ForEach</code> with a <code>{wildcard}</code> pattern to automatically discover files and create parallel branches. The wildcard values propagate via normal Julia <code>$()</code> interpolation.</p><p><strong>Note:</strong> Examples below use real tool names (PEAR, IgBLAST, BWA, etc.). They are runnable only if those tools are installed and input files exist; otherwise use <code>echo</code> placeholders as in the <a href="https://github.com/mashu/SimplePipelines.jl/blob/main/examples/bioinformatics.jl">basic examples</a>.</p><h3 id="4.1-Immune-Repertoire-(single-donor)"><a class="docs-heading-anchor" href="#4.1-Immune-Repertoire-(single-donor)">4.1 Immune Repertoire (single donor)</a><a id="4.1-Immune-Repertoire-(single-donor)-1"></a><a class="docs-heading-anchor-permalink" href="#4.1-Immune-Repertoire-(single-donor)" title="Permalink"></a></h3><p><strong>Flow:</strong> Paired-end FASTQ → merge (PEAR) → FASTQ→FASTA → IgBLAST (V/D/J) → Julia filter by identity.</p><pre><code class="nohighlight hljs">  R1.fastq ──┐
              ├──►  pear  ──►  to_fasta  ──►  igblast  ──►  filter_identity  ──►  igblast_filtered.tsv
   R2.fastq ──┘</code></pre><p><strong>Goal:</strong> Merge paired-end reads, run IgBLAST with V/D/J references, filter rows by <code>v_identity</code> and <code>j_identity</code> &gt; 90% in Julia.</p><pre><code class="language-julia hljs">using SimplePipelines
 using DelimitedFiles
@@ -135,7 +135,7 @@ filter_identity = @step filter_identity = () -&gt; begin
 end
 
 pipeline = pear &gt;&gt; to_fasta &gt;&gt; igblast &gt;&gt; filter_identity
-run_pipeline(Pipeline(pipeline, name=&quot;Immune Repertoire&quot;))</code></pre><hr/><h3 id="4.2-Immune-Repertoire-(multiple-donors)"><a class="docs-heading-anchor" href="#4.2-Immune-Repertoire-(multiple-donors)">4.2 Immune Repertoire (multiple donors)</a><a id="4.2-Immune-Repertoire-(multiple-donors)-1"></a><a class="docs-heading-anchor-permalink" href="#4.2-Immune-Repertoire-(multiple-donors)" title="Permalink"></a></h3><p><strong>Flow:</strong> <code>ForEach</code> discovers files matching pattern → one parallel branch per donor.</p><pre><code class="nohighlight hljs">  ForEach(&quot;fastq/{donor}_R1.fq.gz&quot;)
+execute(Pipeline(pipeline, name=&quot;Immune Repertoire&quot;))</code></pre><hr/><h3 id="4.2-Immune-Repertoire-(multiple-donors)"><a class="docs-heading-anchor" href="#4.2-Immune-Repertoire-(multiple-donors)">4.2 Immune Repertoire (multiple donors)</a><a id="4.2-Immune-Repertoire-(multiple-donors)-1"></a><a class="docs-heading-anchor-permalink" href="#4.2-Immune-Repertoire-(multiple-donors)" title="Permalink"></a></h3><p><strong>Flow:</strong> <code>ForEach</code> discovers files matching pattern → one parallel branch per donor.</p><pre><code class="nohighlight hljs">  ForEach(&quot;fastq/{donor}_R1.fq.gz&quot;)
        │
        ├── donor1: pear → fasta → igblast  ──┐
        ├── donor2: pear → fasta → igblast  ──┼── (parallel)
@@ -148,7 +148,7 @@ pipeline = ForEach(&quot;fastq/{donor}_R1.fq.gz&quot;) do donor
     sh(&quot;igblastn -query $(donor).fasta -germline_db_V V.fasta -germline_db_D D.fasta -germline_db_J J.fasta -outfmt 7 -out $(donor)_igblast.tsv&quot;)
 end
 
-run_pipeline(pipeline)</code></pre><hr/><h3 id="4.3-Variant-Calling"><a class="docs-heading-anchor" href="#4.3-Variant-Calling">4.3 Variant Calling</a><a id="4.3-Variant-Calling-1"></a><a class="docs-heading-anchor-permalink" href="#4.3-Variant-Calling" title="Permalink"></a></h3><p><strong>Flow:</strong> Paired-end reads → FastQC → trim → BWA (GRCh38) → sort/index → bcftools call → index → filter.</p><pre><code class="nohighlight hljs">  R1.fq.gz ──┐
+execute(pipeline)</code></pre><hr/><h3 id="4.3-Variant-Calling"><a class="docs-heading-anchor" href="#4.3-Variant-Calling">4.3 Variant Calling</a><a id="4.3-Variant-Calling-1"></a><a class="docs-heading-anchor-permalink" href="#4.3-Variant-Calling" title="Permalink"></a></h3><p><strong>Flow:</strong> Paired-end reads → FastQC → trim → BWA (GRCh38) → sort/index → bcftools call → index → filter.</p><pre><code class="nohighlight hljs">  R1.fq.gz ──┐
              ├──►  fastqc  ──►  trim  ──►  align  ──►  index  ──►  call  ──►  index_vcf  ──►  filter_vcf
   R2.fq.gz ──┘</code></pre><p><strong>Goal:</strong> QC, trim, align to GRCh38, call variants with bcftools, filter by quality.</p><pre><code class="language-julia hljs">using SimplePipelines
 
@@ -163,4 +163,4 @@ index_vcf = @step index_vcf = sh&quot;bcftools index variants.vcf.gz&quot;
 filter_vcf = @step filter_vcf = sh&quot;bcftools filter -i &#39;QUAL&gt;=20&#39; variants.vcf.gz -Oz -o filtered.vcf.gz&quot;
 
 pipeline = fastqc &gt;&gt; trim &gt;&gt; align &gt;&gt; index &gt;&gt; call &gt;&gt; index_vcf &gt;&gt; filter_vcf
-run_pipeline(Pipeline(pipeline, name=&quot;Variant Calling&quot;))</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../tutorial/">« Tutorial</a><a class="docs-footer-nextpage" href="../api/">API Reference »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 30 January 2026 11:14">Friday 30 January 2026</span>. Using Julia version 1.12.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+execute(Pipeline(pipeline, name=&quot;Variant Calling&quot;))</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../tutorial/">« Tutorial</a><a class="docs-footer-nextpage" href="../api/">API Reference »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 30 January 2026 11:55">Friday 30 January 2026</span>. Using Julia version 1.12.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
