@@ -11,7 +11,7 @@ using intuitive operators.
 
 | Syntax | Description |
 |--------|-------------|
-| `@step name = \`cmd\`` | Shell command |
+| `@step name = sh"cmd"` | Shell command |
 | `@step name = sh"cmd > file"` | Shell with redirection/pipes |
 | `@step name = () -> expr` | Julia function |
 
@@ -39,9 +39,9 @@ using intuitive operators.
 
 | Function / Field | Description |
 |------------------|-------------|
-| `run_pipeline(p)` | Run, return results |
-| `run_pipeline(p, verbose=false)` | Run silently |
-| `run_pipeline(p, dry_run=true)` | Preview only |
+| `run(p)` | Run, return results |
+| `run(p, verbose=false)` | Run silently |
+| `run(p, dry_run=true)` | Preview only |
 | `results[i].success` | Did step succeed? |
 | `results[i].duration` | Time in seconds |
 | `results[i].output` | Output or error |
@@ -61,11 +61,11 @@ using SimplePipelines
 
 # Simple sequence
 pipeline = sh"echo 'step 1'" >> sh"echo 'step 2'" >> sh"echo 'step 3'"
-run_pipeline(pipeline)
+run(pipeline)
 
 # Parallel branches that merge
 pipeline = (sh"process A" & sh"process B") >> sh"merge"
-run_pipeline(pipeline)
+run(pipeline)
 ```
 
 ## DAG Patterns
@@ -79,6 +79,10 @@ step_a─┤            ├── step_d
 ```
 
 ```julia
+step_a = @step a = sh"fetch"
+step_b = @step b = sh"analyze_a"
+step_c = @step c = sh"analyze_b"
+step_d = @step d = sh"report"
 pipeline = step_a >> (step_b & step_c) >> step_d
 ```
 
@@ -91,6 +95,13 @@ pipeline = step_a >> (step_b & step_c) >> step_d
 ```
 
 ```julia
+a = @step a = sh"stage_a"
+b = @step b = sh"stage_b"
+c = @step c = sh"stage_c"
+d = @step d = sh"stage_d"
+e = @step e = sh"stage_e"
+f = @step f = sh"stage_f"
+g = @step g = sh"stage_g"
 pipeline = a >> (b & c) >> d >> (e & f) >> g
 ```
 
@@ -105,10 +116,16 @@ pipeline = a >> (b & c) >> d >> (e & f) >> g
 ```
 
 ```julia
+a = @step a = sh"branch1_a"
+b = @step b = sh"branch1_b"
+c = @step c = sh"branch2_a"
+d = @step d = sh"branch2_b"
+e = @step e = sh"branch3_a"
+f = @step f = sh"branch3_b"
+merge = @step merge = sh"merge"
 branch1 = a >> b
 branch2 = c >> d
 branch3 = e >> f
-
 pipeline = (branch1 & branch2 & branch3) >> merge
 ```
 

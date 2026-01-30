@@ -250,7 +250,7 @@ using Test
     @testset "Step execution" begin
         # Simple echo command
         s = @step test = `echo "hello world"`
-        results = run_pipeline(s, verbose=false)
+        results = run(s, verbose=false)
         
         @test length(results) == 1
         @test results[1].success == true
@@ -259,7 +259,7 @@ using Test
     
     @testset "Sequence execution" begin
         seq = `echo first` >> `echo second`
-        results = run_pipeline(seq, verbose=false)
+        results = run(seq, verbose=false)
         
         @test length(results) == 2
         @test all(r -> r.success, results)
@@ -269,7 +269,7 @@ using Test
         # Verify parallel structure executes correctly
         par = `echo "a"` & `echo "b"` & `echo "c"`
         
-        results = run_pipeline(par, verbose=false)
+        results = run(par, verbose=false)
         
         @test length(results) == 3
         @test all(r -> r.success, results)
@@ -280,7 +280,7 @@ using Test
         f = () -> (counter[] += 1; "done")
         
         s = Step(:increment, f)
-        results = run_pipeline(s, verbose=false)
+        results = run(s, verbose=false)
         
         @test results[1].success
         @test counter[] == 1
@@ -288,7 +288,7 @@ using Test
         # Function returning nothing
         f_nothing = () -> nothing
         s_nothing = Step(:nothing_func, f_nothing)
-        results_nothing = run_pipeline(s_nothing, verbose=false)
+        results_nothing = run(s_nothing, verbose=false)
         @test results_nothing[1].success
         @test results_nothing[1].output == ""
     end
@@ -297,7 +297,7 @@ using Test
         s = @step test = `echo "verbose test"`
         
         # Just run with verbose=true to exercise the code path
-        results = run_pipeline(s, verbose=true)
+        results = run(s, verbose=true)
         @test results[1].success
     end
     
@@ -305,7 +305,7 @@ using Test
         par = `echo a` & `echo b`
         
         # Just run with verbose=true to exercise the code path
-        results = run_pipeline(par, verbose=true)
+        results = run(par, verbose=true)
         @test all(r -> r.success, results)
     end
     
@@ -327,11 +327,11 @@ using Test
         dag = `echo a` >> (`echo b` & `echo c`) >> `echo d`
         
         # Dry run with verbose (exercises print_dag)
-        results = run_pipeline(dag, dry_run=true, verbose=true)
+        results = run(dag, dry_run=true, verbose=true)
         @test isempty(results)
         
         # Dry run without verbose
-        results = run_pipeline(dag, dry_run=true, verbose=false)
+        results = run(dag, dry_run=true, verbose=false)
         @test isempty(results)
     end
     
@@ -368,7 +368,7 @@ using Test
         s = @step test = `echo "run test"`
         p = Pipeline(s, name="run_test")
         
-        # Base.run should work like run_pipeline
+        # Base.run runs the pipeline
         results = run(p, verbose=false)
         @test length(results) == 1
         @test results[1].success
@@ -377,13 +377,13 @@ using Test
     @testset "Error handling - missing input" begin
         # Cmd step with missing input file
         s_cmd = Step(:cmd_missing, `cat nonexistent.txt`, ["nonexistent_file_12345.txt"], String[])
-        results = run_pipeline(s_cmd, verbose=false)
+        results = run(s_cmd, verbose=false)
         @test !results[1].success
         @test contains(results[1].output, "Missing input file")
         
         # Function step with missing input file
         s_func = Step(:func_missing, () -> "test", ["nonexistent_file_12345.txt"], String[])
-        results_func = run_pipeline(s_func, verbose=false)
+        results_func = run(s_func, verbose=false)
         @test !results_func[1].success
         @test contains(results_func[1].output, "Missing input file")
     end
@@ -391,7 +391,7 @@ using Test
     @testset "Error handling - command failure" begin
         # Command that fails
         s = @step fail = `false`
-        results = run_pipeline(s, verbose=false)
+        results = run(s, verbose=false)
         @test !results[1].success
         @test contains(results[1].output, "Error")
     end
@@ -399,7 +399,7 @@ using Test
     @testset "Error handling - function throws" begin
         # Function that throws
         s = Step(:throws, () -> error("intentional error"))
-        results = run_pipeline(s, verbose=false)
+        results = run(s, verbose=false)
         @test !results[1].success
         @test contains(results[1].output, "intentional error")
     end
@@ -408,7 +408,7 @@ using Test
         s = @step fail = `false`
         
         # Run with verbose to exercise failure printing
-        results = run_pipeline(s, verbose=true)
+        results = run(s, verbose=true)
         @test !results[1].success
     end
     
@@ -419,7 +419,7 @@ using Test
         count_step = Step(:count, () -> (counter[] += 1; "done"))
         
         seq = fail_step >> count_step
-        results = run_pipeline(seq, verbose=false)
+        results = run(seq, verbose=false)
         
         @test length(results) == 1  # Only first step ran
         @test !results[1].success
@@ -446,19 +446,19 @@ using Test
         # Retry that succeeds on first try
         s = @step ok = `echo "success"`
         r = Retry(s, 3)
-        results = run_pipeline(r, verbose=false)
+        results = run(r, verbose=false)
         @test length(results) == 1
         @test results[1].success
         
         # Retry with delay
         r2 = Retry(s, 2, delay=0.01)
-        results2 = run_pipeline(r2, verbose=false)
+        results2 = run(r2, verbose=false)
         @test results2[1].success
         
         # Retry that always fails
         fail = @step fail = `false`
         r3 = Retry(fail, 2)
-        results3 = run_pipeline(r3, verbose=false)
+        results3 = run(r3, verbose=false)
         @test !results3[1].success
         
         # Utilities
@@ -476,14 +476,14 @@ using Test
         
         # Primary succeeds - fallback not used
         f1 = success_step | fallback_step
-        results1 = run_pipeline(f1, verbose=false)
+        results1 = run(f1, verbose=false)
         @test length(results1) == 1
         @test results1[1].success
         @test contains(results1[1].output, "primary")
         
         # Primary fails - fallback used
         f2 = fail_step | fallback_step
-        results2 = run_pipeline(f2, verbose=false)
+        results2 = run(f2, verbose=false)
         @test results2[end].success
         @test contains(results2[end].output, "fallback")
         
@@ -513,13 +513,13 @@ using Test
         
         # Condition true
         flag[] = true
-        results1 = run_pipeline(b, verbose=false)
+        results1 = run(b, verbose=false)
         @test results1[1].success
         @test contains(results1[1].output, "true path")
         
         # Condition false
         flag[] = false
-        results2 = run_pipeline(b, verbose=false)
+        results2 = run(b, verbose=false)
         @test results2[1].success
         @test contains(results2[1].output, "false path")
         
@@ -537,7 +537,7 @@ using Test
         safe = @step safe = `echo "safe"`
         
         pipeline = Retry(flaky, 2) | safe
-        results = run_pipeline(pipeline, verbose=false)
+        results = run(pipeline, verbose=false)
         
         # Should have run flaky twice, then safe
         @test results[end].success
@@ -578,7 +578,7 @@ using Test
         @test pipeline isa Fallback
         
         # Run it
-        results = run_pipeline(r, verbose=false)
+        results = run(r, verbose=false)
         @test results[1].success
     end
     
@@ -586,7 +586,7 @@ using Test
         # Fast step completes
         fast = @step fast = `echo "quick"`
         t = Timeout(fast, 5.0)
-        results = run_pipeline(t, verbose=false)
+        results = run(t, verbose=false)
         @test results[1].success
         
         # Utilities
@@ -618,7 +618,7 @@ using Test
         @test single isa Step
         
         # Execute map
-        results = run_pipeline(parallel, verbose=false)
+        results = run(parallel, verbose=false)
         @test length(results) == 3
         @test all(r -> r.success, results)
     end
@@ -632,7 +632,7 @@ using Test
             join(outputs, ",")
         end
         
-        results = run_pipeline(r, verbose=false)
+        results = run(r, verbose=false)
         @test length(results) == 3  # a, b, reduce
         @test all(res -> res.success, results)
         @test contains(results[end].output, "output_a")
@@ -640,7 +640,7 @@ using Test
         
         # Reduce with function
         r2 = Reduce(length, a & b)
-        results2 = run_pipeline(r2, verbose=false)
+        results2 = run(r2, verbose=false)
         @test results2[end].success
         @test results2[end].output == "2"  # 2 outputs
         
@@ -651,7 +651,7 @@ using Test
         report = @step report = `echo "done"`
         
         pipeline = fetch >> Reduce(outputs -> join(outputs, "+"), analyze_a & analyze_b) >> report
-        results3 = run_pipeline(pipeline, verbose=false)
+        results3 = run(pipeline, verbose=false)
         @test all(res -> res.success, results3)
         
         # Utilities
@@ -682,7 +682,7 @@ using Test
             @test count_steps(pipeline) == 3
             
             # Execute and verify
-            results = run_pipeline(pipeline, verbose=false)
+            results = run(pipeline, verbose=false)
             @test length(results) == 3
             @test all(r -> r.success, results)
             outputs = sort([r.output for r in results])
@@ -697,7 +697,7 @@ using Test
                 `echo $sample`  # Just return Cmd, auto-wrapped to Step
             end
             @test pipeline isa Parallel
-            results = run_pipeline(pipeline, verbose=false)
+            results = run(pipeline, verbose=false)
             @test all(r -> r.success, results)
         end
         
@@ -724,7 +724,7 @@ using Test
             @test pipeline isa Parallel
             @test count_steps(pipeline) == 3
             
-            results = run_pipeline(pipeline, verbose=false)
+            results = run(pipeline, verbose=false)
             @test all(r -> r.success, results)
         end
         
@@ -774,7 +774,7 @@ using Test
         @test complex isa Sequence
         
         # All should execute
-        results = run_pipeline(p1, verbose=false)
+        results = run(p1, verbose=false)
         @test !isempty(results)
     end
 end

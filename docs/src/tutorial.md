@@ -42,11 +42,14 @@ Track input/output files for validation:
 The `>>` operator chains steps—each waits for the previous to complete:
 
 ```julia
-# Three steps in order
-pipeline = step_a >> step_b >> step_c
-
-# Chain commands directly
+# Chain commands directly (anonymous steps)
 pipeline = sh"download data.txt" >> sh"process data.txt" >> sh"upload results.txt"
+
+# Or define named steps, then chain
+step_a = @step step_a = sh"download data.txt"
+step_b = @step step_b = sh"process data.txt"
+step_c = @step step_c = sh"upload results.txt"
+pipeline = step_a >> step_b >> step_c
 ```
 
 ## Parallel Execution: `&`
@@ -54,10 +57,14 @@ pipeline = sh"download data.txt" >> sh"process data.txt" >> sh"upload results.tx
 The `&` operator groups steps to run concurrently:
 
 ```julia
-# Three steps in parallel
-parallel = step_a & step_b & step_c
+# Parallel steps (anonymous)
+parallel = sh"task_a" & sh"task_b" & sh"task_c"
 
-# Process samples in parallel, then merge
+# Named steps in parallel, then merge
+sample_1 = @step s1 = sh"process sample1"
+sample_2 = @step s2 = sh"process sample2"
+sample_3 = @step s3 = sh"process sample3"
+merge_results = @step merge = sh"merge outputs"
 pipeline = (sample_1 & sample_2 & sample_3) >> merge_results
 ```
 
@@ -80,7 +87,7 @@ analyze_b = @step b = sh"wc -c data.csv"
 report = @step report = () -> "done"
 
 pipeline = fetch >> (analyze_a & analyze_b) >> report
-run_pipeline(pipeline)
+run(pipeline)
 ```
 
 ### Multi-Stage Parallel
@@ -118,10 +125,17 @@ Process independent pipelines in parallel, then merge:
 ```
 
 ```julia
+fetch_a = @step fetch_a = sh"fetch sample_a"
+process_a = @step process_a = sh"process sample_a"
+fetch_b = @step fetch_b = sh"fetch sample_b"
+process_b = @step process_b = sh"process sample_b"
+fetch_c = @step fetch_c = sh"fetch sample_c"
+process_c = @step process_c = sh"process sample_c"
+merge = @step merge = sh"merge results"
+
 branch_a = fetch_a >> process_a
 branch_b = fetch_b >> process_b
 branch_c = fetch_c >> process_c
-
 pipeline = (branch_a & branch_b & branch_c) >> merge
 ```
 
@@ -133,9 +147,14 @@ The `|` operator provides fallback behavior—if the primary fails, run the fall
 
 ```julia
 # If fast method fails, use slow method
+fast_method = @step fast = sh"fast_tool input.txt"
+slow_method = @step slow = sh"slow_tool input.txt"
 pipeline = fast_method | slow_method
 
 # Chain multiple fallbacks
+method_a = @step a = sh"method_a input"
+method_b = @step b = sh"method_b input"
+method_c = @step c = sh"method_c input"
 pipeline = method_a | method_b | method_c
 ```
 
@@ -144,13 +163,17 @@ pipeline = method_a | method_b | method_c
 Retry a node up to N times on failure:
 
 ```julia
-# Using ^ operator (concise)
+# Using ^ operator (concise) – retry flaky step up to 3 times
+flaky_api_call = @step api = sh"echo 'mock response'"
 pipeline = flaky_api_call^3
 
 # Using Retry() with delay between attempts
+network_request = @step fetch = sh"echo 'data'"
 pipeline = Retry(network_request, 5, delay=2.0)
 
 # Combine with fallback
+primary = @step primary = sh"echo primary"
+fallback = @step fallback = sh"echo fallback"
 pipeline = primary^3 | fallback
 ```
 
@@ -160,6 +183,8 @@ Execute different branches based on a runtime condition:
 
 ```julia
 # Branch based on file size
+large_file_pipeline = @step large = sh"process_large data.txt"
+small_file_pipeline = @step small = sh"process_small data.txt"
 pipeline = Branch(
     () -> filesize("data.txt") > 1_000_000,
     large_file_pipeline,
@@ -167,6 +192,8 @@ pipeline = Branch(
 )
 
 # Branch based on environment
+debug_steps = @step debug = sh"run with verbose logging"
+normal_steps = @step normal = sh"run quietly"
 pipeline = Branch(
     () -> haskey(ENV, "DEBUG"),
     debug_steps,
@@ -180,9 +207,12 @@ Fail if a node exceeds a time limit:
 
 ```julia
 # 30 second timeout
+long_running_step = @step long = sh"sleep 1"
 pipeline = Timeout(long_running_step, 30.0)
 
 # Combine with retry and fallback
+api_call = @step api = sh"echo result"
+backup = @step backup = sh"echo fallback"
 pipeline = Timeout(api_call, 5.0)^3 | backup
 ```
 
@@ -200,28 +230,35 @@ end >> merge_results
 
 ## ForEach (Pattern-based discovery)
 
-Discover files by pattern, create parallel branches automatically:
+Discover files by pattern, create parallel branches automatically. ForEach scans the filesystem, so matching files must exist. Example with a temp dir:
 
 ```julia
-# Single step per file - use sh("...") for interpolation
-ForEach("{sample}.fastq") do sample
-    sh("process $(sample).fastq")
-end
+# Create dummy files so ForEach can find matches (run in a temp dir)
+cd(mktempdir()) do
+    write("s1.fastq", ""); write("s2.fastq", "")
+    mkpath("fastq"); write("fastq/s1_R1.fq.gz", ""); write("fastq/s2_R1.fq.gz", "")
+    mkpath("data/p1"); write("data/p1/s1.csv", "")
 
-# Multi-step per file - chain with >>
-ForEach("fastq/{sample}_R1.fq.gz") do sample
-    sh("pear $(sample)_R1 $(sample)_R2") >> sh("analyze $(sample)")
-end
+    # Single step per file - use sh("...") for interpolation
+    ForEach("{sample}.fastq") do sample
+        sh("process $(sample).fastq")
+    end
 
-# Multiple wildcards
-ForEach("data/{project}/{sample}.csv") do project, sample
-    sh("process $(project)/$(sample).csv")
-end
+    # Multi-step per file - chain with >>
+    ForEach("fastq/{sample}_R1.fq.gz") do sample
+        sh("pear $(sample)_R1 $(sample)_R2") >> sh("analyze $(sample)")
+    end
 
-# Chain with downstream merge
-ForEach("{id}.fastq") do id
-    sh("align $(id).fastq")
-end >> @step merge = sh"merge *.bam"
+    # Multiple wildcards
+    ForEach("data/{project}/{sample}.csv") do project, sample
+        sh("process $(project)/$(sample).csv")
+    end
+
+    # Chain with downstream merge
+    ForEach("{id}.fastq") do id
+        sh("align $(id).fastq")
+    end >> @step merge = sh"merge *.bam"
+end
 ```
 
 ## Reduce (Combine)
@@ -229,41 +266,56 @@ end >> @step merge = sh"merge *.bam"
 Collect outputs from parallel steps and combine them:
 
 ```julia
-# Combine parallel outputs with a function
+# Combine parallel outputs with a function (define steps first)
+analyze_a = @step a = sh"echo result_a"
+analyze_b = @step b = sh"echo result_b"
 pipeline = Reduce(analyze_a & analyze_b) do outputs
     join(outputs, "\n")
 end
 
-# Using a named function
+# Using a named function (define reducer and steps first)
+combine_results(outputs) = join(outputs, "\n")
+step_a = @step a = sh"echo result_a"
+step_b = @step b = sh"echo result_b"
+step_c = @step c = sh"echo result_c"
 pipeline = Reduce(combine_results, step_a & step_b & step_c)
 
 # In a pipeline: fetch -> parallel analysis -> reduce -> report
-pipeline = fetch >> Reduce(merge, analyze_a & analyze_b) >> report
+merge_outputs(outputs) = join(outputs, "\n")
+fetch = @step fetch = sh"echo data"
+analyze_a = @step a = sh"wc -c"
+analyze_b = @step b = sh"wc -l"
+report = @step report = sh"echo done"
+pipeline = fetch >> Reduce(merge_outputs, analyze_a & analyze_b) >> report
 ```
 
 The reducer function receives a `Vector{String}` of outputs from all successful parallel steps.
 
 ## Running Pipelines
 
+Use `run(pipeline)`:
+
 ```julia
 # Basic execution
-results = run_pipeline(pipeline)
+results = run(pipeline)
 
 # Silent (no progress output)
-results = run_pipeline(pipeline, verbose=false)
+results = run(pipeline, verbose=false)
 
 # Dry run (preview structure)
-run_pipeline(pipeline, dry_run=true)
+run(pipeline, dry_run=true)
 
 # Named pipeline
+step_a = @step a = sh"first"
+step_b = @step b = sh"second"
 p = Pipeline(step_a >> step_b, name="My Workflow")
-run_pipeline(p)
+run(p)
 ```
 
 ## Checking Results
 
 ```julia
-results = run_pipeline(pipeline)
+results = run(pipeline)
 
 for r in results
     if r.success
@@ -300,7 +352,7 @@ post = @step post = () -> begin
 end
 
 pipeline = prep >> external >> post
-run_pipeline(pipeline)
+run(pipeline)
 ```
 
 ## Utilities

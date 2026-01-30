@@ -17,7 +17,7 @@ immune = pear >> to_fasta >> igblast >> filter_id
 println("Pipeline structure:")
 print_dag(immune)
 println()
-run_pipeline(Pipeline(immune, name="Immune Repertoire"))
+run(Pipeline(immune, name="Immune Repertoire"))
 
 
 println("\n═══ Multi-Donor Immune Repertoire (ForEach) ═══\n")
@@ -36,7 +36,7 @@ cd(dir) do
     println("Pipeline structure (3 donors discovered):")
     print_dag(pipeline)
     println()
-    run_pipeline(Pipeline(pipeline, name="Multi-Donor"))
+    run(Pipeline(pipeline, name="Multi-Donor"))
 end
 
 rm(dir; recursive=true)
@@ -56,7 +56,7 @@ variant = fastqc >> trim >> align >> index >> call >> filter_v
 println("Pipeline structure:")
 print_dag(variant)
 println()
-results = run_pipeline(Pipeline(variant, name="Variant Calling"))
+results = run(Pipeline(variant, name="Variant Calling"))
 
 println("\nExecution summary:")
 for r in results

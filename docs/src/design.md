@@ -7,14 +7,14 @@
 │                    SimplePipelines.jl                       │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  @step name = `command`     Shell step                      │
+│  @step name = sh"cmd"       Shell step                      │
 │  @step name = sh"cmd > f"   Shell with redirection/pipes    │
 │  @step name = () -> ...     Julia step                      │
 │                                                             │
 │  a >> b                     Sequential: a then b            │
 │  a & b                      Parallel: a and b together      │
 │                                                             │
-│  run_pipeline(p)            Execute the pipeline            │
+│  run(p)                Execute the pipeline            │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -55,7 +55,7 @@ The complete structure is encoded in the type, enabling full compile-time specia
 ## Execution Flow
 
 ```
-run_pipeline(Pipeline)
+run(Pipeline)
        │
        ▼
 run_node(root, verbosity)  ─── dispatches on node type

@@ -10,7 +10,7 @@ pipeline = sh"echo 'Step 1: Downloading'" >>
            sh"echo 'Step 2: Processing'" >> 
            sh"echo 'Step 3: Uploading'"
 
-run_pipeline(pipeline)
+run(pipeline)
 
 
 println("\n═══ Example 2: Named Steps ═══\n")
@@ -21,7 +21,7 @@ process  = @step process  = sh"echo 'Processing data...'"
 upload   = @step upload   = sh"echo 'Uploading results...'"
 
 pipeline = download >> process >> upload
-run_pipeline(pipeline)
+run(pipeline)
 
 
 println("\n═══ Example 3: Parallel Execution ═══\n")
@@ -34,7 +34,7 @@ merge  = @step merge  = sh"echo 'Merging results'"
 
 # All tasks run in parallel (~0.2s total, not 0.6s)
 pipeline = (task_a & task_b & task_c) >> merge
-run_pipeline(pipeline)
+run(pipeline)
 
 
 println("\n═══ Example 4: Julia Functions ═══\n")
@@ -55,7 +55,7 @@ analyze = @step analyze = () -> begin
 end
 
 pipeline = generate >> analyze
-run_pipeline(pipeline)
+run(pipeline)
 
 
 println("\n═══ Example 5: Complex DAG ═══\n")
@@ -73,7 +73,7 @@ println("DAG structure:")
 print_dag(pipeline)
 println()
 
-run_pipeline(pipeline)
+run(pipeline)
 
 
 println("\n═══ Example 6: Fallback ═══\n")
@@ -83,7 +83,7 @@ primary = @step primary = sh"false"  # Always fails
 fallback = @step fallback = sh"echo 'Fallback succeeded'"
 
 pipeline = primary | fallback
-run_pipeline(pipeline)
+run(pipeline)
 
 
 println("\n═══ Example 7: Retry ═══\n")
@@ -100,7 +100,7 @@ flaky = @step flaky = () -> begin
 end
 
 pipeline = Retry(flaky, 3)
-run_pipeline(pipeline)
+run(pipeline)
 
 
 println("\n═══ Example 8: Branch (Conditional) ═══\n")
@@ -114,11 +114,11 @@ slow_path = @step slow = sh"echo 'Taking slow path'"
 pipeline = Branch(() -> use_fast[], fast_path, slow_path)
 
 println("With use_fast=true:")
-run_pipeline(pipeline)
+run(pipeline)
 
 use_fast[] = false
 println("\nWith use_fast=false:")
-run_pipeline(pipeline)
+run(pipeline)
 
 
 println("\n═══ Example 9: Combined Error Handling ═══\n")
@@ -128,7 +128,7 @@ primary = @step primary = sh"false"  # Always fails
 backup = @step backup = sh"echo 'Backup method succeeded'"
 
 pipeline = Retry(primary, 2) | backup
-run_pipeline(pipeline)
+run(pipeline)
 
 
 println("\n═══ Example 10: Dry Run ═══\n")
@@ -137,4 +137,4 @@ println("\n═══ Example 10: Dry Run ═══\n")
 complex = (sh"step 1" >> sh"step 2") & (sh"step 3" >> sh"step 4") >> sh"step 5"
 
 println("Pipeline structure (dry run):")
-run_pipeline(complex, dry_run=true)
+run(complex, dry_run=true)

@@ -31,7 +31,7 @@ process = @step process = sh"sort data.txt > sorted.txt"
 upload = @step upload = sh"cp sorted.txt uploaded.txt"
 
 pipeline = download >> process >> upload
-run_pipeline(pipeline)
+run(pipeline)
 ```
 
 ---
@@ -57,7 +57,7 @@ file_c = @step c = sh"echo content_c > file_c.txt && gzip -k file_c.txt"
 archive = @step archive = sh"tar -cvf archive.tar file_a.txt.gz file_b.txt.gz file_c.txt.gz"
 
 pipeline = (file_a & file_b & file_c) >> archive
-run_pipeline(pipeline)
+run(pipeline)
 ```
 
 ---
@@ -92,7 +92,7 @@ report = @step report = () -> begin
 end
 
 pipeline = generate >> process >> report
-run_pipeline(pipeline)
+run(pipeline)
 ```
 
 ---
@@ -127,14 +127,14 @@ process = @step process = sh"wc -c data.json"
 pipeline = Retry(fetch, 3, delay=0.1) >> process
 
 # Fallback (create data.csv first so both branches have input)
-run_pipeline(@step _ = sh"(echo 'a,b'; echo '1,2') > data.csv", verbose=false)
+run(@step setup = sh"(echo 'a,b'; echo '1,2') > data.csv", verbose=false)
 fast = @step fast = sh"sort data.csv > sorted.csv"
 slow = @step slow = sh"cat data.csv > sorted.csv"
 pipeline = fast | slow
 
 # Retry then fallback
 pipeline = Retry(fast, 3) | slow
-run_pipeline(pipeline)
+run(pipeline)
 ```
 
 ---
@@ -155,7 +155,7 @@ run_pipeline(pipeline)
 using SimplePipelines
 
 # Create data.csv so the branch condition has a file to check
-run_pipeline(@step _ = sh"(echo 'a,b'; echo '1,2'; echo '3,4') > data.csv", verbose=false)
+run(@step setup = sh"(echo 'a,b'; echo '1,2'; echo '3,4') > data.csv", verbose=false)
 
 # By file size
 small_pipeline = @step small = sh"head -n 1000 data.csv > sample.csv"
@@ -165,13 +165,13 @@ pipeline = Branch(
     small_pipeline,
     large_pipeline
 )
-run_pipeline(pipeline)
+run(pipeline)
 
 # By environment
 debug_steps = @step debug = sh"echo 'debug mode'"
 prod_steps = @step prod = sh"echo 'production'"
 pipeline = Branch(() -> get(ENV, "DEBUG", "0") == "1", debug_steps, prod_steps)
-run_pipeline(pipeline)
+run(pipeline)
 ```
 
 ---
@@ -209,7 +209,7 @@ db_branch = fetch_db >> transform_db
 files_branch = fetch_files >> transform_files
 pipeline = (db_branch & files_branch) >> merge >> analyze >> (report & archive)
 
-run_pipeline(pipeline)
+run(pipeline)
 ```
 
 ---
@@ -245,7 +245,7 @@ report = @step report = sh"cat output.txt"
 notify = @step notify = sh"echo 'Pipeline done'"
 
 pipeline = fetch >> process >> (report & Retry(notify, 2))
-run_pipeline(Pipeline(pipeline, name="Robust ETL"))
+run(Pipeline(pipeline, name="Robust ETL"))
 ```
 
 ---
@@ -288,7 +288,7 @@ filter_identity = @step filter_identity = () -> begin
 end
 
 pipeline = pear >> to_fasta >> igblast >> filter_identity
-run_pipeline(Pipeline(pipeline, name="Immune Repertoire"))
+run(Pipeline(pipeline, name="Immune Repertoire"))
 ```
 
 ---
@@ -317,7 +317,7 @@ pipeline = ForEach("fastq/{donor}_R1.fq.gz") do donor
     sh("igblastn -query $(donor).fasta -germline_db_V V.fasta -germline_db_D D.fasta -germline_db_J J.fasta -outfmt 7 -out $(donor)_igblast.tsv")
 end
 
-run_pipeline(pipeline)
+run(pipeline)
 ```
 
 ---
@@ -348,5 +348,5 @@ index_vcf = @step index_vcf = sh"bcftools index variants.vcf.gz"
 filter_vcf = @step filter_vcf = sh"bcftools filter -i 'QUAL>=20' variants.vcf.gz -Oz -o filtered.vcf.gz"
 
 pipeline = fastqc >> trim >> align >> index >> call >> index_vcf >> filter_vcf
-run_pipeline(Pipeline(pipeline, name="Variant Calling"))
+run(Pipeline(pipeline, name="Variant Calling"))
 ```

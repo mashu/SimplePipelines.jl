@@ -47,7 +47,7 @@ sh
 ## Execution
 
 ```@docs
-run_pipeline
+run
 ```
 
 ## Utilities

@@ -3,7 +3,7 @@ module SimplePipelines
 export Step, @step, Sequence, Parallel, Pipeline
 export Retry, Fallback, Branch, Timeout
 export Map, Reduce, ForEach
-export run_pipeline, count_steps, steps, print_dag
+export count_steps, steps, print_dag
 export @sh_str, sh
 
 import Base: >>, &, |, ^
@@ -766,10 +766,10 @@ end
     Pipeline(Sequence(nodes), name)
 
 """
-    run_pipeline(p::Pipeline; verbose=true, dry_run=false)
-    run_pipeline(node::AbstractNode; verbose=true, dry_run=false)
+    run(p::Pipeline; verbose=true, dry_run=false)
+    run(node::AbstractNode; verbose=true, dry_run=false)
 
-Execute a pipeline or node.
+Execute a pipeline or node. Extends `Base.run` (no conflict with `run(::Cmd)` — dispatch by type).
 
 # Arguments
 - `verbose::Bool=true`: Print progress information
@@ -780,30 +780,22 @@ Execute a pipeline or node.
 
 # Examples
 ```julia
-# Run with progress output
-results = run_pipeline(pipeline)
-
-# Silent execution
-results = run_pipeline(pipeline, verbose=false)
-
-# Preview structure
-run_pipeline(pipeline, dry_run=true)
+results = run(pipeline)
+results = run(pipeline, verbose=false)
+run(pipeline, dry_run=true)
 ```
 """
-function run_pipeline(p::Pipeline; verbose::Bool=true, dry_run::Bool=false)
+function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false)
     verbose && println("═══ Pipeline: $(p.name) ═══")
-    
     dry_run && return _dry_run(p.root, verbose)
-    
     verbosity = verbose ? Verbose() : Silent()
     start = time()
     results = run_node(p.root, verbosity)
-    
     _print_summary(verbose, results, time() - start)
     return results
 end
 
-@inline run_pipeline(node::AbstractNode; kwargs...) = run_pipeline(Pipeline(node); kwargs...)
+@inline Base.run(node::AbstractNode; kwargs...) = run(Pipeline(node); kwargs...)
 
 # Dry run implementation
 function _dry_run(root, verbose)
@@ -822,8 +814,7 @@ function _print_summary_impl(results, elapsed)
     nothing
 end
 
-# Make pipelines runnable with Base.run
-Base.run(p::Pipeline; kwargs...) = run_pipeline(p; kwargs...)
+# (run(::Pipeline) and run(::AbstractNode) above; Base.run(::Cmd) unchanged)
 
 #==============================================================================#
 # DAG Visualization

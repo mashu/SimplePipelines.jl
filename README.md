@@ -27,7 +27,7 @@ pipeline = (sh"echo task_a" & sh"echo task_b" & sh"echo task_c") >> sh"echo merg
 pipeline = @step fetch = sh"(echo 1; echo 2; echo 3) > data.csv" >>
            @step analyze = () -> sum(parse.(Int, readlines("data.csv")))
 
-run_pipeline(pipeline)
+run(pipeline)
 ```
 
 ## Interface
