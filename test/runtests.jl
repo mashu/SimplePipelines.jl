@@ -12,14 +12,16 @@ using Test
         pipeline = sh"echo hello" >> sh"cat"
         @test pipeline isa Sequence
         
-        # Actually runs with shell features
-        tmp = "/tmp/simplepipelines_test_sh_$(getpid()).txt"
-        p = sh("echo test > $tmp")
-        step = Step(:test, p)
-        result = SimplePipelines.run_node(step, SimplePipelines.Silent())
-        @test result[1].success
-        @test isfile(tmp) && strip(read(tmp, String)) == "test"
-        rm(tmp, force=true)
+        # Actually runs with shell features (relative path so Windows backslashes don't break sh -c)
+        dir = mktempdir()
+        cd(dir) do
+            p = sh("echo test > sh_test_out.txt")
+            step = Step(:test, p)
+            result = SimplePipelines.run_node(step, SimplePipelines.Silent())
+            @test result[1].success
+            @test isfile("sh_test_out.txt") && strip(read("sh_test_out.txt", String)) == "test"
+        end
+        rm(dir; recursive=true)
     end
     
     @testset "Step creation" begin
