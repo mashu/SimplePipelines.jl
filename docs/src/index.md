@@ -31,6 +31,7 @@ using intuitive operators.
 | `Branch(cond, a, b)` | Conditional execution |
 | `Map(f, items)` | Fan-out over collection |
 | `Reduce(f, a & b)` | Combine parallel outputs |
+| `ForEach(pattern) do ...` | Discover files by pattern |
 | `Retry(a, n, delay=d)` | Retry with delay |
 
 ### Execution & Results

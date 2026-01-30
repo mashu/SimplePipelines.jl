@@ -1,57 +1,64 @@
-# SimplePipelines.jl - Bioinformatics Example
+# SimplePipelines.jl - Bioinformatics Examples
 # ============================================
-# A simplified NGS alignment and variant calling workflow.
+# Immune repertoire (PEAR → IgBLAST → Julia filter) and variant calling (FastQC → trim → BWA → bcftools).
+# Uses echo to simulate tools; replace with real commands for actual runs.
 
 using SimplePipelines
 
-println("═══ NGS Alignment Pipeline ═══\n")
+println("═══ Immune Repertoire Pipeline ═══\n")
 
-# Define alignment workflow steps
-# (Using echo to simulate the actual tools)
+# Paired-end FASTQ → PEAR (merge) → FASTQ to FASTA → IgBLAST (V/D/J) → Julia filter
+pear       = @step pear       = `echo "[PEAR] Merging paired-end R1.fastq R2.fastq"`
+to_fasta   = @step to_fasta   = `echo "[seqtk] Converting merged.assembled.fastq to FASTA"`
+igblast    = @step igblast    = `echo "[IgBLAST] V/D/J assignment with V.fasta D.fasta J.fasta"`
+filter_id  = @step filter_id  = () -> "Filtered by v_identity and j_identity > 90.0"
 
-fastqc   = @step fastqc   = `echo "[FastQC] Quality control"`
-trim     = @step trim     = `echo "[Trimmomatic] Trimming adapters"`
-align    = @step align    = `echo "[BWA] Aligning to reference"`
-sort_bam = @step sort     = `echo "[SAMtools] Sorting BAM"`
-index    = @step index    = `echo "[SAMtools] Indexing BAM"`
-markdup  = @step markdup  = `echo "[Picard] Marking duplicates"`
-
-# Build sequential pipeline
-alignment = fastqc >> trim >> align >> sort_bam >> index >> markdup
-
-# Show structure and run
+immune = pear >> to_fasta >> igblast >> filter_id
 println("Pipeline structure:")
-print_dag(alignment)
+print_dag(immune)
 println()
+run_pipeline(Pipeline(immune, name="Immune Repertoire"))
 
-run_pipeline(Pipeline(alignment, name="WGS Alignment"))
+
+println("\n═══ Multi-Donor Immune Repertoire (ForEach) ═══\n")
+
+# Create temp files to simulate multiple donors
+dir = mktempdir()
+for donor in ["donor1", "donor2", "donor3"]
+    touch(joinpath(dir, "$(donor)_R1.fq.gz"))
+end
+
+# ForEach: discovers files, creates parallel branches - just return Cmd!
+cd(dir) do
+    pipeline = ForEach("{donor}_R1.fq.gz") do donor
+        `echo "[Processing $donor]"`  # Simple: just return a Cmd
+    end
+    println("Pipeline structure (3 donors discovered):")
+    print_dag(pipeline)
+    println()
+    run_pipeline(Pipeline(pipeline, name="Multi-Donor"))
+end
+
+rm(dir; recursive=true)
 
 
-println("\n\n═══ Multi-Sample Variant Calling ═══\n")
+println("\n═══ Variant Calling Pipeline ═══\n")
 
-# Process multiple samples in parallel, then joint-call
+# Paired-end → FastQC → Trimmomatic → BWA (GRCh38) → bcftools call → filter
+fastqc   = @step fastqc   = `echo "[FastQC] R1.fq.gz R2.fq.gz"`
+trim     = @step trim     = `echo "[Trimmomatic PE] Trim adapters and quality"`
+align    = @step align    = `echo "[BWA mem] Align to GRCh38.fa"`
+index    = @step index    = `echo "[samtools index] aligned.bam"`
+call     = @step call     = `echo "[bcftools mpileup/call] variants.vcf.gz"`
+filter_v = @step filter_v = `echo "[bcftools filter] QUAL>=20"`
 
-# Per-sample processing (simplified)
-sample_a = @step sample_a = `echo "[Sample A] Processing"`
-sample_b = @step sample_b = `echo "[Sample B] Processing"`
-sample_c = @step sample_c = `echo "[Sample C] Processing"`
-
-# Joint calling (requires all samples)
-joint_call = @step call = `echo "[BCFtools] Joint variant calling"`
-filter_vcf = @step filter = `echo "[BCFtools] Filtering variants"`
-annotate   = @step annotate = `echo "[SnpEff] Annotating variants"`
-
-# Build pipeline: parallel samples -> sequential calling
-pipeline = (sample_a & sample_b & sample_c) >> joint_call >> filter_vcf >> annotate
-
+variant = fastqc >> trim >> align >> index >> call >> filter_v
 println("Pipeline structure:")
-print_dag(pipeline)
+print_dag(variant)
 println()
+results = run_pipeline(Pipeline(variant, name="Variant Calling"))
 
-results = run_pipeline(Pipeline(pipeline, name="Variant Calling"))
-
-# Summary
-println("\nExecution Summary:")
+println("\nExecution summary:")
 for r in results
     status = r.success ? "✓" : "✗"
     println("  $status $(r.step.name): $(round(r.duration * 1000, digits=1))ms")

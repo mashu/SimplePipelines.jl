@@ -34,6 +34,7 @@ Pipeline
 
 ```@docs
 Map
+ForEach
 ```
 
 ## Execution

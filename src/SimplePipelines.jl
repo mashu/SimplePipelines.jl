@@ -2,7 +2,7 @@ module SimplePipelines
 
 export Step, @step, Sequence, Parallel, Pipeline
 export Retry, Fallback, Branch, Timeout
-export Map, Reduce
+export Map, Reduce, ForEach
 export run_pipeline, count_steps, steps, print_dag
 
 import Base: >>, &, |, ^
@@ -983,5 +983,126 @@ end
 
 # Curried form: Map(items) do ... end
 Map(f::Function) = items -> Map(f, items)
+
+#==============================================================================#
+# ForEach - Pattern-based file discovery with wildcard extraction
+#==============================================================================#
+
+"""
+    ForEach(pattern::String) do wildcard...
+        # commands using wildcard
+    end
+
+Discover files matching `pattern` with `{name}` placeholders and create a
+parallel branch for each match. Extracted values are passed to your function.
+
+# Examples
+```julia
+# Single file per match - just return a Cmd
+ForEach("{sample}.fastq") do sample
+    `process \$(sample).fastq`
+end
+
+# Multi-step pipeline - chain with >>
+ForEach("fastq/{sample}_R1.fq.gz") do sample
+    `pear -f \$(sample)_R1 -r \$(sample)_R2` >> `analyze \$(sample)`
+end
+
+# Multiple wildcards
+ForEach("data/{project}/{sample}.csv") do project, sample
+    `process \$(project)/\$(sample).csv`
+end
+
+# Chain ForEach with downstream steps
+ForEach("{id}.fastq") do id
+    `align \$(id).fastq`
+end >> @step merge = `merge *.bam`
+```
+"""
+function ForEach(f::Function, pattern::String)
+    # Extract {name} wildcards from pattern
+    wildcard_regex = r"\{(\w+)\}"
+    wildcard_names = [m.captures[1] for m in eachmatch(wildcard_regex, pattern)]
+    isempty(wildcard_names) && error("ForEach pattern must contain at least one {wildcard}: $pattern")
+    
+    # Build regex to match files and extract wildcard values
+    # First replace {name} with a placeholder, escape regex special chars, then restore capture group
+    placeholder = "\x00WILDCARD\x00"
+    temp = replace(pattern, wildcard_regex => placeholder)
+    # Escape regex special chars (not backslash since pattern shouldn't contain it)
+    for c in ".+^*?\$()[]|"
+        temp = replace(temp, string(c) => "\\" * c)
+    end
+    regex_pattern = replace(temp, placeholder => "([^/]+)")
+    regex = Regex("^" * regex_pattern * "\$")
+    
+    # Find matching files using simple glob
+    matches = _foreach_glob(pattern, regex)
+    isempty(matches) && error("ForEach: no files match pattern '$pattern'")
+    
+    # Create a pipeline branch for each match
+    nodes = AbstractNode[]
+    for captured in matches
+        result = length(captured) == 1 ? f(captured[1]) : f(captured...)
+        # Auto-lift Cmd or Function to Step for convenience
+        node = result isa AbstractNode ? result : Step(result)
+        push!(nodes, node)
+    end
+    
+    length(nodes) == 1 && return first(nodes)
+    return reduce(&, nodes)
+end
+
+# do-block syntax: ForEach("pattern") do x ... end
+ForEach(pattern::String) = f -> ForEach(f, pattern)
+
+# Simple recursive glob that finds files matching pattern with {wildcards}
+function _foreach_glob(pattern::String, regex::Regex)
+    # Split pattern into parts
+    parts = split(pattern, "/")
+    
+    # Find first part with wildcard
+    first_wild = findfirst(p -> contains(p, "{"), parts)
+    first_wild === nothing && error("Pattern must contain {wildcard}")
+    
+    # Base directory (parts before first wildcard)
+    base_parts = parts[1:first_wild-1]
+    base_dir = isempty(base_parts) ? "." : joinpath(base_parts...)
+    
+    isdir(base_dir) || return Vector{Vector{String}}()
+    
+    # Collect all matching files recursively
+    matches = Vector{Vector{String}}()
+    _foreach_scan!(matches, base_dir, parts, first_wild, regex, pattern)
+    return matches
+end
+
+function _foreach_scan!(matches::Vector{Vector{String}}, dir::String, parts::Vector{<:AbstractString}, idx::Int, regex::Regex, pattern::String)
+    idx > length(parts) && return
+    
+    is_last = idx == length(parts)
+    
+    for entry in readdir(dir)
+        full_path = joinpath(dir, entry)
+        
+        if is_last
+            # Final part - must be a file and match regex
+            if isfile(full_path)
+                # Build the path as it appears in the pattern (without ./ prefix if pattern doesn't have it)
+                relative_parts = parts[1:idx-1]
+                match_path = isempty(relative_parts) ? entry : joinpath(relative_parts..., entry)
+                m = match(regex, match_path)
+                if m !== nothing
+                    push!(matches, collect(String, m.captures))
+                end
+            end
+        else
+            # Intermediate part - must be a directory
+            if isdir(full_path)
+                _foreach_scan!(matches, full_path, parts, idx + 1, regex, pattern)
+            end
+        end
+    end
+end
 
 end # module SimplePipelines

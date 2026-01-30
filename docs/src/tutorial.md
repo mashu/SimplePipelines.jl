@@ -185,14 +185,37 @@ pipeline = Timeout(api_call, 5.0)^3 | backup
 Apply a function to each item, creating parallel steps:
 
 ```julia
-# Process files in parallel
+# Process files in parallel (list supplied in code)
 samples = ["sample_A", "sample_B", "sample_C"]
 pipeline = Map(samples) do s
     Step(Symbol("process_", s), `analyze $s.fastq`)
 end >> merge_results
+```
 
-# Equivalent to:
-# (process_sample_A & process_sample_B & process_sample_C) >> merge_results
+## ForEach (Pattern-based discovery)
+
+Discover files by pattern, create parallel branches automatically:
+
+```julia
+# Single step per file - just return a Cmd
+ForEach("{sample}.fastq") do sample
+    `process $(sample).fastq`
+end
+
+# Multi-step per file - chain with >>
+ForEach("fastq/{sample}_R1.fq.gz") do sample
+    `pear $(sample)_R1 $(sample)_R2` >> `analyze $(sample)`
+end
+
+# Multiple wildcards
+ForEach("data/{project}/{sample}.csv") do project, sample
+    `process $(project)/$(sample).csv`
+end
+
+# Chain with downstream merge
+ForEach("{id}.fastq") do id
+    `align $(id).fastq`
+end >> @step merge = `merge *.bam`
 ```
 
 ## Reduce (Combine)
@@ -253,18 +276,22 @@ all_ok = all(r -> r.success, results)
 Shell commands and Julia functions compose seamlessly:
 
 ```julia
-# Julia: prepare data
+# Julia: prepare data (e.g. filter non-empty lines)
 prep = @step prep = () -> begin
-    data = load("raw.csv")
-    cleaned = filter_invalid(data)
-    save("clean.csv", cleaned)
+    raw = read("raw.csv", String)
+    cleaned = filter(line -> !isempty(strip(line)), split(raw, '\n'))
+    write("clean.csv", join(cleaned, '\n'))
+    return "Wrote $(length(cleaned)) lines"
 end
 
 # Shell: run external tool
-external = @step tool = `external_program clean.csv -o result.txt`
+external = @step tool = `wc -l clean.csv > result.txt`
 
 # Julia: postprocess
-post = @step post = () -> parse_and_summarize("result.txt")
+post = @step post = () -> begin
+    n = parse(Int, split(read("result.txt", String))[1])
+    return "Line count: $n"
+end
 
 pipeline = prep >> external >> post
 run_pipeline(pipeline)

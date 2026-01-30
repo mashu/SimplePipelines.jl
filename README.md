@@ -8,65 +8,48 @@
 
 Minimal, type-stable DAG pipelines for Julia.
 
-## Installation
+## Quick Start
 
 ```julia
-using Pkg
-Pkg.add("SimplePipelines")
+using SimplePipelines
+
+# Chain steps with >>
+pipeline = `download data.csv` >> `process data.csv` >> `upload results.csv`
+
+# Run in parallel with &
+pipeline = (`task_a` & `task_b` & `task_c`) >> `merge`
+
+# Mix shell and Julia
+pipeline = @step fetch = `curl -o data.csv url` >>
+           @step analyze = () -> sum(parse.(Int, readlines("data.csv")))
+
+run_pipeline(pipeline)
 ```
 
 ## Interface
 
-### Steps
+```
+Operators:  a >> b      sequential       Retry:     a^3  or  Retry(a, 3)
+            a & b       parallel         Fallback:  a | b
+            
+Control:    Branch(cond, a, b)           conditional
+            Timeout(a, 30.0)             time limit
+            Reduce(f, a & b)             combine outputs
 
-| Syntax | Description |
-|--------|-------------|
-| `@step name = \`cmd\`` | Shell command |
-| `@step name = () -> expr` | Julia function |
+Discovery:  ForEach("{sample}.fq") do s  auto-discover files
+              `process $(s).fq`
+            end
+```
 
-### Operators
+## Multi-file Processing
 
-| Operator | Description | Example |
-|----------|-------------|---------|
-| `>>` | Sequential | `a >> b >> c` |
-| `&` | Parallel | `a & b & c` |
-| `\|` | Fallback | `a \| b` (b if a fails) |
-| `^n` | Retry | `a^3` (up to 3 times) |
-
-### Control Flow
-
-| Function | Description |
-|----------|-------------|
-| `Timeout(a, secs)` | Fail if exceeds time |
-| `Branch(cond, a, b)` | Conditional execution |
-| `Map(f, items)` | Fan-out over collection |
-| `Reduce(f, a & b)` | Combine parallel outputs |
-| `Retry(a, n, delay=d)` | Retry with delay |
-
-### Execution
-
-| Function | Description |
-|----------|-------------|
-| `run_pipeline(p)` | Run, return results |
-| `run_pipeline(p, verbose=false)` | Run silently |
-| `run_pipeline(p, dry_run=true)` | Preview only |
-
-### Results
-
-| Field | Description |
-|-------|-------------|
-| `results[i].success` | Did step succeed? |
-| `results[i].duration` | Time in seconds |
-| `results[i].output` | Output or error |
-
-### Utilities
-
-| Function | Description |
-|----------|-------------|
-| `print_dag(node)` | Visualize structure |
-| `count_steps(node)` | Count steps |
-| `steps(node)` | Get all steps |
+```julia
+# Discover files, create parallel branches automatically
+ForEach("data/{sample}_R1.fq.gz") do sample
+    `pear -f $(sample)_R1.fq.gz -r $(sample)_R2.fq.gz` >> `process $(sample)`
+end
+```
 
 ## Documentation
 
-See the [full documentation](https://mashu.github.io/SimplePipelines.jl/dev) for tutorials, examples, and API reference.
+[Full docs](https://mashu.github.io/SimplePipelines.jl/dev) · [Tutorial](https://mashu.github.io/SimplePipelines.jl/dev/tutorial/) · [Examples](https://mashu.github.io/SimplePipelines.jl/dev/examples/) · [API](https://mashu.github.io/SimplePipelines.jl/dev/api/)

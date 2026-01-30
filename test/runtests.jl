@@ -645,6 +645,83 @@ using Test
         @test true
     end
     
+    @testset "ForEach" begin
+        # Create temp dir with test files
+        dir = mktempdir()
+        touch(joinpath(dir, "donor1_R1.fq.gz"))
+        touch(joinpath(dir, "donor2_R1.fq.gz"))
+        touch(joinpath(dir, "donor3_R1.fq.gz"))
+        
+        # Single wildcard - creates parallel branches
+        cd(dir) do
+            pipeline = ForEach("{sample}_R1.fq.gz") do sample
+                Step(Symbol("process_", sample), `echo $sample`)
+            end
+            @test pipeline isa Parallel
+            @test count_steps(pipeline) == 3
+            
+            # Execute and verify
+            results = run_pipeline(pipeline, verbose=false)
+            @test length(results) == 3
+            @test all(r -> r.success, results)
+            outputs = sort([r.output for r in results])
+            @test "donor1\n" in outputs
+            @test "donor2\n" in outputs
+            @test "donor3\n" in outputs
+        end
+        
+        # Auto-lift Cmd - simpler syntax!
+        cd(dir) do
+            pipeline = ForEach("{sample}_R1.fq.gz") do sample
+                `echo $sample`  # Just return Cmd, auto-wrapped to Step
+            end
+            @test pipeline isa Parallel
+            results = run_pipeline(pipeline, verbose=false)
+            @test all(r -> r.success, results)
+        end
+        
+        # Single file match returns single node (not Parallel)
+        touch(joinpath(dir, "only_one.txt"))
+        cd(dir) do
+            node = ForEach("{name}_one.txt") do name
+                Step(Symbol(name), `echo $name`)
+            end
+            @test node isa Step
+        end
+        
+        # Nested directories with multiple wildcards
+        mkdir(joinpath(dir, "projectA"))
+        mkdir(joinpath(dir, "projectB"))
+        touch(joinpath(dir, "projectA", "sample1.csv"))
+        touch(joinpath(dir, "projectA", "sample2.csv"))
+        touch(joinpath(dir, "projectB", "sample3.csv"))
+        
+        cd(dir) do
+            pipeline = ForEach("{project}/{sample}.csv") do project, sample
+                Step(Symbol(project, "_", sample), `echo $project $sample`)
+            end
+            @test pipeline isa Parallel
+            @test count_steps(pipeline) == 3
+            
+            results = run_pipeline(pipeline, verbose=false)
+            @test all(r -> r.success, results)
+        end
+        
+        # Error on no matches
+        cd(dir) do
+            @test_throws ErrorException ForEach("{x}_nonexistent.xyz") do x
+                Step(:x, `echo`)
+            end
+        end
+        
+        # Error on pattern without wildcard
+        @test_throws ErrorException ForEach("no_wildcard.txt") do
+            Step(:x, `echo`)
+        end
+        
+        rm(dir; recursive=true)
+    end
+    
     @testset "Operator composability" begin
         a = @step a = `echo a`
         b = @step b = `echo b`

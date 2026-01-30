@@ -1,8 +1,27 @@
 # Examples
 
-## Basic Pipeline
+This page shows pipeline patterns in order of increasing complexity. Each example has a flow diagram, a short goal, and runnable code.
 
-A simple three-step workflow:
+**Contents**
+
+1. [Basics](#1-basics) — sequential, parallel, Julia + shell
+2. [Control flow](#2-control-flow) — retry, fallback, branching
+3. [Complex DAGs](#3-complex-dags) — multi-stage parallel, robust pipeline
+4. [Bioinformatics](#4-bioinformatics) — immune repertoire (single & multi-donor), variant calling
+
+---
+
+## 1. Basics
+
+### 1.1 Basic Pipeline
+
+**Flow:** Three steps in sequence.
+
+```
+  download  ──►  process  ──►  upload
+```
+
+**Goal:** Download a file, process it, upload the result.
 
 ```julia
 using SimplePipelines
@@ -15,205 +34,200 @@ pipeline = download >> process >> upload
 run_pipeline(pipeline)
 ```
 
-## Parallel Processing
+---
 
-Process multiple files concurrently:
+### 1.2 Parallel Processing
+
+**Flow:** Three steps run in parallel, then one step merges.
+
+```
+       ┌── file_a ──┐
+       ├── file_b ──┼──►  archive
+       └── file_c ──┘
+```
+
+**Goal:** Compress three files concurrently, then archive all outputs.
 
 ```julia
 using SimplePipelines
 
-# Process each file independently
 file_a = @step a = `gzip -k file_a.txt`
 file_b = @step b = `gzip -k file_b.txt`
 file_c = @step c = `gzip -k file_c.txt`
-
-# Archive all compressed files
 archive = @step archive = `tar -cvf archive.tar *.gz`
 
-# Files compress in parallel, then archive
 pipeline = (file_a & file_b & file_c) >> archive
 run_pipeline(pipeline)
 ```
 
-## Julia Computation
+---
 
-Mix Julia computation with external tools:
+### 1.3 Julia + Shell
+
+**Flow:** Julia step → shell step → Julia step.
+
+```
+  generate  ──►  process  ──►  report
+   (Julia)       (shell)      (Julia)
+```
+
+**Goal:** Generate data in Julia, run a shell tool, then summarize in Julia.
 
 ```julia
 using SimplePipelines
+using DelimitedFiles
 
-# Generate data in Julia
 generate = @step generate = () -> begin
-    data = rand(1000, 100)
+    data = rand(100, 10)
     writedlm("matrix.csv", data, ',')
     return "Generated $(size(data)) matrix"
 end
 
-# Process with external tool
-process = @step process = `./analyze matrix.csv -o stats.json`
+process = @step process = `wc -l matrix.csv`
 
-# Load and report in Julia
 report = @step report = () -> begin
-    stats = JSON.parsefile("stats.json")
-    println("Mean: $(stats["mean"])")
-    println("Std:  $(stats["std"])")
+    lines = read("matrix.csv", String)
+    nrows = count(==('\n'), lines)
+    return "Matrix has $nrows rows"
 end
 
 pipeline = generate >> process >> report
 run_pipeline(pipeline)
 ```
 
-## Bioinformatics: NGS Alignment
+---
 
-A typical next-generation sequencing alignment workflow:
+## 2. Control flow
 
-```julia
-using SimplePipelines
+### 2.1 Retry and Fallback
 
-# Quality control
-fastqc = @step fastqc = `fastqc -o qc/ reads.fq.gz`
+**Flow (retry then continue):** Run a step up to N times, then continue.
 
-# Trim adapters
-trim = @step trim = `trimmomatic SE reads.fq.gz trimmed.fq.gz ILLUMINACLIP:adapters.fa:2:30:10`
-
-# Align to reference
-align = @step align = `bwa mem -t 8 reference.fa trimmed.fq.gz > aligned.sam`
-
-# Convert and sort
-sort_bam = @step sort = `samtools sort -@ 4 -o sorted.bam aligned.sam`
-
-# Index
-index = @step index = `samtools index sorted.bam`
-
-# Full pipeline
-pipeline = fastqc >> trim >> align >> sort_bam >> index
-run_pipeline(Pipeline(pipeline, name="NGS Alignment"))
+```
+  [fetch^3]  ──►  process
+   (retry)
 ```
 
-## Bioinformatics: Multi-Sample Variant Calling
+**Flow (fallback):** If primary fails, run fallback.
 
-Process multiple samples in parallel, then joint-call variants:
-
-```julia
-using SimplePipelines
-
-# Per-sample processing function
-function sample_pipeline(name, fastq)
-    trim = Step(Symbol("trim_", name), `trimmomatic SE $fastq $(name)_trimmed.fq.gz ...`)
-    align = Step(Symbol("align_", name), `bwa mem ref.fa $(name)_trimmed.fq.gz > $(name).bam`)
-    sort = Step(Symbol("sort_", name), `samtools sort -o $(name)_sorted.bam $(name).bam`)
-    return trim >> align >> sort
-end
-
-# Build per-sample pipelines
-sample_a = sample_pipeline("A", "sample_A.fq.gz")
-sample_b = sample_pipeline("B", "sample_B.fq.gz")
-sample_c = sample_pipeline("C", "sample_C.fq.gz")
-
-# Joint variant calling (after all samples)
-call = @step call = `bcftools mpileup -f ref.fa *_sorted.bam | bcftools call -mv -o variants.vcf`
-
-# Filter variants
-filter_vcf = @step filter = `bcftools filter -e 'QUAL<20' variants.vcf > filtered.vcf`
-
-# Complete pipeline:
-#   (A & B & C) >> call >> filter
-pipeline = (sample_a & sample_b & sample_c) >> call >> filter_vcf
-
-run_pipeline(Pipeline(pipeline, name="Multi-Sample Variant Calling"))
+```
+   primary  ──►  (on success)  result
+      │
+      └──►  (on failure)  fallback  ──►  result
 ```
 
-## Error Handling with Retry and Fallback
-
-Handle flaky operations gracefully:
+**Goal:** Retry flaky fetch; use fallback when primary step fails; combine retry and fallback.
 
 ```julia
 using SimplePipelines
 
-# Retry a flaky API call up to 3 times
-fetch = @step fetch = `curl -f https://flaky-api.com/data -o data.json`
-pipeline = Retry(fetch, 3, delay=2.0) >> process
+# Retry then continue
+fetch = @step fetch = `curl -f https://example.com/data -o data.json`
+process = @step process = `wc -c data.json`
+pipeline = Retry(fetch, 3, delay=1.0) >> process
 
-# If primary method fails, use fallback
-fast = @step fast = `fast-tool data.csv`
-slow = @step slow = `slow-tool data.csv`
+# Fallback
+fast = @step fast = `sort data.csv > sorted.csv`
+slow = @step slow = `cat data.csv > sorted.csv`
 pipeline = fast | slow
 
-# Combine: retry primary, then fallback
+# Retry then fallback
 pipeline = Retry(fast, 3) | slow
 ```
 
-## Conditional Branching
+---
 
-Choose execution path at runtime:
+### 2.2 Conditional Branching
+
+**Flow:** One of two branches runs based on a condition.
+
+```
+            ┌── if true  ──►  branch_a
+  condition ─┤
+            └── if false ──►  branch_b
+```
+
+**Goal:** Choose processing path by file size or environment (e.g. DEBUG).
 
 ```julia
 using SimplePipelines
 
-# Different processing based on file size
-small_pipeline = @step small = `quick-process data.csv`
-large_pipeline = @step decompress = `gunzip data.csv.gz` >> @step process = `parallel-process data.csv`
+# By file size
+small_pipeline = @step small = `head -n 1000 data.csv > sample.csv`
+large_pipeline = @step decompress = `gunzip -c data.csv.gz > data.csv` >> @step process = `split -l 10000 data.csv chunk_`
 
 pipeline = Branch(
-    () -> filesize("data.csv") < 100_000_000,  # < 100MB
+    () -> filesize("data.csv") < 100_000_000,
     small_pipeline,
     large_pipeline
 )
 
-# Environment-based branching
-debug_steps = @step debug = `./tool --verbose --debug data`
-prod_steps = @step prod = `./tool --quiet data`
-
+# By environment
+debug_steps = @step debug = `echo "debug mode"`
+prod_steps = @step prod = `echo "production"`
 pipeline = Branch(() -> get(ENV, "DEBUG", "0") == "1", debug_steps, prod_steps)
 ```
 
-## Complex DAG
+---
 
-A workflow with multiple parallel stages:
+## 3. Complex DAGs
+
+### 3.1 Multi-stage Parallel
+
+**Flow:** Two parallel fetch+transform branches, then merge, analyze, then report and archive in parallel.
+
+```
+  ┌── fetch_db   ──►  transform_db  ──┐
+  │                                    ├──►  merge  ──►  analyze  ──►  ┌── report
+  └── fetch_files ──►  transform_files ─┘                               └── archive
+```
+
+**Goal:** Fetch from two sources in parallel, process each, merge, analyze, then produce report and archive in parallel.
 
 ```julia
 using SimplePipelines
 
-# Stage 1: Fetch from multiple sources (parallel)
-fetch_db = @step db = `curl -o db_data.json https://api.database.com/export`
-fetch_files = @step files = `rsync -av server:/data/ local_data/`
+fetch_db = @step db = `curl -s -o db_data.json https://example.com/export`
+fetch_files = @step files = `echo "local_data" > local_data.txt`
 
-# Stage 2: Transform each source (parallel, after fetch)
-transform_db = @step transform_db = () -> transform_database("db_data.json")
-transform_files = @step transform_files = () -> transform_files("local_data/")
+transform_db = @step transform_db = `wc -c db_data.json > db_size.txt`
+transform_files = @step transform_files = `wc -c local_data.txt > files_size.txt`
 
-# Stage 3: Merge and analyze (sequential)
-merge = @step merge = () -> merge_datasets("transformed_db.csv", "transformed_files.csv")
-analyze = @step analyze = `./analysis_tool merged.csv -o results/`
+merge = @step merge = `cat db_size.txt files_size.txt > merged.txt`
+analyze = @step analyze = `wc -l merged.txt > results.txt`
 
-# Stage 4: Generate outputs (parallel)
-report = @step report = () -> generate_report("results/")
-archive = @step archive = `tar -czvf results.tar.gz results/`
+report = @step report = `cat results.txt`
+archive = @step archive = `gzip -c merged.txt > results.tar.gz`
 
-# Build DAG
 db_branch = fetch_db >> transform_db
 files_branch = fetch_files >> transform_files
-
 pipeline = (db_branch & files_branch) >> merge >> analyze >> (report & archive)
 
 run_pipeline(pipeline)
 ```
 
-## Robust Pipeline (All Features)
+---
 
-Combining all operators for a production-ready workflow:
+### 3.2 Robust Pipeline (all features)
+
+**Flow:** Retry+fallback fetch → conditional process (small vs full) → report and notify in parallel (notify with retry).
+
+```
+  [primary^3 | backup]  ──►  [small? quick : full]  ──►  report
+                                                      └── notify^2
+```
+
+**Goal:** Fetch with retry and fallback; branch on file size; run report and notify in parallel.
 
 ```julia
 using SimplePipelines
 
-# Fetch with retry and fallback
-primary_source = @step primary = `curl -f https://main-api.com/data -o data.json`
-backup_source = @step backup = `curl -f https://backup-api.com/data -o data.json`
+primary_source = @step primary = `curl -sf https://example.com/data -o data.json`
+backup_source = @step backup = `echo '{"status":"fallback"}' > data.json`
 fetch = Retry(primary_source, 3, delay=1.0) | backup_source
 
-# Conditional processing
-quick_process = @step quick = `jq '.items' data.json > processed.json`
-full_process = @step parse = `./parse data.json` >> @step validate = `./validate parsed.json`
+quick_process = @step quick = `wc -c data.json > output.txt`
+full_process = @step parse = `wc -l data.json > output.txt` >> @step validate = `wc -c output.txt >> output.txt`
 
 process = Branch(
     () -> filesize("data.json") < 1_000_000,
@@ -221,12 +235,110 @@ process = Branch(
     full_process
 )
 
-# Parallel outputs
-report = @step report = () -> generate_report("processed.json")
-notify = @step notify = `curl -X POST https://slack.com/webhook -d '{"text":"Done"}'`
+report = @step report = `cat output.txt`
+notify = @step notify = `echo "Pipeline done"`
 
-# Full pipeline
 pipeline = fetch >> process >> (report & Retry(notify, 2))
-
 run_pipeline(Pipeline(pipeline, name="Robust ETL"))
+```
+
+---
+
+## 4. Bioinformatics
+
+**Multiple donors / samples:** Use `ForEach` with a `{wildcard}` pattern to automatically discover files and create parallel branches. The wildcard values propagate via normal Julia `$()` interpolation.
+
+### 4.1 Immune Repertoire (single donor)
+
+**Flow:** Paired-end FASTQ → merge (PEAR) → FASTQ→FASTA → IgBLAST (V/D/J) → Julia filter by identity.
+
+```
+  R1.fastq ──┐
+             ├──►  pear  ──►  to_fasta  ──►  igblast  ──►  filter_identity  ──►  igblast_filtered.tsv
+  R2.fastq ──┘
+```
+
+**Goal:** Merge paired-end reads, run IgBLAST with V/D/J references, filter rows by `v_identity` and `j_identity` > 90% in Julia.
+
+```julia
+using SimplePipelines
+using DelimitedFiles
+
+pear = @step pear = `pear -f R1.fastq -r R2.fastq -o merged`
+to_fasta = @step to_fasta = `seqtk seq -A merged.assembled.fastq > merged.assembled.fasta`
+igblast = @step igblast = `igblastn -query merged.assembled.fasta -germline_db_V V.fasta -germline_db_D D.fasta -germline_db_J J.fasta -outfmt 7 -out igblast.tsv`
+
+filter_identity = @step filter_identity = () -> begin
+    data, header_row = readdlm("igblast.tsv", '\t', header=true)
+    header = vec(header_row)
+    v_idx = findfirst(isequal("v_identity"), header)
+    j_idx = findfirst(isequal("j_identity"), header)
+    to_float(x) = something(tryparse(Float64, string(x)), 0.0)
+    filtered = [r for r in eachrow(data) if to_float(r[v_idx]) > 90.0 && to_float(r[j_idx]) > 90.0]
+    writedlm("igblast_filtered.tsv", vcat(header', filtered), '\t')
+    return "Filtered $(length(filtered)) sequences"
+end
+
+pipeline = pear >> to_fasta >> igblast >> filter_identity
+run_pipeline(Pipeline(pipeline, name="Immune Repertoire"))
+```
+
+---
+
+### 4.2 Immune Repertoire (multiple donors)
+
+**Flow:** `ForEach` discovers files matching pattern → one parallel branch per donor.
+
+```
+  ForEach("fastq/{donor}_R1.fq.gz")
+       │
+       ├── donor1: pear → fasta → igblast  ──┐
+       ├── donor2: pear → fasta → igblast  ──┼── (parallel)
+       └── donorN: pear → fasta → igblast  ──┘
+```
+
+**Goal:** Run the same pipeline for every donor; files discovered automatically.
+
+```julia
+using SimplePipelines
+
+# ForEach: pattern discovery + parallel branches in one construct
+pipeline = ForEach("fastq/{donor}_R1.fq.gz") do donor
+    `pear -f fastq/$(donor)_R1.fq.gz -r fastq/$(donor)_R2.fq.gz -o $(donor)_merged` >>
+    `seqtk seq -A $(donor)_merged.assembled.fastq > $(donor).fasta` >>
+    `igblastn -query $(donor).fasta -germline_db_V V.fasta -out $(donor)_igblast.tsv`
+end
+
+run_pipeline(pipeline)
+```
+
+---
+
+### 4.3 Variant Calling
+
+**Flow:** Paired-end reads → FastQC → trim → BWA (GRCh38) → sort/index → bcftools call → index → filter.
+
+```
+  R1.fq.gz ──┐
+             ├──►  fastqc  ──►  trim  ──►  align  ──►  index  ──►  call  ──►  index_vcf  ──►  filter_vcf
+  R2.fq.gz ──┘
+```
+
+**Goal:** QC, trim, align to GRCh38, call variants with bcftools, filter by quality.
+
+```julia
+using SimplePipelines
+
+fastqc = @step fastqc = `fastqc -o qc/ R1.fq.gz R2.fq.gz`
+trim = @step trim = `trimmomatic PE R1.fq.gz R2.fq.gz R1_trimmed.fq.gz R1_unpaired.fq.gz R2_trimmed.fq.gz R2_unpaired.fq.gz ILLUMINACLIP:adapters.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36`
+
+align = @step align = `bwa mem -t 8 GRCh38.fa R1_trimmed.fq.gz R2_trimmed.fq.gz | samtools sort -@ 4 -o aligned.bam -`
+index = @step index = `samtools index aligned.bam`
+
+call = @step call = `bcftools mpileup -f GRCh38.fa aligned.bam | bcftools call -mv -Oz -o variants.vcf.gz`
+index_vcf = @step index_vcf = `bcftools index variants.vcf.gz`
+filter_vcf = @step filter_vcf = `bcftools filter -i 'QUAL>=20' variants.vcf.gz -Oz -o filtered.vcf.gz`
+
+pipeline = fastqc >> trim >> align >> index >> call >> index_vcf >> filter_vcf
+run_pipeline(Pipeline(pipeline, name="Variant Calling"))
 ```
