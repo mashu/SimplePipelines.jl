@@ -2,58 +2,55 @@
 
 *Minimal, type-stable DAG pipelines for Julia*
 
-## Interface
-
-```
-┌───────────────────────────────────────────────────────────────────┐
-│                       SimplePipelines.jl                          │
-├───────────────────────────────────────────────────────────────────┤
-│ STEPS                                                             │
-│   @step name = `command`          Shell command step              │
-│   @step name = () -> expr         Julia function step             │
-│                                                                   │
-│ OPERATORS                                                         │
-│   a >> b                          Sequential: a then b            │
-│   a & b                           Parallel: a and b together      │
-│   a | b                           Fallback: b if a fails          │
-│   a^n                             Retry: up to n attempts         │
-│                                                                   │
-│ CONTROL FLOW                                                      │
-│   Timeout(a, seconds)             Fail if exceeds time limit      │
-│   Branch(cond, a, b)              Conditional: a if true, else b  │
-│   Map(f, items)                   Fan-out: parallel over items    │
-│   Reduce(f, a & b)                Combine parallel outputs        │
-│   Retry(a, n, delay=1.0)          Retry with delay between        │
-│                                                                   │
-│ EXECUTION                                                         │
-│   run_pipeline(p)                 Run pipeline, return results    │
-│   run_pipeline(p, verbose=false)  Run silently                    │
-│   run_pipeline(p, dry_run=true)   Preview without executing       │
-│                                                                   │
-│ RESULTS                                                           │
-│   results[i].success              Did step succeed?               │
-│   results[i].duration             Execution time (seconds)        │
-│   results[i].output               Captured output or error        │
-│                                                                   │
-│ UTILITIES                                                         │
-│   print_dag(node)                 Visualize DAG structure         │
-│   count_steps(node)               Count total steps               │
-│   steps(node)                     Get all steps as vector         │
-│                                                                   │
-└───────────────────────────────────────────────────────────────────┘
-```
-
 ## Overview
 
 SimplePipelines.jl lets you define and execute directed acyclic graph (DAG) pipelines
-using intuitive operators:
+using intuitive operators.
 
-| Operator | Meaning | Example |
-|----------|---------|---------|
-| `>>` | Sequential (a then b) | `download >> process >> upload` |
-| `&` | Parallel (a and b together) | `sample_a & sample_b & sample_c` |
-| `\|` | Fallback (b if a fails) | `fast_method \| slow_method` |
-| `^n` | Retry (up to n times) | `flaky_step^3` |
+### Steps
+
+| Syntax | Description |
+|--------|-------------|
+| `@step name = \`cmd\`` | Shell command |
+| `@step name = () -> expr` | Julia function |
+
+### Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `>>` | Sequential | `a >> b >> c` |
+| `&` | Parallel | `a & b & c` |
+| `\|` | Fallback | `a \| b` (b if a fails) |
+| `^n` | Retry | `a^3` (up to 3 times) |
+
+### Control Flow
+
+| Function | Description |
+|----------|-------------|
+| `Timeout(a, secs)` | Fail if exceeds time |
+| `Branch(cond, a, b)` | Conditional execution |
+| `Map(f, items)` | Fan-out over collection |
+| `Reduce(f, a & b)` | Combine parallel outputs |
+| `Retry(a, n, delay=d)` | Retry with delay |
+
+### Execution & Results
+
+| Function / Field | Description |
+|------------------|-------------|
+| `run_pipeline(p)` | Run, return results |
+| `run_pipeline(p, verbose=false)` | Run silently |
+| `run_pipeline(p, dry_run=true)` | Preview only |
+| `results[i].success` | Did step succeed? |
+| `results[i].duration` | Time in seconds |
+| `results[i].output` | Output or error |
+
+### Utilities
+
+| Function | Description |
+|----------|-------------|
+| `print_dag(node)` | Visualize structure |
+| `count_steps(node)` | Count steps |
+| `steps(node)` | Get all steps |
 
 ## Quick Start
 
