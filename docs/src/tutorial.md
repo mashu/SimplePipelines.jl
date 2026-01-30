@@ -7,6 +7,8 @@ A **Step** is the basic unit of work—either a shell command or Julia function.
 ### Shell Commands
 
 ```julia
+using SimplePipelines
+
 # Direct command (anonymous step)
 step = @step sh"samtools sort input.bam"
 

@@ -32,8 +32,7 @@ macro sh_str(s)
     Cmd(["sh", "-c", s])
 end
 
-""" Run a shell command string (with interpolation). Use instead of `` Cmd([\"sh\", \"-c\", ...]) ``. """
-sh(s::String) = Cmd(["sh", "-c", s])
+@doc raw""" Run a shell command string (with interpolation). Use `sh("cmd $(var)")` in loops or when building commands. """ sh(s::String) = Cmd(["sh", "-c", s])
 
 #==============================================================================#
 # Core Types - Fully parametric for zero-overhead dispatch
