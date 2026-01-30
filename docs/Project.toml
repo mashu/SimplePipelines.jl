@@ -1,0 +1,6 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+SimplePipelines = "01cec563-5001-4a35-82a7-0a4ff79c2cf4"
+
+[compat]
+Documenter = "1"
