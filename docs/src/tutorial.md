@@ -293,7 +293,7 @@ The reducer function receives a `Vector{String}` of outputs from all successful 
 
 ## Running Pipelines
 
-Use `run(pipeline)`:
+Use `run(pipeline)` or `pipeline |> run`:
 
 ```julia
 # Basic execution

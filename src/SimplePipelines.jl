@@ -770,6 +770,7 @@ end
     run(node::AbstractNode; verbose=true, dry_run=false)
 
 Execute a pipeline or node. Extends `Base.run` (no conflict with `run(::Cmd)` â€” dispatch by type).
+Use `run(pipeline)` or `pipeline |> run`; both accept `verbose` and `dry_run` kwargs.
 
 # Arguments
 - `verbose::Bool=true`: Print progress information
@@ -781,6 +782,7 @@ Execute a pipeline or node. Extends `Base.run` (no conflict with `run(::Cmd)` â€
 # Examples
 ```julia
 results = run(pipeline)
+pipeline |> run
 results = run(pipeline, verbose=false)
 run(pipeline, dry_run=true)
 ```

@@ -39,7 +39,7 @@ using intuitive operators.
 
 | Function / Field | Description |
 |------------------|-------------|
-| `run(p)` | Run, return results |
+| `run(p)` / `p |> run` | Run, return results |
 | `run(p, verbose=false)` | Run silently |
 | `run(p, dry_run=true)` | Preview only |
 | `results[i].success` | Did step succeed? |
