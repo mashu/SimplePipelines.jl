@@ -2,7 +2,7 @@
 
 # SimplePipelines.jl
 
-[![Docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://mashu.github.io/SimplePipelines.jl/stable)
+[![Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://mashu.github.io/SimplePipelines.jl/dev)
 [![Build Status](https://github.com/mashu/SimplePipelines.jl/workflows/CI/badge.svg)](https://github.com/mashu/SimplePipelines.jl/actions)
 [![codecov](https://codecov.io/gh/mashu/SimplePipelines.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/mashu/SimplePipelines.jl)
 
@@ -75,4 +75,4 @@ Pkg.add("SimplePipelines")
 
 ## Documentation
 
-See the [documentation](https://mashu.github.io/SimplePipelines.jl/stable) for the full tutorial and API reference.
+See the [documentation](https://mashu.github.io/SimplePipelines.jl/dev) for the full tutorial and API reference.
