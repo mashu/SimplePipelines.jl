@@ -1,3 +1,5 @@
+![simplepipelines_logo](https://github.com/user-attachments/assets/f4a31cd2-294e-42ac-86be-ab4a6386c78a)
+
 # SimplePipelines.jl
 
 [![Docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://mashu.github.io/SimplePipelines.jl/stable)
