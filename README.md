@@ -15,16 +15,16 @@ Minimal, type-stable DAG pipelines for Julia.
 using SimplePipelines
 
 # Chain steps with >>
-pipeline = sh"curl -o data.csv url" >> sh"wc -l data.csv"
+pipeline = sh"echo '1,2,3' > data.csv" >> sh"wc -l data.csv"
 
 # Redirection and pipes
-pipeline = sh"curl -o data.csv url" >> sh"sort data.csv | uniq > sorted.csv"
+pipeline = sh"(echo a; echo b; echo a) > data.csv" >> sh"sort data.csv | uniq > sorted.csv"
 
 # Run in parallel with &
-pipeline = (sh"task_a" & sh"task_b" & sh"task_c") >> sh"merge"
+pipeline = (sh"echo task_a" & sh"echo task_b" & sh"echo task_c") >> sh"echo merge"
 
 # Mix shell and Julia
-pipeline = @step fetch = sh"curl -o data.csv url" >>
+pipeline = @step fetch = sh"(echo 1; echo 2; echo 3) > data.csv" >>
            @step analyze = () -> sum(parse.(Int, readlines("data.csv")))
 
 run_pipeline(pipeline)

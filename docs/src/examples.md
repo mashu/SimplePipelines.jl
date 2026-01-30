@@ -21,14 +21,14 @@ This page shows pipeline patterns in order of increasing complexity. Each exampl
   download  ──►  process  ──►  upload
 ```
 
-**Goal:** Download a file, process it, upload the result.
+**Goal:** Create a file, process it, then copy the result (runnable without network).
 
 ```julia
 using SimplePipelines
 
-download = @step download = sh"curl -o data.txt https://example.com/data"
+download = @step download = sh"(echo line3; echo line1; echo line2) > data.txt"
 process = @step process = sh"sort data.txt > sorted.txt"
-upload = @step upload = sh"scp sorted.txt server:/data/"
+upload = @step upload = sh"cp sorted.txt uploaded.txt"
 
 pipeline = download >> process >> upload
 run_pipeline(pipeline)
@@ -46,15 +46,15 @@ run_pipeline(pipeline)
        └── file_c ──┘
 ```
 
-**Goal:** Compress three files concurrently, then archive all outputs.
+**Goal:** Create three files, compress them concurrently, then archive (runnable as-is).
 
 ```julia
 using SimplePipelines
 
-file_a = @step a = sh"gzip -k file_a.txt"
-file_b = @step b = sh"gzip -k file_b.txt"
-file_c = @step c = sh"gzip -k file_c.txt"
-archive = @step archive = sh"tar -cvf archive.tar *.gz"
+file_a = @step a = sh"echo content_a > file_a.txt && gzip -k file_a.txt"
+file_b = @step b = sh"echo content_b > file_b.txt && gzip -k file_b.txt"
+file_c = @step c = sh"echo content_c > file_c.txt && gzip -k file_c.txt"
+archive = @step archive = sh"tar -cvf archive.tar file_a.txt.gz file_b.txt.gz file_c.txt.gz"
 
 pipeline = (file_a & file_b & file_c) >> archive
 run_pipeline(pipeline)
@@ -121,18 +121,20 @@ run_pipeline(pipeline)
 ```julia
 using SimplePipelines
 
-# Retry then continue
-fetch = @step fetch = sh"curl -f https://example.com/data -o data.json"
+# Retry then continue (fetch creates file; no network)
+fetch = @step fetch = sh"echo '{\"x\":1}' > data.json"
 process = @step process = sh"wc -c data.json"
-pipeline = Retry(fetch, 3, delay=1.0) >> process
+pipeline = Retry(fetch, 3, delay=0.1) >> process
 
-# Fallback
+# Fallback (create data.csv first so both branches have input)
+run_pipeline(@step _ = sh"(echo 'a,b'; echo '1,2') > data.csv", verbose=false)
 fast = @step fast = sh"sort data.csv > sorted.csv"
 slow = @step slow = sh"cat data.csv > sorted.csv"
 pipeline = fast | slow
 
 # Retry then fallback
 pipeline = Retry(fast, 3) | slow
+run_pipeline(pipeline)
 ```
 
 ---
@@ -152,20 +154,24 @@ pipeline = Retry(fast, 3) | slow
 ```julia
 using SimplePipelines
 
+# Create data.csv so the branch condition has a file to check
+run_pipeline(@step _ = sh"(echo 'a,b'; echo '1,2'; echo '3,4') > data.csv", verbose=false)
+
 # By file size
 small_pipeline = @step small = sh"head -n 1000 data.csv > sample.csv"
 large_pipeline = @step decompress = sh"gunzip -c data.csv.gz > data.csv" >> @step process = sh"split -l 10000 data.csv chunk_"
-
 pipeline = Branch(
     () -> filesize("data.csv") < 100_000_000,
     small_pipeline,
     large_pipeline
 )
+run_pipeline(pipeline)
 
 # By environment
 debug_steps = @step debug = sh"echo 'debug mode'"
 prod_steps = @step prod = sh"echo 'production'"
 pipeline = Branch(() -> get(ENV, "DEBUG", "0") == "1", debug_steps, prod_steps)
+run_pipeline(pipeline)
 ```
 
 ---
@@ -182,13 +188,13 @@ pipeline = Branch(() -> get(ENV, "DEBUG", "0") == "1", debug_steps, prod_steps)
   └── fetch_files ──►  transform_files ─┘                               └── archive
 ```
 
-**Goal:** Fetch from two sources in parallel, process each, merge, analyze, then produce report and archive in parallel.
+**Goal:** Fetch from two sources in parallel (here: create two files), process each, merge, analyze, then report and archive (runnable without network).
 
 ```julia
 using SimplePipelines
 
-fetch_db = @step db = sh"curl -s -o db_data.json https://example.com/export"
-fetch_files = @step files = sh"echo \"local_data\" > local_data.txt"
+fetch_db = @step db = sh"echo '{\"db\":1}' > db_data.json"
+fetch_files = @step files = sh"echo 'local_data' > local_data.txt"
 
 transform_db = @step transform_db = sh"wc -c db_data.json > db_size.txt"
 transform_files = @step transform_files = sh"wc -c local_data.txt > files_size.txt"
@@ -217,14 +223,14 @@ run_pipeline(pipeline)
                                                       └── notify^2
 ```
 
-**Goal:** Fetch with retry and fallback; branch on file size; run report and notify in parallel.
+**Goal:** Fetch with retry and fallback; branch on file size; run report and notify in parallel (runnable without network).
 
 ```julia
 using SimplePipelines
 
-primary_source = @step primary = sh"curl -sf https://example.com/data -o data.json"
+primary_source = @step primary = sh"echo '{\"status\":\"ok\"}' > data.json"
 backup_source = @step backup = sh"echo '{\"status\":\"fallback\"}' > data.json"
-fetch = Retry(primary_source, 3, delay=1.0) | backup_source
+fetch = Retry(primary_source, 3, delay=0.1) | backup_source
 
 quick_process = @step quick = sh"wc -c data.json > output.txt"
 full_process = @step parse = sh"wc -l data.json > output.txt" >> @step validate = sh"wc -c output.txt >> output.txt"
@@ -247,6 +253,8 @@ run_pipeline(Pipeline(pipeline, name="Robust ETL"))
 ## 4. Bioinformatics
 
 **Multiple donors / samples:** Use `ForEach` with a `{wildcard}` pattern to automatically discover files and create parallel branches. The wildcard values propagate via normal Julia `$()` interpolation.
+
+**Note:** Examples below use real tool names (PEAR, IgBLAST, BWA, etc.). They are runnable only if those tools are installed and input files exist; otherwise use `echo` placeholders as in the [basic examples](https://github.com/mashu/SimplePipelines.jl/blob/main/examples/bioinformatics.jl).
 
 ### 4.1 Immune Repertoire (single donor)
 

@@ -551,6 +551,12 @@ end
 
 Execute a pipeline node. Dispatches on node type for type-stable execution.
 """
+# Step wrapping a Sequence/Parallel/etc (e.g. @step name = a >> b) — run inner node
+function run_node(step::Step{N}, verbosity) where {N<:AbstractNode}
+    print_start(verbosity, step)
+    return run_node(step.work, verbosity)
+end
+
 function run_node(step::Step, verbosity)
     print_start(verbosity, step)
     result = execute(step)

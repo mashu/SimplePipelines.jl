@@ -74,12 +74,13 @@ Combine `>>` and `&` for arbitrary graphs.
 ```
 
 ```julia
-fetch = @step fetch = sh"curl -o data.csv https://example.com/data"
-analyze_a = @step a = sh"tool_a data.csv"
-analyze_b = @step b = sh"tool_b data.csv"
-report = @step report = () -> combine_results()
+fetch = @step fetch = sh"echo 'a,b\n1,2' > data.csv"
+analyze_a = @step a = sh"wc -l data.csv"
+analyze_b = @step b = sh"wc -c data.csv"
+report = @step report = () -> "done"
 
 pipeline = fetch >> (analyze_a & analyze_b) >> report
+run_pipeline(pipeline)
 ```
 
 ### Multi-Stage Parallel
