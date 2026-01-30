@@ -5,6 +5,7 @@
 [![Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://mashu.github.io/SimplePipelines.jl/dev)
 [![Build Status](https://github.com/mashu/SimplePipelines.jl/workflows/CI/badge.svg)](https://github.com/mashu/SimplePipelines.jl/actions)
 [![codecov](https://codecov.io/gh/mashu/SimplePipelines.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/mashu/SimplePipelines.jl)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Minimal, type-stable DAG pipelines for Julia.
 
@@ -49,7 +50,3 @@ ForEach("data/{sample}_R1.fq.gz") do sample
     sh("pear -f $(sample)_R1.fq.gz -r $(sample)_R2.fq.gz") >> sh("process $(sample)")
 end
 ```
-
-## Documentation
-
-[Full docs](https://mashu.github.io/SimplePipelines.jl/dev) · [Tutorial](https://mashu.github.io/SimplePipelines.jl/dev/tutorial/) · [Examples](https://mashu.github.io/SimplePipelines.jl/dev/examples/) · [API](https://mashu.github.io/SimplePipelines.jl/dev/api/)
