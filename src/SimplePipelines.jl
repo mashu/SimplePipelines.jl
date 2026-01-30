@@ -14,7 +14,7 @@ using Base.Threads: @spawn, fetch
 # Shell string macro - for commands with shell features (>, |, etc.)
 #==============================================================================#
 
-"""
+@doc raw"""
     sh"command"
     sh(command::String)
 
@@ -1014,7 +1014,7 @@ Map(f::Function) = items -> Map(f, items)
 # ForEach - Pattern-based file discovery with wildcard extraction
 #==============================================================================#
 
-"""
+@doc raw"""
     ForEach(pattern::String) do wildcard...
         # commands using wildcard
     end
@@ -1024,19 +1024,19 @@ parallel branch for each match. Extracted values are passed to your function.
 
 # Examples
 ```julia
-# With interpolation use sh(\"...\") for shell commands
+# With interpolation use sh("...") for shell commands
 ForEach("data/{sample}_R1.fq.gz") do sample
-    sh("pear -f \$(sample)_R1 -r \$(sample)_R2") >> sh("process \$(sample)")
+    sh("pear -f $(sample)_R1 -r $(sample)_R2") >> sh("process $(sample)")
 end
 
 # Multiple wildcards
 ForEach("data/{project}/{sample}.csv") do project, sample
-    sh("process \$(project)/\$(sample).csv")
+    sh("process $(project)/$(sample).csv")
 end
 
 # Chain with downstream step
 ForEach("{id}.fastq") do id
-    sh("align \$(id).fastq")
+    sh("align $(id).fastq")
 end >> @step merge = sh"merge *.bam"
 ```
 """
