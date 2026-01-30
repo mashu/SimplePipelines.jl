@@ -12,6 +12,7 @@ using intuitive operators.
 | Syntax | Description |
 |--------|-------------|
 | `@step name = \`cmd\`` | Shell command |
+| `@step name = sh"cmd > file"` | Shell with redirection/pipes |
 | `@step name = () -> expr` | Julia function |
 
 ### Operators
@@ -59,11 +60,11 @@ using intuitive operators.
 using SimplePipelines
 
 # Simple sequence
-pipeline = `echo "step 1"` >> `echo "step 2"` >> `echo "step 3"`
+pipeline = sh"echo 'step 1'" >> sh"echo 'step 2'" >> sh"echo 'step 3'"
 run_pipeline(pipeline)
 
 # Parallel branches that merge
-pipeline = (`process A` & `process B`) >> `merge`
+pipeline = (sh"process A" & sh"process B") >> sh"merge"
 run_pipeline(pipeline)
 ```
 

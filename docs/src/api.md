@@ -37,6 +37,12 @@ Map
 ForEach
 ```
 
+## String Macros
+
+```@docs
+@sh_str
+```
+
 ## Execution
 
 ```@docs

@@ -14,13 +14,16 @@ Minimal, type-stable DAG pipelines for Julia.
 using SimplePipelines
 
 # Chain steps with >>
-pipeline = `download data.csv` >> `process data.csv` >> `upload results.csv`
+pipeline = sh"curl -o data.csv url" >> sh"wc -l data.csv"
+
+# Redirection and pipes
+pipeline = sh"curl -o data.csv url" >> sh"sort data.csv | uniq > sorted.csv"
 
 # Run in parallel with &
-pipeline = (`task_a` & `task_b` & `task_c`) >> `merge`
+pipeline = (sh"task_a" & sh"task_b" & sh"task_c") >> sh"merge"
 
 # Mix shell and Julia
-pipeline = @step fetch = `curl -o data.csv url` >>
+pipeline = @step fetch = sh"curl -o data.csv url" >>
            @step analyze = () -> sum(parse.(Int, readlines("data.csv")))
 
 run_pipeline(pipeline)
@@ -29,16 +32,13 @@ run_pipeline(pipeline)
 ## Interface
 
 ```
-Operators:  a >> b      sequential       Retry:     a^3  or  Retry(a, 3)
-            a & b       parallel         Fallback:  a | b
-            
-Control:    Branch(cond, a, b)           conditional
-            Timeout(a, 30.0)             time limit
-            Reduce(f, a & b)             combine outputs
+Commands:   `cmd arg`   basic command    sh"cmd > file"  shell features
 
-Discovery:  ForEach("{sample}.fq") do s  auto-discover files
-              `process $(s).fq`
-            end
+Operators:  a >> b      sequential       a^3             retry 3x
+            a & b       parallel         a | b           fallback
+            
+Control:    Branch(cond, a, b)           Timeout(a, 30.0)
+            Reduce(f, a & b)             ForEach(pattern) do ...
 ```
 
 ## Multi-file Processing
@@ -46,7 +46,7 @@ Discovery:  ForEach("{sample}.fq") do s  auto-discover files
 ```julia
 # Discover files, create parallel branches automatically
 ForEach("data/{sample}_R1.fq.gz") do sample
-    `pear -f $(sample)_R1.fq.gz -r $(sample)_R2.fq.gz` >> `process $(sample)`
+    Cmd(["sh", "-c", "pear -f $(sample)_R1.fq.gz -r $(sample)_R2.fq.gz"]) >> Cmd(["sh", "-c", "process $(sample)"])
 end
 ```
 

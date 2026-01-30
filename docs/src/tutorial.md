@@ -8,10 +8,13 @@ A **Step** is the basic unit of work—either a shell command or Julia function.
 
 ```julia
 # Direct command (anonymous step)
-step = @step `samtools sort input.bam`
+step = @step sh"samtools sort input.bam"
 
 # Named step
-step = @step sort = `samtools sort input.bam`
+step = @step sort = sh"samtools sort input.bam"
+
+# Shell features (>, |, &&) - use sh"..."
+step = @step sort = sh"sort data.txt | uniq > sorted.txt"
 ```
 
 ### Julia Functions
@@ -29,7 +32,7 @@ step = @step analyze = () -> run_analysis("data.csv")
 Track input/output files for validation:
 
 ```julia
-@step align("reads.fq" => "aligned.bam") = `bwa mem ref.fa reads.fq > aligned.bam`
+@step align("reads.fq" => "aligned.bam") = sh"bwa mem ref.fa reads.fq > aligned.bam"  # sh"..." for redirection
 ```
 
 ## Sequential Execution: `>>`
@@ -41,7 +44,7 @@ The `>>` operator chains steps—each waits for the previous to complete:
 pipeline = step_a >> step_b >> step_c
 
 # Chain commands directly
-pipeline = `download data.txt` >> `process data.txt` >> `upload results.txt`
+pipeline = sh"download data.txt" >> sh"process data.txt" >> sh"upload results.txt"
 ```
 
 ## Parallel Execution: `&`
@@ -69,9 +72,9 @@ Combine `>>` and `&` for arbitrary graphs.
 ```
 
 ```julia
-fetch = @step fetch = `curl -o data.csv https://example.com/data`
-analyze_a = @step a = `tool_a data.csv`
-analyze_b = @step b = `tool_b data.csv`
+fetch = @step fetch = sh"curl -o data.csv https://example.com/data"
+analyze_a = @step a = sh"tool_a data.csv"
+analyze_b = @step b = sh"tool_b data.csv"
 report = @step report = () -> combine_results()
 
 pipeline = fetch >> (analyze_a & analyze_b) >> report
@@ -88,13 +91,13 @@ For graphs with multiple fork-join points, compose in stages:
 ```
 
 ```julia
-a = @step a = `step_a`
-b = @step b = `step_b`
-c = @step c = `step_c`
-d = @step d = `step_d`
-e = @step e = `step_e`
-f = @step f = `step_f`
-g = @step g = `step_g`
+a = @step a = sh"step_a"
+b = @step b = sh"step_b"
+c = @step c = sh"step_c"
+d = @step d = sh"step_d"
+e = @step e = sh"step_e"
+f = @step f = sh"step_f"
+g = @step g = sh"step_g"
 
 pipeline = a >> (b & c) >> d >> (e & f) >> g
 ```
@@ -188,7 +191,7 @@ Apply a function to each item, creating parallel steps:
 # Process files in parallel (list supplied in code)
 samples = ["sample_A", "sample_B", "sample_C"]
 pipeline = Map(samples) do s
-    Step(Symbol("process_", s), `analyze $s.fastq`)
+    Step(Symbol("process_", s), Cmd(["sh", "-c", "analyze $s.fastq"]))
 end >> merge_results
 ```
 
@@ -197,25 +200,25 @@ end >> merge_results
 Discover files by pattern, create parallel branches automatically:
 
 ```julia
-# Single step per file - just return a Cmd
+# Single step per file - return Cmd (use Cmd(["sh","-c",...]) for interpolation)
 ForEach("{sample}.fastq") do sample
-    `process $(sample).fastq`
+    Cmd(["sh", "-c", "process $(sample).fastq"])
 end
 
 # Multi-step per file - chain with >>
 ForEach("fastq/{sample}_R1.fq.gz") do sample
-    `pear $(sample)_R1 $(sample)_R2` >> `analyze $(sample)`
+    Cmd(["sh", "-c", "pear $(sample)_R1 $(sample)_R2"]) >> Cmd(["sh", "-c", "analyze $(sample)"])
 end
 
 # Multiple wildcards
 ForEach("data/{project}/{sample}.csv") do project, sample
-    `process $(project)/$(sample).csv`
+    Cmd(["sh", "-c", "process $(project)/$(sample).csv"])
 end
 
 # Chain with downstream merge
 ForEach("{id}.fastq") do id
-    `align $(id).fastq`
-end >> @step merge = `merge *.bam`
+    Cmd(["sh", "-c", "align $(id).fastq"])
+end >> @step merge = sh"merge *.bam"
 ```
 
 ## Reduce (Combine)
@@ -285,7 +288,7 @@ prep = @step prep = () -> begin
 end
 
 # Shell: run external tool
-external = @step tool = `wc -l clean.csv > result.txt`
+external = @step tool = sh"wc -l clean.csv > result.txt"  # sh"..." for redirection
 
 # Julia: postprocess
 post = @step post = () -> begin

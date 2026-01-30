@@ -26,9 +26,9 @@ This page shows pipeline patterns in order of increasing complexity. Each exampl
 ```julia
 using SimplePipelines
 
-download = @step download = `curl -o data.txt https://example.com/data`
-process = @step process = `sort data.txt > sorted.txt`
-upload = @step upload = `scp sorted.txt server:/data/`
+download = @step download = sh"curl -o data.txt https://example.com/data"
+process = @step process = sh"sort data.txt > sorted.txt"
+upload = @step upload = sh"scp sorted.txt server:/data/"
 
 pipeline = download >> process >> upload
 run_pipeline(pipeline)
@@ -51,10 +51,10 @@ run_pipeline(pipeline)
 ```julia
 using SimplePipelines
 
-file_a = @step a = `gzip -k file_a.txt`
-file_b = @step b = `gzip -k file_b.txt`
-file_c = @step c = `gzip -k file_c.txt`
-archive = @step archive = `tar -cvf archive.tar *.gz`
+file_a = @step a = sh"gzip -k file_a.txt"
+file_b = @step b = sh"gzip -k file_b.txt"
+file_c = @step c = sh"gzip -k file_c.txt"
+archive = @step archive = sh"tar -cvf archive.tar *.gz"
 
 pipeline = (file_a & file_b & file_c) >> archive
 run_pipeline(pipeline)
@@ -83,7 +83,7 @@ generate = @step generate = () -> begin
     return "Generated $(size(data)) matrix"
 end
 
-process = @step process = `wc -l matrix.csv`
+process = @step process = sh"wc -l matrix.csv"
 
 report = @step report = () -> begin
     lines = read("matrix.csv", String)
@@ -122,13 +122,13 @@ run_pipeline(pipeline)
 using SimplePipelines
 
 # Retry then continue
-fetch = @step fetch = `curl -f https://example.com/data -o data.json`
-process = @step process = `wc -c data.json`
+fetch = @step fetch = sh"curl -f https://example.com/data -o data.json"
+process = @step process = sh"wc -c data.json"
 pipeline = Retry(fetch, 3, delay=1.0) >> process
 
 # Fallback
-fast = @step fast = `sort data.csv > sorted.csv`
-slow = @step slow = `cat data.csv > sorted.csv`
+fast = @step fast = sh"sort data.csv > sorted.csv"
+slow = @step slow = sh"cat data.csv > sorted.csv"
 pipeline = fast | slow
 
 # Retry then fallback
@@ -153,8 +153,8 @@ pipeline = Retry(fast, 3) | slow
 using SimplePipelines
 
 # By file size
-small_pipeline = @step small = `head -n 1000 data.csv > sample.csv`
-large_pipeline = @step decompress = `gunzip -c data.csv.gz > data.csv` >> @step process = `split -l 10000 data.csv chunk_`
+small_pipeline = @step small = sh"head -n 1000 data.csv > sample.csv"
+large_pipeline = @step decompress = sh"gunzip -c data.csv.gz > data.csv" >> @step process = sh"split -l 10000 data.csv chunk_"
 
 pipeline = Branch(
     () -> filesize("data.csv") < 100_000_000,
@@ -163,8 +163,8 @@ pipeline = Branch(
 )
 
 # By environment
-debug_steps = @step debug = `echo "debug mode"`
-prod_steps = @step prod = `echo "production"`
+debug_steps = @step debug = sh"echo 'debug mode'"
+prod_steps = @step prod = sh"echo 'production'"
 pipeline = Branch(() -> get(ENV, "DEBUG", "0") == "1", debug_steps, prod_steps)
 ```
 
@@ -187,17 +187,17 @@ pipeline = Branch(() -> get(ENV, "DEBUG", "0") == "1", debug_steps, prod_steps)
 ```julia
 using SimplePipelines
 
-fetch_db = @step db = `curl -s -o db_data.json https://example.com/export`
-fetch_files = @step files = `echo "local_data" > local_data.txt`
+fetch_db = @step db = sh"curl -s -o db_data.json https://example.com/export"
+fetch_files = @step files = sh"echo \"local_data\" > local_data.txt"
 
-transform_db = @step transform_db = `wc -c db_data.json > db_size.txt`
-transform_files = @step transform_files = `wc -c local_data.txt > files_size.txt`
+transform_db = @step transform_db = sh"wc -c db_data.json > db_size.txt"
+transform_files = @step transform_files = sh"wc -c local_data.txt > files_size.txt"
 
-merge = @step merge = `cat db_size.txt files_size.txt > merged.txt`
-analyze = @step analyze = `wc -l merged.txt > results.txt`
+merge = @step merge = sh"cat db_size.txt files_size.txt > merged.txt"
+analyze = @step analyze = sh"wc -l merged.txt > results.txt"
 
-report = @step report = `cat results.txt`
-archive = @step archive = `gzip -c merged.txt > results.tar.gz`
+report = @step report = sh"cat results.txt"
+archive = @step archive = sh"gzip -c merged.txt > results.tar.gz"
 
 db_branch = fetch_db >> transform_db
 files_branch = fetch_files >> transform_files
@@ -222,12 +222,12 @@ run_pipeline(pipeline)
 ```julia
 using SimplePipelines
 
-primary_source = @step primary = `curl -sf https://example.com/data -o data.json`
-backup_source = @step backup = `echo '{"status":"fallback"}' > data.json`
+primary_source = @step primary = sh"curl -sf https://example.com/data -o data.json"
+backup_source = @step backup = sh"echo '{\"status\":\"fallback\"}' > data.json"
 fetch = Retry(primary_source, 3, delay=1.0) | backup_source
 
-quick_process = @step quick = `wc -c data.json > output.txt`
-full_process = @step parse = `wc -l data.json > output.txt` >> @step validate = `wc -c output.txt >> output.txt`
+quick_process = @step quick = sh"wc -c data.json > output.txt"
+full_process = @step parse = sh"wc -l data.json > output.txt" >> @step validate = sh"wc -c output.txt >> output.txt"
 
 process = Branch(
     () -> filesize("data.json") < 1_000_000,
@@ -235,8 +235,8 @@ process = Branch(
     full_process
 )
 
-report = @step report = `cat output.txt`
-notify = @step notify = `echo "Pipeline done"`
+report = @step report = sh"cat output.txt"
+notify = @step notify = sh"echo 'Pipeline done'"
 
 pipeline = fetch >> process >> (report & Retry(notify, 2))
 run_pipeline(Pipeline(pipeline, name="Robust ETL"))
@@ -264,9 +264,9 @@ run_pipeline(Pipeline(pipeline, name="Robust ETL"))
 using SimplePipelines
 using DelimitedFiles
 
-pear = @step pear = `pear -f R1.fastq -r R2.fastq -o merged`
-to_fasta = @step to_fasta = `seqtk seq -A merged.assembled.fastq > merged.assembled.fasta`
-igblast = @step igblast = `igblastn -query merged.assembled.fasta -germline_db_V V.fasta -germline_db_D D.fasta -germline_db_J J.fasta -outfmt 7 -out igblast.tsv`
+pear = @step pear = sh"pear -f R1.fastq -r R2.fastq -o merged"
+to_fasta = @step to_fasta = sh"seqtk seq -A merged.assembled.fastq > merged.assembled.fasta"
+igblast = @step igblast = sh"igblastn -query merged.assembled.fasta -germline_db_V V.fasta -germline_db_D D.fasta -germline_db_J J.fasta -outfmt 7 -out igblast.tsv"
 
 filter_identity = @step filter_identity = () -> begin
     data, header_row = readdlm("igblast.tsv", '\t', header=true)
@@ -304,9 +304,9 @@ using SimplePipelines
 
 # ForEach: pattern discovery + parallel branches in one construct
 pipeline = ForEach("fastq/{donor}_R1.fq.gz") do donor
-    `pear -f fastq/$(donor)_R1.fq.gz -r fastq/$(donor)_R2.fq.gz -o $(donor)_merged` >>
-    `seqtk seq -A $(donor)_merged.assembled.fastq > $(donor).fasta` >>
-    `igblastn -query $(donor).fasta -germline_db_V V.fasta -out $(donor)_igblast.tsv`
+    Cmd(["sh", "-c", "pear -f fastq/$(donor)_R1.fq.gz -r fastq/$(donor)_R2.fq.gz -o $(donor)_merged"]) >>
+    Cmd(["sh", "-c", "seqtk seq -A $(donor)_merged.assembled.fastq > $(donor).fasta"]) >>
+    Cmd(["sh", "-c", "igblastn -query $(donor).fasta -germline_db_V V.fasta -germline_db_D D.fasta -germline_db_J J.fasta -outfmt 7 -out $(donor)_igblast.tsv"])
 end
 
 run_pipeline(pipeline)
@@ -329,15 +329,15 @@ run_pipeline(pipeline)
 ```julia
 using SimplePipelines
 
-fastqc = @step fastqc = `fastqc -o qc/ R1.fq.gz R2.fq.gz`
-trim = @step trim = `trimmomatic PE R1.fq.gz R2.fq.gz R1_trimmed.fq.gz R1_unpaired.fq.gz R2_trimmed.fq.gz R2_unpaired.fq.gz ILLUMINACLIP:adapters.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36`
+fastqc = @step fastqc = sh"fastqc -o qc/ R1.fq.gz R2.fq.gz"
+trim = @step trim = sh"trimmomatic PE R1.fq.gz R2.fq.gz R1_trimmed.fq.gz R1_unpaired.fq.gz R2_trimmed.fq.gz R2_unpaired.fq.gz ILLUMINACLIP:adapters.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36"
 
-align = @step align = `bwa mem -t 8 GRCh38.fa R1_trimmed.fq.gz R2_trimmed.fq.gz | samtools sort -@ 4 -o aligned.bam -`
-index = @step index = `samtools index aligned.bam`
+align = @step align = sh"bwa mem -t 8 GRCh38.fa R1_trimmed.fq.gz R2_trimmed.fq.gz | samtools sort -@ 4 -o aligned.bam -"
+index = @step index = sh"samtools index aligned.bam"
 
-call = @step call = `bcftools mpileup -f GRCh38.fa aligned.bam | bcftools call -mv -Oz -o variants.vcf.gz`
-index_vcf = @step index_vcf = `bcftools index variants.vcf.gz`
-filter_vcf = @step filter_vcf = `bcftools filter -i 'QUAL>=20' variants.vcf.gz -Oz -o filtered.vcf.gz`
+call = @step call = sh"bcftools mpileup -f GRCh38.fa aligned.bam | bcftools call -mv -Oz -o variants.vcf.gz"
+index_vcf = @step index_vcf = sh"bcftools index variants.vcf.gz"
+filter_vcf = @step filter_vcf = sh"bcftools filter -i 'QUAL>=20' variants.vcf.gz -Oz -o filtered.vcf.gz"
 
 pipeline = fastqc >> trim >> align >> index >> call >> index_vcf >> filter_vcf
 run_pipeline(Pipeline(pipeline, name="Variant Calling"))

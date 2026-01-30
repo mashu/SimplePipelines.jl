@@ -4,10 +4,31 @@ export Step, @step, Sequence, Parallel, Pipeline
 export Retry, Fallback, Branch, Timeout
 export Map, Reduce, ForEach
 export run_pipeline, count_steps, steps, print_dag
+export @sh_str
 
 import Base: >>, &, |, ^
 
 using Base.Threads: @spawn, fetch
+
+#==============================================================================#
+# Shell string macro - for commands with shell features (>, |, etc.)
+#==============================================================================#
+
+"""
+    sh"command"
+
+String macro for shell commands using redirection, pipes, or other shell features.
+Julia's backticks don't support `>`, `|`, etc. - this wraps in `sh -c "..."`.
+
+# Examples
+```julia
+@step sort = sh"sort data.txt > sorted.txt"
+@step count = sh"cat file.txt | grep pattern | wc -l"
+```
+"""
+macro sh_str(s)
+    Cmd(["sh", "-c", s])
+end
 
 #==============================================================================#
 # Core Types - Fully parametric for zero-overhead dispatch
@@ -1073,11 +1094,11 @@ function _foreach_glob(pattern::String, regex::Regex)
     
     # Collect all matching files recursively
     matches = Vector{Vector{String}}()
-    _foreach_scan!(matches, base_dir, parts, first_wild, regex, pattern)
+    _foreach_scan!(matches, base_dir, base_dir, parts, first_wild, regex)
     return matches
 end
 
-function _foreach_scan!(matches::Vector{Vector{String}}, dir::String, parts::Vector{<:AbstractString}, idx::Int, regex::Regex, pattern::String)
+function _foreach_scan!(matches::Vector{Vector{String}}, base_dir::String, dir::String, parts::Vector{<:AbstractString}, idx::Int, regex::Regex)
     idx > length(parts) && return
     
     is_last = idx == length(parts)
@@ -1088,9 +1109,8 @@ function _foreach_scan!(matches::Vector{Vector{String}}, dir::String, parts::Vec
         if is_last
             # Final part - must be a file and match regex
             if isfile(full_path)
-                # Build the path as it appears in the pattern (without ./ prefix if pattern doesn't have it)
-                relative_parts = parts[1:idx-1]
-                match_path = isempty(relative_parts) ? entry : joinpath(relative_parts..., entry)
+                # Normalize to forward slashes so pattern "{a}/{b}.csv" matches on Windows too
+                match_path = replace(relpath(full_path, base_dir), "\\" => "/")
                 m = match(regex, match_path)
                 if m !== nothing
                     push!(matches, collect(String, m.captures))
@@ -1099,7 +1119,7 @@ function _foreach_scan!(matches::Vector{Vector{String}}, dir::String, parts::Vec
         else
             # Intermediate part - must be a directory
             if isdir(full_path)
-                _foreach_scan!(matches, full_path, parts, idx + 1, regex, pattern)
+                _foreach_scan!(matches, base_dir, full_path, parts, idx + 1, regex)
             end
         end
     end

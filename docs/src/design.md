@@ -7,8 +7,9 @@
 │                    SimplePipelines.jl                       │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  @step name = `command`     Create a shell step             │
-│  @step name = () -> ...     Create a Julia step             │
+│  @step name = `command`     Shell step                      │
+│  @step name = sh"cmd > f"   Shell with redirection/pipes    │
+│  @step name = () -> ...     Julia step                      │
 │                                                             │
 │  a >> b                     Sequential: a then b            │
 │  a & b                      Parallel: a and b together      │
@@ -39,7 +40,7 @@ All types are **fully parametric**—the compiler knows exact types at every lev
 
 ```
 # User writes:
-`echo a` >> (`echo b` & `echo c`) >> `echo d`
+sh"echo a" >> (sh"echo b" & sh"echo c") >> sh"echo d"
 
 # Becomes:
 Sequence{Tuple{

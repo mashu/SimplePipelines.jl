@@ -8,9 +8,9 @@ using SimplePipelines
 println("═══ Immune Repertoire Pipeline ═══\n")
 
 # Paired-end FASTQ → PEAR (merge) → FASTQ to FASTA → IgBLAST (V/D/J) → Julia filter
-pear       = @step pear       = `echo "[PEAR] Merging paired-end R1.fastq R2.fastq"`
-to_fasta   = @step to_fasta   = `echo "[seqtk] Converting merged.assembled.fastq to FASTA"`
-igblast    = @step igblast    = `echo "[IgBLAST] V/D/J assignment with V.fasta D.fasta J.fasta"`
+pear       = @step pear       = sh"echo '[PEAR] Merging paired-end R1.fastq R2.fastq'"
+to_fasta   = @step to_fasta   = sh"echo '[seqtk] Converting merged.assembled.fastq to FASTA'"
+igblast    = @step igblast    = sh"echo '[IgBLAST] V/D/J assignment with V.fasta D.fasta J.fasta'"
 filter_id  = @step filter_id  = () -> "Filtered by v_identity and j_identity > 90.0"
 
 immune = pear >> to_fasta >> igblast >> filter_id
@@ -31,7 +31,7 @@ end
 # ForEach: discovers files, creates parallel branches - just return Cmd!
 cd(dir) do
     pipeline = ForEach("{donor}_R1.fq.gz") do donor
-        `echo "[Processing $donor]"`  # Simple: just return a Cmd
+        Cmd(["sh", "-c", "echo '[Processing $donor]'"])
     end
     println("Pipeline structure (3 donors discovered):")
     print_dag(pipeline)
@@ -45,12 +45,12 @@ rm(dir; recursive=true)
 println("\n═══ Variant Calling Pipeline ═══\n")
 
 # Paired-end → FastQC → Trimmomatic → BWA (GRCh38) → bcftools call → filter
-fastqc   = @step fastqc   = `echo "[FastQC] R1.fq.gz R2.fq.gz"`
-trim     = @step trim     = `echo "[Trimmomatic PE] Trim adapters and quality"`
-align    = @step align    = `echo "[BWA mem] Align to GRCh38.fa"`
-index    = @step index    = `echo "[samtools index] aligned.bam"`
-call     = @step call     = `echo "[bcftools mpileup/call] variants.vcf.gz"`
-filter_v = @step filter_v = `echo "[bcftools filter] QUAL>=20"`
+fastqc   = @step fastqc   = sh"echo '[FastQC] R1.fq.gz R2.fq.gz'"
+trim     = @step trim     = sh"echo '[Trimmomatic PE] Trim adapters and quality'"
+align    = @step align    = sh"echo '[BWA mem] Align to GRCh38.fa'"
+index    = @step index    = sh"echo '[samtools index] aligned.bam'"
+call     = @step call     = sh"echo '[bcftools mpileup/call] variants.vcf.gz'"
+filter_v = @step filter_v = sh"echo '[bcftools filter] QUAL>=20'"
 
 variant = fastqc >> trim >> align >> index >> call >> filter_v
 println("Pipeline structure:")

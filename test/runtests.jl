@@ -2,6 +2,25 @@ using SimplePipelines
 using Test
 
 @testset "SimplePipelines" begin
+    @testset "sh string macro" begin
+        # sh"..." enables shell features like redirection and pipes
+        cmd = sh"echo hello > /tmp/test.txt"
+        @test cmd isa Cmd
+        @test cmd.exec == ["sh", "-c", "echo hello > /tmp/test.txt"]
+        
+        # Works in pipelines
+        pipeline = sh"echo hello" >> sh"cat"
+        @test pipeline isa Sequence
+        
+        # Actually runs with shell features
+        tmp = "/tmp/simplepipelines_test_sh_$(getpid()).txt"
+        p = Cmd(["sh", "-c", "echo test > $tmp"])
+        step = Step(:test, p)
+        result = SimplePipelines.run_node(step, SimplePipelines.Silent())
+        @test result[1].success
+        @test isfile(tmp) && strip(read(tmp, String)) == "test"
+        rm(tmp, force=true)
+    end
     
     @testset "Step creation" begin
         # From Cmd

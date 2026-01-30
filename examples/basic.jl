@@ -6,9 +6,9 @@ using SimplePipelines
 println("═══ Example 1: Sequential Execution ═══\n")
 
 # Chain shell commands with >>
-pipeline = `echo "Step 1: Downloading"` >> 
-           `echo "Step 2: Processing"` >> 
-           `echo "Step 3: Uploading"`
+pipeline = sh"echo 'Step 1: Downloading'" >> 
+           sh"echo 'Step 2: Processing'" >> 
+           sh"echo 'Step 3: Uploading'"
 
 run_pipeline(pipeline)
 
@@ -16,9 +16,9 @@ run_pipeline(pipeline)
 println("\n═══ Example 2: Named Steps ═══\n")
 
 # Use @step macro for named steps
-download = @step download = `echo "Downloading data..."`
-process  = @step process  = `echo "Processing data..."`
-upload   = @step upload   = `echo "Uploading results..."`
+download = @step download = sh"echo 'Downloading data...'"
+process  = @step process  = sh"echo 'Processing data...'"
+upload   = @step upload   = sh"echo 'Uploading results...'"
 
 pipeline = download >> process >> upload
 run_pipeline(pipeline)
@@ -27,10 +27,10 @@ run_pipeline(pipeline)
 println("\n═══ Example 3: Parallel Execution ═══\n")
 
 # Use & for parallel execution
-task_a = @step task_a = `sleep 0.2`
-task_b = @step task_b = `sleep 0.2`
-task_c = @step task_c = `sleep 0.2`
-merge  = @step merge  = `echo "Merging results"`
+task_a = @step task_a = sh"sleep 0.2"
+task_b = @step task_b = sh"sleep 0.2"
+task_c = @step task_c = sh"sleep 0.2"
+merge  = @step merge  = sh"echo 'Merging results'"
 
 # All tasks run in parallel (~0.2s total, not 0.6s)
 pipeline = (task_a & task_b & task_c) >> merge
@@ -61,10 +61,10 @@ run_pipeline(pipeline)
 println("\n═══ Example 5: Complex DAG ═══\n")
 
 # Diamond pattern: fetch -> (branch_a & branch_b) -> merge
-fetch    = @step fetch    = `echo "Fetching data"`
-branch_a = @step branch_a = `echo "Analysis A"`
-branch_b = @step branch_b = `echo "Analysis B"`
-report   = @step report   = `echo "Generating report"`
+fetch    = @step fetch    = sh"echo 'Fetching data'"
+branch_a = @step branch_a = sh"echo 'Analysis A'"
+branch_b = @step branch_b = sh"echo 'Analysis B'"
+report   = @step report   = sh"echo 'Generating report'"
 
 pipeline = fetch >> (branch_a & branch_b) >> report
 
@@ -79,8 +79,8 @@ run_pipeline(pipeline)
 println("\n═══ Example 6: Fallback ═══\n")
 
 # If primary fails, run fallback
-primary = @step primary = `false`  # Always fails
-fallback = @step fallback = `echo "Fallback succeeded"`
+primary = @step primary = sh"false"  # Always fails
+fallback = @step fallback = sh"echo 'Fallback succeeded'"
 
 pipeline = primary | fallback
 run_pipeline(pipeline)
@@ -108,8 +108,8 @@ println("\n═══ Example 8: Branch (Conditional) ═══\n")
 # Choose path based on condition
 use_fast = Ref(true)
 
-fast_path = @step fast = `echo "Taking fast path"`
-slow_path = @step slow = `echo "Taking slow path"`
+fast_path = @step fast = sh"echo 'Taking fast path'"
+slow_path = @step slow = sh"echo 'Taking slow path'"
 
 pipeline = Branch(() -> use_fast[], fast_path, slow_path)
 
@@ -124,8 +124,8 @@ run_pipeline(pipeline)
 println("\n═══ Example 9: Combined Error Handling ═══\n")
 
 # Robust pipeline: retry primary, fallback if all retries fail
-primary = @step primary = `false`  # Always fails
-backup = @step backup = `echo "Backup method succeeded"`
+primary = @step primary = sh"false"  # Always fails
+backup = @step backup = sh"echo 'Backup method succeeded'"
 
 pipeline = Retry(primary, 2) | backup
 run_pipeline(pipeline)
@@ -134,7 +134,7 @@ run_pipeline(pipeline)
 println("\n═══ Example 10: Dry Run ═══\n")
 
 # Preview what would execute without running
-complex = (`step 1` >> `step 2`) & (`step 3` >> `step 4`) >> `step 5`
+complex = (sh"step 1" >> sh"step 2") & (sh"step 3" >> sh"step 4") >> sh"step 5"
 
 println("Pipeline structure (dry run):")
 run_pipeline(complex, dry_run=true)
