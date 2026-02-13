@@ -440,6 +440,58 @@ clear_state!()
             clear_state!()
         end
     end
+
+    @testset "StateFormat and state persistence" begin
+        SF = SimplePipelines.StateFormat
+        L = SF.STATE_LAYOUT
+
+        # Layout helpers
+        @test SF.layout_file_size(L) == 16 + L.max_hashes * 8
+        @test SF.layout_validate_count(L, UInt64(0))
+        @test SF.layout_validate_count(L, UInt64(L.max_hashes))
+        @test !SF.layout_validate_count(L, UInt64(L.max_hashes + 1))
+
+        # Header read/write roundtrip
+        io = IOBuffer()
+        SF.layout_write_header(io, L, UInt64(42))
+        seekstart(io)
+        magic_ok, count = SF.layout_read_header(io, L)
+        @test magic_ok
+        @test count == UInt64(42)
+
+        # Invalid header: wrong magic
+        bad_io = IOBuffer(vcat(b"BADmagic", zeros(UInt8, 8)))
+        seekstart(bad_io)
+        magic_ok2, count2 = SF.layout_read_header(bad_io, L)
+        @test !magic_ok2
+        @test count2 == UInt64(0)
+
+        # save_state! / load_state roundtrip in temp dir (avoid touching default .pipeline_state)
+        dir = mktempdir()
+        old_path = SimplePipelines.STATE_FILE[]
+        try
+            SimplePipelines.STATE_FILE[] = joinpath(dir, ".pipeline_state")
+            SimplePipelines.save_state!(Set(UInt64[1, 2, 3]))
+            loaded = SimplePipelines.load_state()
+            @test loaded == Set(UInt64[1, 2, 3])
+            @test length(loaded) == 3
+        finally
+            SimplePipelines.STATE_FILE[] = old_path
+            rm(dir; recursive=true)
+        end
+
+        # load_state with missing file returns empty
+        dir2 = mktempdir()
+        old_path2 = SimplePipelines.STATE_FILE[]
+        try
+            SimplePipelines.STATE_FILE[] = joinpath(dir2, "nonexistent_state")
+            @test !isfile(SimplePipelines.STATE_FILE[])
+            @test isempty(SimplePipelines.load_state())
+        finally
+            SimplePipelines.STATE_FILE[] = old_path2
+            rm(dir2; recursive=true)
+        end
+    end
     
     @testset "Base.show" begin
         a = @step a = `echo a`
@@ -948,8 +1000,20 @@ clear_state!()
         @test_throws ErrorException ForEach("no_wildcard.txt") do
             Step(:x, `echo`)
         end
-        
-        rm(dir; recursive=true)
+
+        # ForEach block must return a node, not nothing
+        dir = mktempdir()
+        cd(dir) do
+            write("a.txt", "a")
+            @test_throws ErrorException ForEach("{x}.txt") do x
+                # block returns nothing (no return value)
+            end
+        end
+        try
+            rm(dir; recursive=true)
+        catch
+            # temp dir may already be cleaned up
+        end
     end
     
     @testset "Operator composability" begin

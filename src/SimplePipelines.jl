@@ -134,6 +134,7 @@ is_gensym(s::Symbol) = startswith(string(s), "##")
 step_label(s::Step) = is_gensym(s.name) ? work_label(s.work) : string(s.name)
 work_label(c::Cmd) = length(c.exec) ≤ 3 ? join(c.exec, " ") : join(c.exec[1:3], " ") * "…"
 work_label(f::Function) = string(nameof(f))
+work_label(::Nothing) = "(no work)"
 work_label(x) = repr(x)
 
 """
@@ -566,6 +567,10 @@ function execute(step::Step{Cmd})
         isfile(out_path) || return StepResult(step, false, time() - start, "Output not created: $out_path")
     end
     StepResult(step, true, time() - start, String(take!(buf)))
+end
+
+function execute(step::Step{Nothing})
+    StepResult(step, false, 0.0, "Step has no work (ForEach block returned nothing). The block must return a Step or node, e.g. @step name = sh\"cmd\".")
 end
 
 function execute(step::Step{F}) where {F<:Function}
@@ -1076,12 +1081,14 @@ as_node(x) = Step(x)
 
 """
     ForEach(pattern) do wildcards...
-        # build pipeline
+        # return a Step or node
     end
     fe(pattern) do wildcards... end   # short alias
 
 Discover files matching pattern with `{name}` placeholders, create parallel branches.
-Use `fe("tsv/filtered-{donor}.tsv.gz") do donor ... end` as a shortcut.
+The block is run once per match when the pipeline is built (not when you call `run(pipeline)`).
+It must return a Step or other node (e.g. `@step name = sh\"cmd\"`); do not run commands inside the block.
+Use `fe("tsv/filtered-{donor}.tsv.gz") do donor; @step process = `echo \$donor`; end` as a shortcut.
 """
 function ForEach(f::Function, pattern::String)
     wildcard_rx = r"\{(\w+)\}"
@@ -1107,6 +1114,7 @@ function ForEach(f::Function, pattern::String)
     nodes = AbstractNode[]
     for captured in matches
         result = length(captured) == 1 ? f(captured[1]) : f(captured...)
+        result === nothing && error("ForEach block must return a Step or pipeline node (e.g. @step ... = sh\"...\" or `cmd`), not nothing. Add a return value.")
         push!(nodes, as_node(result))
     end
     

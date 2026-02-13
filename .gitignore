@@ -1,1 +1,10 @@
 docs/build/*
+*.csv
+*.txt
+*.gz
+*.tar
+Manifest.toml
+*.cov
+*.info
+*.json
+.pipeline_state
