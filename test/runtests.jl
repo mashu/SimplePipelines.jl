@@ -915,6 +915,23 @@ clear_state!()
             @test all(r -> r.success, results)
         end
         
+        # Directory prefix before wildcard (regex must match path relative to base, not full pattern)
+        mkdir(joinpath(dir, "tsv"))
+        touch(joinpath(dir, "tsv", "filtered-donor1.tsv.gz"))
+        touch(joinpath(dir, "tsv", "filtered-donor2.tsv.gz"))
+        cd(dir) do
+            pipeline = ForEach("tsv/filtered-{donor}.tsv.gz") do donor
+                Step(Symbol("process_", donor), `echo $donor`)
+            end
+            @test pipeline isa Parallel
+            @test count_steps(pipeline) == 2
+            results = run(pipeline, verbose=false, force=true)
+            @test all(r -> r.success, results)
+            outputs = sort([r.output for r in results])
+            @test "donor1\n" in outputs
+            @test "donor2\n" in outputs
+        end
+
         # Error on no matches
         cd(dir) do
             @test_throws ErrorException ForEach("{x}_nonexistent.xyz") do x

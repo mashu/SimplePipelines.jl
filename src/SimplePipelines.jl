@@ -951,9 +951,14 @@ function ForEach(f::Function, pattern::String)
     wildcard_rx = r"\{(\w+)\}"
     contains(pattern, wildcard_rx) || error("ForEach pattern must contain {wildcard}: $pattern")
     
-    # Build file-matching regex
+    # Build file-matching regex from the pattern suffix (from first wildcard to end).
+    # find_matches compares against paths relative to the directory before the wildcard,
+    # so the regex must not include that prefix.
+    parts = split(pattern, "/")
+    first_wild = findfirst(p -> contains(p, "{"), parts)
+    pattern_suffix = join(parts[first_wild:end], "/")
     placeholder = "\x00WILD\x00"
-    temp = replace(pattern, wildcard_rx => placeholder)
+    temp = replace(pattern_suffix, wildcard_rx => placeholder)
     for c in ".+^*?\$()[]|"
         temp = replace(temp, string(c) => "\\" * c)
     end
