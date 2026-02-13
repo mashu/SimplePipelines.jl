@@ -10,6 +10,8 @@ SimplePipelines
 
 ```@docs
 SimplePipelines.AbstractNode
+SimplePipelines.AbstractStepResult
+StepResult
 Step
 Sequence
 Parallel
