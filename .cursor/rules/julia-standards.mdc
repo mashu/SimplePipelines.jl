@@ -10,7 +10,7 @@ Follow these when editing Julia code.
 
 ## No try blocks
 
-Do **not** use `try`, `try`/`catch`, or `try`/`finally` anywhere. Handle errors via return values, `Union` types, or let them propagate. The codebase has a single documented exception boundary, `run_safely(f)`, which converts thrown errors to `(Bool, String)` for step execution; do not add any other try/catch. For concurrency, use batched parallelism (e.g. process in chunks) instead of try/finally for resource release.
+Do **not** use `try`, `try`/`catch`, or `try`/`finally` anywhere. Handle errors via return values, `Union` types, or let them propagate. The codebase has a single documented exception boundary, `run_safely(f)`, which returns `RunOutcome{T}` (success + value or failure + error string); do not add any other try/catch. For concurrency, use batched parallelism (e.g. process in chunks) instead of try/finally for resource release.
 
 ```julia
 # ❌ BAD

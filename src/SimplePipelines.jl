@@ -36,6 +36,7 @@ See also: [`Step`](@ref), [`Pipeline`](@ref), [`run`](@ref), [`is_fresh`](@ref).
 module SimplePipelines
 
 export Step, @step, Sequence, Parallel, Pipeline
+export StepResult, AbstractStepResult
 export Retry, Fallback, Branch, Timeout, Force
 export Map, Reduce, ForEach, fe
 export count_steps, steps, print_dag, is_fresh, clear_state!
@@ -406,12 +407,27 @@ step_outputs_expr(x) = x
 # Result Type
 #==============================================================================#
 
-struct StepResult{S<:Step}
+"""Supertype of all step results; use for `Vector{AbstractStepResult}` (e.g. return of `run`)."""
+abstract type AbstractStepResult end
+
+"""
+    StepResult(step, success, duration, output [; value])
+
+Result of running one step. Type is `StepResult{S, V}`: `S` is the step type, `V` is the type of
+`value` (e.g. `Nothing` for command steps, `DataFrame` when the step returns one).
+Use `results[i].value` for the actual return value; `output` is a string for display/logging.
+"""
+struct StepResult{S<:Step, V} <: AbstractStepResult
     step::S
     success::Bool
     duration::Float64
     output::String
+    value::V
+    StepResult{S, Nothing}(step::S, success::Bool, duration::Float64, output::String) where S<:Step = new{S, Nothing}(step, success, duration, output, nothing)
+    StepResult{S, V}(step::S, success::Bool, duration::Float64, output::String, value::V) where {S<:Step, V} = new{S, V}(step, success, duration, output, value)
 end
+StepResult(step::S, success::Bool, duration::Float64, output::String) where S<:Step = StepResult{S, Nothing}(step, success, duration, output)
+StepResult(step::S, success::Bool, duration::Float64, output::String, value::V) where {S<:Step, V} = StepResult{S, V}(step, success, duration, output, value)
 
 #==============================================================================#
 # State Persistence (Make-like freshness)
@@ -501,18 +517,18 @@ end
 # Bounded concurrency: run(; jobs=n). 0 = unbounded. Set at run time, not on node constructors.
 const MAX_PARALLEL = Ref{Int}(8)
 
-# Base.run(::Cmd) and user f() throw on failure; no check-based API. Sole exception boundary (see .cursor/rules: no other try/catch).
-function run_safely(f)::Tuple{Bool,String}
-    result = Ref{String}("")
-    ok = Ref{Bool}(false)
+"""Type-stable outcome of running a thunk: success and value, or failure and error string. Sole exception boundary (see .cursor/rules)."""
+struct RunOutcome{T}
+    ok::Bool
+    value::T
+end
+
+function run_safely(f)::RunOutcome
     try
-        out = f()
-        result[] = out === nothing ? "" : string(out)
-        ok[] = true
+        RunOutcome(true, f())
     catch e
-        result[] = sprint(showerror, e)
+        RunOutcome(false, sprint(showerror, e))
     end
-    (ok[], result[])
 end
 
 function execute(step::Step{Cmd})
@@ -521,9 +537,9 @@ function execute(step::Step{Cmd})
         isfile(inp) || return StepResult(step, false, time() - start, "Missing input file: $inp")
     end
     buf = IOBuffer()
-    ok, err = run_safely() do; Base.run(Base.pipeline(step.work, stdout=buf, stderr=buf)); end
-    if !ok
-        return StepResult(step, false, time() - start, "Error: $err\n$(String(take!(buf)))")
+    outcome = run_safely() do; Base.run(Base.pipeline(step.work, stdout=buf, stderr=buf)); end
+    if !outcome.ok
+        return StepResult(step, false, time() - start, "Error: $(outcome.value)\n$(String(take!(buf)))")
     end
     for out_path in step.outputs
         isfile(out_path) || return StepResult(step, false, time() - start, "Output not created: $out_path")
@@ -540,17 +556,19 @@ function execute(step::Step{F}) where {F<:Function}
     for inp in step.inputs
         isfile(inp) || return StepResult(step, false, time() - start, "Missing input file: $inp")
     end
-    ok, output = run_safely() do
+    outcome = run_safely() do
         r = step.work()
-        r === nothing ? "" : string(r)
+        r === nothing ? "" : r
     end
-    if !ok
-        return StepResult(step, false, time() - start, "Error: $output")
+    if !outcome.ok
+        return StepResult(step, false, time() - start, "Error: $(outcome.value)")
     end
     for out_path in step.outputs
         isfile(out_path) || return StepResult(step, false, time() - start, "Output not created: $out_path")
     end
-    StepResult(step, true, time() - start, output)
+    val = outcome.value
+    out_str = val isa String ? val : (s = string(val); length(s) > 200 ? s[1:200] * "…" : s)
+    StepResult(step, true, time() - start, out_str, val)
 end
 
 #==============================================================================#
@@ -573,8 +591,8 @@ function log_skip(::Verbose, s::Step)
     printstyled(step_label(s), "\n", color=:light_black)
 end
 
-log_result(::Silent, ::StepResult) = nothing
-function log_result(::Verbose, r::StepResult)
+log_result(::Silent, ::AbstractStepResult) = nothing
+function log_result(::Verbose, r::AbstractStepResult)
     if r.success
         printstyled("  ✓ ", color=:green)
         println("Completed in $(round(r.duration, digits=2))s")
@@ -590,6 +608,15 @@ log_parallel(::Silent, ::Int) = nothing
 function log_parallel(::Verbose, n::Int)
     printstyled("⊕ ", color=:magenta)
     println("Running $n branches in parallel...")
+end
+
+log_progress(::Silent, ::Int, ::Int) = nothing
+function log_progress(::Verbose, done::Int, total::Int)
+    left = total - done
+    printstyled("  → ", color=:light_black)
+    printstyled("$done/$total", color=:cyan)
+    printstyled(" done", color=:light_black)
+    println(left > 0 ? " ($left left)" : "")
 end
 
 log_retry(::Silent, ::Int, ::Int) = nothing
@@ -628,26 +655,14 @@ function log_reduce(::Verbose, n::Symbol)
     println("Reducing: $n")
 end
 
-# Step wrapping another node (e.g. @step name = a >> b): delegate to inner node only when work is AbstractNode
+# Step wrapping another node (e.g. @step name = a >> b): delegate when work is AbstractNode
 function run_node(step::Step{N}, v, forced::Bool=false) where {N<:AbstractNode}
     log_start(v, step)
     run_node(step.work, v, forced)
 end
 
-# Explicit leaf execution for Step{Cmd} (must not dispatch to Step{N} where N<:AbstractNode)
-function run_node(step::Step{Cmd}, v, forced::Bool=false)
-    if !forced && is_fresh(step)
-        log_skip(v, step)
-        return [StepResult(step, true, 0.0, "up to date (not re-run)")]
-    end
-    log_start(v, step)
-    result = execute(step)
-    log_result(v, result)
-    result.success && mark_complete!(step)
-    [result]
-end
-
-function run_node(step::Step, v, forced::Bool=false)
+# Leaf step execution (Cmd, Function, Nothing): single path, dispatch in execute(step)
+function run_node(step::Step{F}, v, forced::Bool=false) where F
     if !forced && is_fresh(step)
         log_skip(v, step)
         return [StepResult(step, true, 0.0, "up to date (not re-run)")]
@@ -660,7 +675,7 @@ function run_node(step::Step, v, forced::Bool=false)
 end
 
 function run_node(seq::Sequence, v, forced::Bool)
-    results = StepResult[]
+    results = AbstractStepResult[]
     for node in seq.nodes
         node_results = run_node(node, v, forced)
         append!(results, node_results)
@@ -670,14 +685,15 @@ function run_node(seq::Sequence, v, forced::Bool)
 end
 
 function run_node(par::Parallel, v, forced::Bool)
-    log_parallel(v, length(par.nodes))
+    n = length(par.nodes)
+    log_parallel(v, n)
     max_p = MAX_PARALLEL[]
-    if max_p > 0
-        # Run all branches in rounds of max_p; each round waits before starting the next (no skipping)
-        results = StepResult[]
-        for i in 1:max_p:length(par.nodes)
+    if max_p > 0 && n > 0
+        results = AbstractStepResult[]
+        for i in 1:max_p:n
             chunk = par.nodes[i:min(i + max_p - 1, end)]
             append!(results, reduce(vcat, fetch.([@spawn run_node(node, v, forced) for node in chunk])))
+            log_progress(v, length(results), n)
         end
         results
     else
@@ -686,7 +702,7 @@ function run_node(par::Parallel, v, forced::Bool)
 end
 
 function run_node(r::Retry, v, forced::Bool)
-    local results::Vector{StepResult}
+    local results::Vector{AbstractStepResult}
     for attempt in 1:r.max_attempts
         log_retry(v, attempt, r.max_attempts)
         results = run_node(r.node, v, forced)
@@ -711,7 +727,7 @@ end
 
 function run_node(t::Timeout, v, forced::Bool)
     log_timeout(v, t.seconds)
-    ch = Channel{Vector{StepResult}}(1)
+    ch = Channel{Vector{AbstractStepResult}}(1)
     @async put!(ch, run_node(t.node, v, forced))
     
     deadline = time() + t.seconds
@@ -730,21 +746,22 @@ end
 function run_node(r::Reduce, v, forced::Bool)
     start = time()
     results = run_node(r.node, v, forced)
-    outputs = [res.output for res in results if res.success]
+    # Use .value when step returned a real value (e.g. DataFrame); else .output (string)
+    outputs = [res.value !== nothing ? res.value : res.output for res in results if res.success]
     
     if length(outputs) < length(results)
         return vcat(results, [StepResult(Step(r.name, r.reducer), false, time() - start, "Reduce aborted: upstream failed")])
     end
     
     log_reduce(v, r.name)
-    ok, reduced = run_safely() do
+    outcome = run_safely() do
         result = r.reducer(outputs)
         result === nothing ? "" : string(result)
     end
-    if !ok
-        return vcat(results, [StepResult(Step(r.name, r.reducer), false, time() - start, "Reduce error: $reduced")])
+    if !outcome.ok
+        return vcat(results, [StepResult(Step(r.name, r.reducer), false, time() - start, "Reduce error: $(outcome.value)")])
     end
-    vcat(results, [StepResult(Step(r.name, r.reducer), true, time() - start, reduced)])
+    vcat(results, [StepResult(Step(r.name, r.reducer), true, time() - start, outcome.value)])
 end
 
 # Cycle check: does node contain needle? (ForEach/Map expansion only)
@@ -779,14 +796,15 @@ function run_node(fe::ForEach, v, forced::Bool)
         contains_node(fe, node) && error("Pipeline cycle: ForEach block returned a node containing this ForEach.")
         push!(nodes, node)
     end
-    log_parallel(v, length(nodes))
+    n = length(nodes)
+    log_parallel(v, n)
     max_p = MAX_PARALLEL[]
-    if max_p > 0
-        # Run all branches in rounds of max_p; each round waits before the next (no skipping)
-        results = StepResult[]
-        for i in 1:max_p:length(nodes)
+    if max_p > 0 && n > 0
+        results = AbstractStepResult[]
+        for i in 1:max_p:n
             chunk = nodes[i:min(i + max_p - 1, end)]
-            append!(results, reduce(vcat, fetch.([@spawn run_node(n, v, forced) for n in chunk])))
+            append!(results, reduce(vcat, fetch.([@spawn run_node(node, v, forced) for node in chunk])))
+            log_progress(v, length(results), n)
         end
         results
     else
@@ -801,14 +819,15 @@ function run_node(m::Map, v, forced::Bool)
         contains_node(m, node) && error("Pipeline cycle: Map block returned a node containing this Map.")
         push!(nodes, node)
     end
-    log_parallel(v, length(nodes))
+    n = length(nodes)
+    log_parallel(v, n)
     max_p = MAX_PARALLEL[]
-    if max_p > 0
-        # Run all branches in rounds of max_p; each round waits before the next (no skipping)
-        results = StepResult[]
-        for i in 1:max_p:length(nodes)
+    if max_p > 0 && n > 0
+        results = AbstractStepResult[]
+        for i in 1:max_p:n
             chunk = nodes[i:min(i + max_p - 1, end)]
-            append!(results, reduce(vcat, fetch.([@spawn run_node(n, v, forced) for n in chunk])))
+            append!(results, reduce(vcat, fetch.([@spawn run_node(node, v, forced) for node in chunk])))
+            log_progress(v, length(results), n)
         end
         results
     else
@@ -840,8 +859,8 @@ Pipeline(node::AbstractNode; name::String="pipeline") = Pipeline(node, name)
 Pipeline(nodes::Vararg{AbstractNode}; name::String="pipeline") = Pipeline(Sequence(nodes), name)
 
 """
-    run(p::Pipeline; verbose=true, dry_run=false, force=false, jobs=8) -> Vector{StepResult}
-    run(node::AbstractNode; kwargs...) -> Vector{StepResult}
+    run(p::Pipeline; verbose=true, dry_run=false, force=false, jobs=8) -> Vector{AbstractStepResult}
+    run(node::AbstractNode; kwargs...) -> Vector{AbstractStepResult}
 
 Execute a pipeline or node, returning results for each step.
 
@@ -882,7 +901,7 @@ function run_pipeline(p::Pipeline, verbose::Bool, dry_run::Bool, force::Bool)
 
     if dry_run
         verbose && print_dag(p.root)
-        return StepResult[]
+        return AbstractStepResult[]
     end
 
     run_depth[] += 1
@@ -1071,12 +1090,16 @@ count_steps(::Map) = 0      # lazy: nodes built only when run
 # Display
 #==============================================================================#
 
-# Custom show so StepResult doesn't print the ugly closure type (e.g. Step{var"#20#21"{String}})
-function Base.show(io::IO, r::StepResult)
+# Custom show so StepResult doesn't print the ugly closure type
+function Base.show(io::IO, r::StepResult{S, V}) where {S, V}
     print(io, "StepResult(")
     show(io, r.step)
     print(io, ", ", r.success, ", ", round(r.duration; digits=2), ", ")
-    show(io, r.output)
+    if r.value !== nothing && !(r.value isa String)
+        print(io, "<", summary(r.value), ">")
+    else
+        show(io, r.output)
+    end
     print(io, ")")
 end
 

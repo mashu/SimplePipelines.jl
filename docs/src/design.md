@@ -70,7 +70,7 @@ run_node(root, v, force)  ─── dispatch on node type
        └─► Retry/Fallback/Branch/Timeout/Force/Reduce: recurse on inner node(s)
        │
        ▼
-Vector{StepResult}
+Vector{AbstractStepResult}
 ```
 
 ## Key Design Decisions
