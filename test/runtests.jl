@@ -288,12 +288,12 @@ clear_state!()
         @test results[1].success
         @test counter[] == 1
         
-        # Function returning nothing
+        # Function returning nothing (output stored as-is, not coerced to "")
         f_nothing = () -> nothing
         s_nothing = Step(:nothing_func, f_nothing)
         results_nothing = run(s_nothing, verbose=false, force=true)
         @test results_nothing[1].success
-        @test results_nothing[1].output == ""
+        @test results_nothing[1].output === nothing
     end
     
     @testset "Verbose execution" begin
@@ -888,7 +888,7 @@ clear_state!()
         r2 = Reduce(length, a & b)
         results2 = run(r2, verbose=false)
         @test results2[end].success
-        @test results2[end].output == "2"  # 2 outputs
+        @test results2[end].output == 2  # 2 outputs (reducer return value stored as-is)
         
         # Reduce in pipeline
         fetch = @step fetch = `echo "data"`

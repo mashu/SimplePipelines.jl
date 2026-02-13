@@ -583,8 +583,7 @@ function execute(step::Step{F}) where {F<:Function}
     end
     # When inputs are declared, pass them to the function; otherwise call with no args (thunk).
     outcome = run_safely() do
-        r = isempty(step.inputs) ? step.work() : step.work(step.inputs...)
-        r === nothing ? "" : r
+        isempty(step.inputs) ? step.work() : step.work(step.inputs...)
     end
     if !outcome.ok
         return StepResult(step, false, time() - start, step.inputs, "Error: $(outcome.value)")
@@ -790,8 +789,7 @@ function run_node(r::Reduce, v, forced::Bool)
 
     log_reduce(v, r.name)
     outcome = run_safely() do
-        result = r.reducer(outputs)
-        result === nothing ? "" : string(result)
+        r.reducer(outputs)
     end
     if !outcome.ok
         return vcat(results, [StepResult(reduce_step, false, time() - start, reduce_step.inputs, "Reduce error: $(outcome.value)")])
