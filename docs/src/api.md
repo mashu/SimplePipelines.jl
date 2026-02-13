@@ -56,6 +56,8 @@ sh
 
 ## Execution
 
+Execution is recursive: `run(pipeline)` calls `run_node(root, ...)` which dispatches on node type and recurses (Sequence in order, Parallel/ForEach/Map with optional `@spawn`).
+
 ```@docs
 run
 ```

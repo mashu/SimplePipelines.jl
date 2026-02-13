@@ -847,21 +847,23 @@ clear_state!()
     end
     
     @testset "Map" begin
-        # Basic map over items
+        # Map is lazy: block runs only when pipeline runs, not at construction
         items = ["a", "b", "c"]
         parallel = Map(items) do x
             Step(Symbol(x), `echo $x`)
         end
-        @test parallel isa Parallel
-        @test count_steps(parallel) == 3
+        @test parallel isa Map
+        @test length(parallel.items) == 3
+        @test count_steps(parallel) == 0  # lazy: nodes not expanded until run
         
-        # Single item returns single node
+        # Single item still returns Map (one item), runs as one node
         single = Map(["only"]) do x
             Step(:only, `echo $x`)
         end
-        @test single isa Step
+        @test single isa Map
+        @test length(single.items) == 1
         
-        # Execute map
+        # Execute map: block runs here, then steps run
         results = run(parallel, verbose=false)
         @test length(results) == 3
         @test all(r -> r.success, results)
@@ -917,15 +919,15 @@ clear_state!()
         touch(joinpath(dir, "donor2_R1.fq.gz"))
         touch(joinpath(dir, "donor3_R1.fq.gz"))
         
-        # Single wildcard - creates parallel branches
+        # ForEach is lazy: block runs only when run(pipeline) is called
         cd(dir) do
             pipeline = ForEach("{sample}_R1.fq.gz") do sample
                 Step(Symbol("process_", sample), `echo $sample`)
             end
-            @test pipeline isa Parallel
-            @test count_steps(pipeline) == 3
-            
-            # Execute and verify
+            @test pipeline isa ForEach
+            @test count_steps(pipeline) == 0  # lazy: not expanded until run
+
+            # Execute and verify (block runs here)
             results = run(pipeline, verbose=false)
             @test length(results) == 3
             @test all(r -> r.success, results)
@@ -934,45 +936,45 @@ clear_state!()
             @test "donor2\n" in outputs
             @test "donor3\n" in outputs
         end
-        
-        # Auto-lift Cmd - simpler syntax!
+
+        # Auto-lift Cmd
         cd(dir) do
             pipeline = ForEach("{sample}_R1.fq.gz") do sample
-                `echo $sample`  # Just return Cmd, auto-wrapped to Step
+                `echo $sample`
             end
-            @test pipeline isa Parallel
+            @test pipeline isa ForEach
             results = run(pipeline, verbose=false)
             @test all(r -> r.success, results)
         end
-        
-        # Single file match returns single node (not Parallel)
+
+        # Single file match: still returns ForEach node (lazy)
         touch(joinpath(dir, "only_one.txt"))
         cd(dir) do
             node = ForEach("{name}_one.txt") do name
                 Step(Symbol(name), `echo $name`)
             end
-            @test node isa Step
+            @test node isa ForEach
+            results = run(node, verbose=false)
+            @test length(results) == 1 && results[1].success
         end
-        
+
         # Nested directories with multiple wildcards
         mkdir(joinpath(dir, "projectA"))
         mkdir(joinpath(dir, "projectB"))
         touch(joinpath(dir, "projectA", "sample1.csv"))
         touch(joinpath(dir, "projectA", "sample2.csv"))
         touch(joinpath(dir, "projectB", "sample3.csv"))
-        
+
         cd(dir) do
             pipeline = ForEach("{project}/{sample}.csv") do project, sample
                 Step(Symbol(project, "_", sample), `echo $project $sample`)
             end
-            @test pipeline isa Parallel
-            @test count_steps(pipeline) == 3
-            
+            @test pipeline isa ForEach
             results = run(pipeline, verbose=false)
             @test all(r -> r.success, results)
         end
-        
-        # Directory prefix before wildcard (regex must match path relative to base, not full pattern)
+
+        # Directory prefix before wildcard
         mkdir(joinpath(dir, "tsv"))
         touch(joinpath(dir, "tsv", "filtered-donor1.tsv.gz"))
         touch(joinpath(dir, "tsv", "filtered-donor2.tsv.gz"))
@@ -980,8 +982,7 @@ clear_state!()
             pipeline = ForEach("tsv/filtered-{donor}.tsv.gz") do donor
                 Step(Symbol("process_", donor), `echo $donor`)
             end
-            @test pipeline isa Parallel
-            @test count_steps(pipeline) == 2
+            @test pipeline isa ForEach
             results = run(pipeline, verbose=false, force=true)
             @test all(r -> r.success, results)
             outputs = sort([r.output for r in results])
@@ -989,11 +990,12 @@ clear_state!()
             @test "donor2\n" in outputs
         end
 
-        # Error on no matches
+        # Error on no matches when run (lazy: no match check at construction)
         cd(dir) do
-            @test_throws ErrorException ForEach("{x}_nonexistent.xyz") do x
+            pipeline = ForEach("{x}_nonexistent.xyz") do x
                 Step(:x, `echo`)
             end
+            @test_throws ErrorException run(pipeline, verbose=false)
         end
         
         # Error on pattern without wildcard
@@ -1001,18 +1003,18 @@ clear_state!()
             Step(:x, `echo`)
         end
 
-        # ForEach block must return a node, not nothing
+        # ForEach block must return a node, not nothing (error when run)
         dir = mktempdir()
-        cd(dir) do
-            write("a.txt", "a")
-            @test_throws ErrorException ForEach("{x}.txt") do x
-                # block returns nothing (no return value)
-            end
-        end
         try
-            rm(dir; recursive=true)
-        catch
-            # temp dir may already be cleaned up
+            cd(dir) do
+                write("a.txt", "a")
+                pipeline = ForEach("{x}.txt") do x
+                    # block returns nothing
+                end
+                @test_throws ErrorException run(pipeline, verbose=false)
+            end
+        finally
+            try; rm(dir; recursive=true); catch; end
         end
     end
     

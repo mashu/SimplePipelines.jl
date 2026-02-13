@@ -2,6 +2,7 @@
     SimplePipelines
 
 Minimal, type-stable DAG pipelines for Julia with Make-like incremental builds.
+Execution is recursive: `run_node` dispatches on node type and recurses (Sequence in order, Parallel with `@spawn`, ForEach/Map expand then run).
 
 # Quick Start
 ```julia
@@ -24,12 +25,13 @@ run(download >> process)
 ```
 
 # Features
-- **Make-like freshness**: Steps skip if outputs are newer than inputs
-- **State persistence**: Tracks completed steps across runs
-- **Colored output**: Visual tree structure with status indicators
-- **Force execution**: `Force(step)` or `run(p, force=true)`
+- **Recursive execution**: Dispatch on node type; Sequence runs in order, Parallel/ForEach/Map run branches with optional parallelism.
+- **Make-like freshness**: Steps skip if outputs are newer than inputs.
+- **State persistence**: Tracks completed steps across runs.
+- **Colored output**: Visual tree structure with status indicators.
+- **Force execution**: `Force(step)` or `run(p, force=true)`.
 
-See also: [`Step`](@ref), [`Pipeline`](@ref), [`run`](@ref), [`is_fresh`](@ref)
+See also: [`Step`](@ref), [`Pipeline`](@ref), [`run`](@ref), [`is_fresh`](@ref).
 """
 module SimplePipelines
 
@@ -42,11 +44,11 @@ export @sh_str, sh
 import Base: >>, &, |, ^
 
 using Base.Threads: @spawn, fetch
-using Mmap
 
 include("StateFormat.jl")
 using .StateFormat: StateFileLayout, STATE_LAYOUT,
-    layout_file_size, layout_read_header, layout_write_header, layout_validate_count
+    layout_file_size, layout_read_header, layout_write_header, layout_validate_count,
+    state_init, state_read, state_write, state_append
 
 #==============================================================================#
 # Shell string macro
@@ -78,9 +80,13 @@ sh(s::String) = Cmd(["sh", "-c", s])
 """
     AbstractNode
 
-Abstract supertype of all pipeline nodes (Step, Sequence, Parallel, Retry, Fallback, Branch, Timeout, Force, Reduce).
+Abstract supertype of all pipeline nodes (Step, Sequence, Parallel, Retry, Fallback, Branch, Timeout, Force, Reduce, Map, ForEach).
+Constructors only build the struct; execution is via the functor: call `(node)(v, forced)` which dispatches to `run_node(node, v, forced)`.
 """
 abstract type AbstractNode end
+
+# Functor: execution is dispatch on the node type, not if-checks
+(node::AbstractNode)(v, forced::Bool=false) = run_node(node, v, forced)
 
 """
     Step{F} <: AbstractNode
@@ -265,6 +271,18 @@ end
 Reduce(f::Function, node::AbstractNode; name::Symbol=:reduce) = Reduce(f, node, name)
 Reduce(node::AbstractNode; name::Symbol=:reduce) = f -> Reduce(f, node; name=name)
 
+"""Lazy node: discovers files and runs the block once per match when the pipeline runs (not at construction)."""
+struct ForEach{F} <: AbstractNode
+    f::F
+    pattern::String
+end
+
+"""Lazy node: applies `f` to each item when the pipeline runs (not at construction)."""
+struct Map{F, T} <: AbstractNode
+    f::F
+    items::Vector{T}
+end
+
 #==============================================================================#
 # Composition Operators
 #==============================================================================#
@@ -328,7 +346,10 @@ Reduce(node::AbstractNode; name::Symbol=:reduce) = f -> Reduce(f, node; name=nam
     @step name(inputs => outputs) = work
     @step work
 
-Create a named step with optional file dependencies.
+Create a named step with optional file dependencies. Steps are **lazy**: if the right-hand side
+is a function call (e.g. `println(x)` or `run_cmd(path)`), it is wrapped in a thunk and runs only
+when the pipeline is run via `run(pipeline)`. Building the pipeline or inspecting it (e.g. `print_dag`)
+does not execute step work. Shell commands (backtick/`sh"..."`) are also only executed when the step runs.
 
 # Examples
 ```julia
@@ -346,6 +367,9 @@ macro step(expr)
     step_expr(expr)
 end
 
+# Lazy step work: RHS that is a :call expr is wrapped in a thunk so it runs only when the step runs.
+step_work_expr(rhs) = (rhs isa Expr && rhs.head === :call) ? :(() -> $(esc(rhs))) : esc(rhs)
+
 step_expr(expr::Symbol) = :(Step($(esc(expr))))
 step_expr(expr) = :(Step($(esc(expr))))
 
@@ -355,23 +379,23 @@ function step_expr(expr::Expr)
     step_lhs(lhs, rhs)
 end
 
-step_lhs(lhs::Symbol, rhs) = :(Step($(QuoteNode(lhs)), $(esc(rhs))))
+step_lhs(lhs::Symbol, rhs) = :(Step($(QuoteNode(lhs)), $(step_work_expr(rhs))))
 
 function step_lhs(lhs::Expr, rhs)
     lhs.head === :call || return :(Step($(esc(Expr(:(=), lhs, rhs)))))
     name = QuoteNode(lhs.args[1])
-    length(lhs.args) >= 2 || return :(Step($name, $(esc(rhs))))
+    length(lhs.args) >= 2 || return :(Step($name, $(step_work_expr(rhs))))
     deps = lhs.args[2]
     step_deps(name, deps, rhs)
 end
 
-step_deps(name, deps, rhs) = :(Step($name, $(esc(rhs))))
+step_deps(name, deps, rhs) = :(Step($name, $(step_work_expr(rhs))))
 
 function step_deps(name, deps::Expr, rhs)
-    deps.head === :call && length(deps.args) >= 3 && deps.args[1] === :(=>) || return :(Step($name, $(esc(rhs))))
+    deps.head === :call && length(deps.args) >= 3 && deps.args[1] === :(=>) || return :(Step($name, $(step_work_expr(rhs))))
     inputs = deps.args[2]
     outputs = deps.args[3]
-    :(Step($name, $(esc(rhs)), $(step_inputs_expr(inputs)), $(step_outputs_expr(outputs))))
+    :(Step($name, $(step_work_expr(rhs)), $(step_inputs_expr(inputs)), $(step_outputs_expr(outputs))))
 end
 step_inputs_expr(s::String) = :([$s])
 step_inputs_expr(x) = x
@@ -392,32 +416,10 @@ end
 #==============================================================================#
 # State Persistence (Make-like freshness)
 #==============================================================================#
-# Memory-mapped file; layout and accessors live in StateFormat. State file path
-# and in-memory state refs are here; I/O uses StateFormat layout.
+# State file path and in-memory refs live here; all file I/O is in StateFormat
+# (memory-mapped format with random access).
 
 const STATE_FILE = Ref(".pipeline_state")
-
-struct PipelineState
-    hashes::Vector{UInt64}
-end
-PipelineState() = PipelineState(UInt64[])
-function PipelineState(s::Set{UInt64}, layout::StateFileLayout=STATE_LAYOUT)
-    n = min(length(s), layout.max_hashes)
-    PipelineState(collect(Iterators.take(s, n)))
-end
-Base.length(st::PipelineState) = length(st.hashes)
-Base.convert(::Type{Set{UInt64}}, st::PipelineState) = Set{UInt64}(st.hashes)
-
-function init_state_file()
-    path = STATE_FILE[]
-    layout = STATE_LAYOUT
-    if !isfile(path) || filesize(path) < layout_file_size(layout)
-        open(path, "w") do io
-            layout_write_header(io, layout, UInt64(0))
-            truncate(io, layout_file_size(layout))
-        end
-    end
-end
 
 const state_loaded = Ref{Set{UInt64}}(Set{UInt64}())
 const pending_completions = Ref{Set{UInt64}}(Set{UInt64}())
@@ -425,35 +427,13 @@ const run_depth = Ref{Int}(0)
 
 step_hash(step::Step) = hash((step.name, step.work, step.inputs, step.outputs))
 
+"""Read persisted step hashes from the state file (delegates to StateFormat.state_read)."""
+load_state()::Set{UInt64} = state_read(STATE_FILE[], STATE_LAYOUT)
+
 current_state()::Set{UInt64} = run_depth[] >= 1 ? union(state_loaded[], pending_completions[]) : load_state()
 
-function load_state()::Set{UInt64}
-    path = STATE_FILE[]
-    layout = STATE_LAYOUT
-    isfile(path) || return Set{UInt64}()
-    open(path, "r") do io
-        filesize(io) < layout.header_len && return Set{UInt64}()
-        magic_ok, n = layout_read_header(io, layout)
-        (!magic_ok || !layout_validate_count(layout, n) || n == 0) && return Set{UInt64}()
-        arr = Mmap.mmap(io, Vector{UInt64}, (layout.max_hashes,); grow=false)
-        Set{UInt64}(@view arr[1:n])
-    end
-end
-
 function save_state!(completed::Set{UInt64})
-    init_state_file()
-    path = STATE_FILE[]
-    layout = STATE_LAYOUT
-    st = PipelineState(completed)
-    n = length(st.hashes)
-    open(path, "r+") do io
-        layout_write_header(io, layout, UInt64(n))
-        arr = Mmap.mmap(io, Vector{UInt64}, (layout.max_hashes,); grow=false)
-        for i in 1:n
-            arr[i] = st.hashes[i]
-        end
-        Mmap.sync!(arr)
-    end
+    state_write(STATE_FILE[], completed, STATE_LAYOUT)
 end
 
 function mark_complete!(step::Step)
@@ -461,25 +441,7 @@ function mark_complete!(step::Step)
     if run_depth[] >= 1
         push!(pending_completions[], h)
     else
-        init_state_file()
-        path = STATE_FILE[]
-        layout = STATE_LAYOUT
-        count = open(path, "r") do io
-            magic_ok, n = layout_read_header(io, layout)
-            magic_ok ? n : UInt64(layout.max_hashes)
-        end
-        if count >= layout.max_hashes
-            save_state!(union(load_state(), Set{UInt64}([h])))
-            return
-        end
-        open(path, "r+") do io
-            seek(io, layout.hashes_offset)
-            arr = Mmap.mmap(io, Vector{UInt64}, (layout.max_hashes,); grow=false)
-            arr[count + 1] = h
-            Mmap.sync!(arr)
-            seek(io, layout.count_offset)
-            write(io, count + 1)
-        end
+        state_append(STATE_FILE[], h, STATE_LAYOUT) || save_state!(union(state_read(STATE_FILE[], STATE_LAYOUT), Set{UInt64}([h])))
     end
 end
 
@@ -539,7 +501,7 @@ end
 # Bounded parallelism: run(; max_parallel=n); 0 means unbounded (all branches at once)
 const MAX_PARALLEL = Ref{Int}(0)
 
-# Base.run(::Cmd) and user f() throw on failure; no check-based API. One boundary only.
+# Base.run(::Cmd) and user f() throw on failure; no check-based API. Sole exception boundary (see .cursor/rules: no other try/catch).
 function run_safely(f)::Tuple{Bool,String}
     result = Ref{String}("")
     ok = Ref{Bool}(false)
@@ -559,7 +521,7 @@ function execute(step::Step{Cmd})
         isfile(inp) || return StepResult(step, false, time() - start, "Missing input file: $inp")
     end
     buf = IOBuffer()
-    ok, err = run_safely() do; run(pipeline(step.work, stdout=buf, stderr=buf)); end
+    ok, err = run_safely() do; Base.run(Base.pipeline(step.work, stdout=buf, stderr=buf)); end
     if !ok
         return StepResult(step, false, time() - start, "Error: $err\n$(String(take!(buf)))")
     end
@@ -666,10 +628,23 @@ function log_reduce(::Verbose, n::Symbol)
     println("Reducing: $n")
 end
 
-# Step wrapping another node (e.g. @step name = a >> b)
+# Step wrapping another node (e.g. @step name = a >> b): delegate to inner node only when work is AbstractNode
 function run_node(step::Step{N}, v, forced::Bool=false) where {N<:AbstractNode}
     log_start(v, step)
     run_node(step.work, v, forced)
+end
+
+# Explicit leaf execution for Step{Cmd} (must not dispatch to Step{N} where N<:AbstractNode)
+function run_node(step::Step{Cmd}, v, forced::Bool=false)
+    if !forced && is_fresh(step)
+        log_skip(v, step)
+        return [StepResult(step, true, 0.0, "skipped (fresh)")]
+    end
+    log_start(v, step)
+    result = execute(step)
+    log_result(v, result)
+    result.success && mark_complete!(step)
+    [result]
 end
 
 function run_node(step::Step, v, forced::Bool=false)
@@ -677,7 +652,6 @@ function run_node(step::Step, v, forced::Bool=false)
         log_skip(v, step)
         return [StepResult(step, true, 0.0, "skipped (fresh)")]
     end
-    
     log_start(v, step)
     result = execute(step)
     log_result(v, result)
@@ -699,20 +673,14 @@ function run_node(par::Parallel, v, forced::Bool)
     log_parallel(v, length(par.nodes))
     max_p = MAX_PARALLEL[]
     if max_p > 0
-        # Bounded concurrency: at most max_p branches run at once
-        sem = Channel{Nothing}(max_p)
-        for _ in 1:max_p
-            put!(sem, nothing)
+        # Bounded concurrency: run in chunks so we never use try/finally
+        results = StepResult[]
+        for i in 1:max_p:length(par.nodes)
+            chunk = par.nodes[i:min(i + max_p - 1, end)]
+            tasks = [@spawn run_node(node, v, forced) for node in chunk]
+            append!(results, reduce(vcat, fetch.(tasks)))
         end
-        tasks = [@spawn begin
-            take!(sem)
-            try
-                run_node(node, v, forced)
-            finally
-                put!(sem, nothing)
-            end
-        end for node in par.nodes]
-        reduce(vcat, fetch.(tasks))
+        results
     else
         tasks = [(@spawn run_node(node, v, forced)) for node in par.nodes]
         reduce(vcat, fetch.(tasks))
@@ -779,6 +747,73 @@ function run_node(r::Reduce, v, forced::Bool)
         return vcat(results, [StepResult(Step(r.name, r.reducer), false, time() - start, "Reduce error: $reduced")])
     end
     vcat(results, [StepResult(Step(r.name, r.reducer), true, time() - start, reduced)])
+end
+
+# Cycle check: does node contain needle? (ForEach/Map expansion only)
+contains_node(needle::ForEach, x::ForEach) = x === needle
+contains_node(needle::ForEach, s::Step) = step_contains(needle, s)
+contains_node(needle::ForEach, n::AbstractNode) = any(c -> contains_node(needle, c), node_children(n))
+contains_node(::ForEach, ::Map) = false
+contains_node(needle::Map, x::Map) = x === needle
+contains_node(needle::Map, s::Step) = step_contains(needle, s)
+contains_node(needle::Map, n::AbstractNode) = any(c -> contains_node(needle, c), node_children(n))
+step_contains(needle::Union{ForEach,Map}, s::Step{N}) where {N<:AbstractNode} = s.work === needle || contains_node(needle, s.work)
+step_contains(::Union{ForEach,Map}, ::Step) = false
+node_children(n::Sequence) = collect(n.nodes)
+node_children(n::Parallel) = collect(n.nodes)
+node_children(n::Retry) = [n.node]
+node_children(n::Fallback) = [n.primary, n.fallback]
+node_children(n::Branch) = [n.if_true, n.if_false]
+node_children(n::Timeout) = [n.node]
+node_children(n::Force) = [n.node]
+node_children(n::Reduce) = [n.node]
+node_children(::Union{Step,ForEach,Map}) = AbstractNode[]
+
+function run_node(fe::ForEach, v, forced::Bool)
+    regex = for_each_regex(fe.pattern)
+    matches = find_matches(fe.pattern, regex)
+    isempty(matches) && error("ForEach: no files match '$(fe.pattern)'")
+    nodes = AbstractNode[]
+    for c in matches
+        r = length(c) == 1 ? fe.f(c[1]) : fe.f(c...)
+        r === nothing && error("ForEach block must return a Step or node, not nothing.")
+        node = as_node(r)
+        contains_node(fe, node) && error("Pipeline cycle: ForEach block returned a node containing this ForEach.")
+        push!(nodes, node)
+    end
+    log_parallel(v, length(nodes))
+    max_p = MAX_PARALLEL[]
+    if max_p > 0
+        results = StepResult[]
+        for i in 1:max_p:length(nodes)
+            chunk = nodes[i:min(i + max_p - 1, end)]
+            append!(results, reduce(vcat, fetch.([@spawn run_node(n, v, forced) for n in chunk])))
+        end
+        results
+    else
+        reduce(vcat, fetch.([@spawn run_node(n, v, forced) for n in nodes]))
+    end
+end
+
+function run_node(m::Map, v, forced::Bool)
+    nodes = AbstractNode[]
+    for item in m.items
+        node = as_node(m.f(item))
+        contains_node(m, node) && error("Pipeline cycle: Map block returned a node containing this Map.")
+        push!(nodes, node)
+    end
+    log_parallel(v, length(nodes))
+    max_p = MAX_PARALLEL[]
+    if max_p > 0
+        results = StepResult[]
+        for i in 1:max_p:length(nodes)
+            chunk = nodes[i:min(i + max_p - 1, end)]
+            append!(results, reduce(vcat, fetch.([@spawn run_node(n, v, forced) for n in chunk])))
+        end
+        results
+    else
+        length(nodes) == 1 ? run_node(nodes[1], v, forced) : reduce(vcat, fetch.([@spawn run_node(n, v, forced) for n in nodes]))
+    end
 end
 
 #==============================================================================#
@@ -855,7 +890,7 @@ function run_pipeline(p::Pipeline, verbose::Bool, dry_run::Bool, force::Bool)
 
     run_depth[] += 1
     if run_depth[] == 1
-        state_loaded[] = load_state()
+        state_loaded[] = state_read(STATE_FILE[], STATE_LAYOUT)
         pending_completions[] = Set{UInt64}()
     end
 
@@ -969,6 +1004,18 @@ function print_dag(io::IO, f::Force, pre::String, cont::String, color::Bool)
     print_dag(io, f.node, cont * "    ", cont * "    ", color)
 end
 
+function print_dag(io::IO, fe::ForEach, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    color ? printstyled(io, "⊕ ForEach", color=:magenta) : print(io, "⊕ ForEach")
+    println(io, " \"", fe.pattern, "\"")
+end
+
+function print_dag(io::IO, m::Map, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    color ? printstyled(io, "⊕ Map", color=:magenta) : print(io, "⊕ Map")
+    println(io, " ($(length(m.items)) items)")
+end
+
 # Branch helper with marker
 function print_dag(io::IO, node::AbstractNode, pre::String, cont::String, color::Bool, marker_color::Symbol, marker::String)
     printstyled(io, marker, color=marker_color)
@@ -1003,6 +1050,8 @@ steps(b::Branch) = vcat(steps(b.if_true), steps(b.if_false))
 steps(t::Timeout) = steps(t.node)
 steps(r::Reduce) = steps(r.node)
 steps(f::Force) = steps(f.node)
+steps(::ForEach) = Step[]  # lazy: not discovered until run
+steps(::Map) = Step[]     # lazy: nodes built only when run
 
 """
     count_steps(node) -> Int
@@ -1018,6 +1067,8 @@ count_steps(b::Branch) = max(count_steps(b.if_true), count_steps(b.if_false))
 count_steps(t::Timeout) = count_steps(t.node)
 count_steps(r::Reduce) = count_steps(r.node) + 1
 count_steps(f::Force) = count_steps(f.node)
+count_steps(::ForEach) = 0  # lazy: not discovered until run
+count_steps(::Map) = 0      # lazy: nodes built only when run
 
 #==============================================================================#
 # Display
@@ -1032,6 +1083,8 @@ Base.show(io::IO, b::Branch) = print(io, "Branch(?, ", b.if_true, ", ", b.if_fal
 Base.show(io::IO, t::Timeout) = print(io, "Timeout(", t.node, ", ", t.seconds, "s)")
 Base.show(io::IO, r::Reduce) = print(io, "Reduce(:", r.name, ", ", r.node, ")")
 Base.show(io::IO, f::Force) = print(io, "Force(", f.node, ")")
+Base.show(io::IO, fe::ForEach) = print(io, "ForEach(\"", fe.pattern, "\")")
+Base.show(io::IO, m::Map) = print(io, "Map(", length(m.items), " items)")
 Base.show(io::IO, p::Pipeline) = print(io, "Pipeline(\"", p.name, "\", ", count_steps(p.root), " steps)")
 
 function Base.show(io::IO, ::MIME"text/plain", p::Pipeline)
@@ -1059,7 +1112,8 @@ end
     Map(f, items)
     Map(f)
 
-Build a parallel node by applying `f` to each item. `Map(f)` returns a function `items -> Map(f, items)`.
+Lazy parallel node: applies `f` to each item **when you call `run(pipeline)`**, not when the pipeline is built.
+`Map(f)` returns a function `items -> Map(f, items)`.
 
 # Examples
 ```julia
@@ -1069,15 +1123,29 @@ end
 ```
 """
 function Map(f::Function, items)
-    nodes = [f(item) for item in items]
-    isempty(nodes) && error("Map requires at least one item")
-    length(nodes) == 1 && return first(nodes)
-    reduce(&, nodes)
+    vec = collect(items)
+    isempty(vec) && error("Map requires at least one item")
+    Map(f, vec)
 end
+Map(f::F, items::Vector{T}) where {F<:Function, T} = (isempty(items) && error("Map requires at least one item"); Map{F, T}(f, items))
 Map(f::Function) = items -> Map(f, items)
 
 as_node(n::AbstractNode) = n
 as_node(x) = Step(x)
+
+function for_each_regex(pattern::String)::Regex
+    wildcard_rx = r"\{(\w+)\}"
+    parts = split(pattern, "/")
+    first_wild = findfirst(p -> contains(p, "{"), parts)
+    first_wild === nothing && error("ForEach pattern must contain {wildcard}: $pattern")
+    pattern_suffix = join(parts[first_wild:end], "/")
+    placeholder = "\x00WILD\x00"
+    temp = replace(pattern_suffix, wildcard_rx => placeholder)
+    for c in ".+^*?\$()[]|"
+        temp = replace(temp, string(c) => "\\" * c)
+    end
+    Regex("^" * replace(temp, placeholder => "([^/]+)") * "\$")
+end
 
 """
     ForEach(pattern) do wildcards...
@@ -1085,40 +1153,14 @@ as_node(x) = Step(x)
     end
     fe(pattern) do wildcards... end   # short alias
 
-Discover files matching pattern with `{name}` placeholders, create parallel branches.
-The block is run once per match when the pipeline is built (not when you call `run(pipeline)`).
-It must return a Step or other node (e.g. `@step name = sh\"cmd\"`); do not run commands inside the block.
-Use `fe("tsv/filtered-{donor}.tsv.gz") do donor; @step process = `echo \$donor`; end` as a shortcut.
+Discover files matching pattern with `{name}` placeholders; create one parallel branch per match.
+The block is run once per match **when you call `run(pipeline)`**, not when the pipeline is built.
+It must return a Step or other node (e.g. `@step name = sh\"cmd\"`).
 """
 function ForEach(f::Function, pattern::String)
     wildcard_rx = r"\{(\w+)\}"
     contains(pattern, wildcard_rx) || error("ForEach pattern must contain {wildcard}: $pattern")
-    
-    # Build file-matching regex from the pattern suffix (from first wildcard to end).
-    # find_matches compares against paths relative to the directory before the wildcard,
-    # so the regex must not include that prefix.
-    parts = split(pattern, "/")
-    first_wild = findfirst(p -> contains(p, "{"), parts)
-    pattern_suffix = join(parts[first_wild:end], "/")
-    placeholder = "\x00WILD\x00"
-    temp = replace(pattern_suffix, wildcard_rx => placeholder)
-    for c in ".+^*?\$()[]|"
-        temp = replace(temp, string(c) => "\\" * c)
-    end
-    regex = Regex("^" * replace(temp, placeholder => "([^/]+)") * "\$")
-    
-    # Find matching files
-    matches = find_matches(pattern, regex)
-    isempty(matches) && error("ForEach: no files match '$pattern'")
-    
-    nodes = AbstractNode[]
-    for captured in matches
-        result = length(captured) == 1 ? f(captured[1]) : f(captured...)
-        result === nothing && error("ForEach block must return a Step or pipeline node (e.g. @step ... = sh\"...\" or `cmd`), not nothing. Add a return value.")
-        push!(nodes, as_node(result))
-    end
-    
-    length(nodes) == 1 ? first(nodes) : reduce(&, nodes)
+    ForEach{typeof(f)}(f, pattern)
 end
 ForEach(pattern::String) = f -> ForEach(f, pattern)
 

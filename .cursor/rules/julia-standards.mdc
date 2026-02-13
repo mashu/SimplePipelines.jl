@@ -1,0 +1,103 @@
+---
+description: Julia coding standards — no try blocks, no _ names, functors, type-stable parametric code, no isa/Any
+globs: "**/*.jl"
+alwaysApply: true
+---
+
+# Julia Standards (SimplePipelines)
+
+Follow these when editing Julia code.
+
+## No try blocks
+
+Do **not** use `try`, `try`/`catch`, or `try`/`finally` anywhere. Handle errors via return values, `Union` types, or let them propagate. The codebase has a single documented exception boundary, `run_safely(f)`, which converts thrown errors to `(Bool, String)` for step execution; do not add any other try/catch. For concurrency, use batched parallelism (e.g. process in chunks) instead of try/finally for resource release.
+
+```julia
+# ❌ BAD
+try
+  x = parse(Int, s)
+catch
+  return 0
+end
+try
+  run_node(node, v, forced)
+finally
+  put!(sem, nothing)
+end
+
+# ✅ GOOD: return values or let propagate; batch instead of try/finally
+n = tryparse(Int, s)
+n === nothing && return 0
+# Bounded concurrency: run in chunks, not semaphore + try/finally
+for i in 1:max_p:length(nodes)
+  batch = nodes[i:min(i + max_p - 1, end)]
+  append!(results, fetch.(@spawn.(run_node.(batch, Ref(v), Ref(forced))))
+end
+```
+
+## No leading underscore; use multiple dispatch
+
+Do **not** name functions or variables with a leading `_`. Prefer multiple dispatch and distinct names instead of “private” helpers.
+
+```julia
+# ❌ BAD
+function _read_header(io) ...
+run_node(_step, v) = ...
+
+# ✅ GOOD
+function read_header(io, layout::StateFileLayout) ...
+run_node(step::Step, v, forced) = ...
+run_node(seq::Sequence, v, forced) = ...
+```
+
+## Use functors to organize code
+
+Use callable structs (functors) or small modules to group related behavior and make APIs clear (e.g. layout descriptors, format handlers).
+
+```julia
+# ✅ GOOD: layout as single source of truth
+struct StateFileLayout
+  magic::Vector{UInt8}
+  header_len::Int
+  ...
+end
+layout_file_size(layout::StateFileLayout) = ...
+layout_read_header(io, layout::StateFileLayout) = ...
+```
+
+## Parametric and type-stable code
+
+Use parametric types; avoid `Any` and type instability. Prefer concrete/parametric structs and dispatch over runtime type checks.
+
+```julia
+# ❌ BAD
+function run_node(node)
+  if isa(node, Step)
+    ...
+  elseif isa(node, Sequence)
+    ...
+  end
+end
+
+# ✅ GOOD
+run_node(step::Step, v, forced) = ...
+run_node(seq::Sequence, v, forced) = ...
+```
+
+- No `isa`/`typeof` checks for control flow; use methods and dispatch.
+- No `Any` in signatures or struct fields when a concrete/parametric type is possible.
+- **Avoid `typeof`**: Prefer dispatch and constructors that infer type parameters; use `typeof(x)` only when there is no cleaner way (e.g. avoid `ForEach{typeof(f)}(f, pattern)` if the struct can be constructed without an explicit type parameter).
+
+## No legacy or unused variables
+
+Remove dead code, unused variables, and legacy branches. Keep only one supported format or path unless explicitly required.
+
+## No type checking (isa) or Any
+
+- Do **not** use `isa(x, T)` or similar for branching; use multiple dispatch.
+- Do **not** use `Any` in public APIs or struct fields; use parametric types or concrete types.
+- Use value-based checks (e.g. magic bytes, length) where format validation is needed, not type assertions.
+
+## Avoid typeof
+
+Using `typeof(x)` is not optimal and should be avoided. Prefer designs where the compiler infers type parameters (e.g. inner constructors, or a single outer constructor that builds the struct directly without recursing). Use `typeof` only when there is no cleaner alternative.
