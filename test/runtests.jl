@@ -1,6 +1,9 @@
 using SimplePipelines
 using Test
 
+# Clear any persisted state before running tests
+clear_state!()
+
 @testset "SimplePipelines" begin
     @testset "sh string macro" begin
         # sh"..." enables shell features like redirection and pipes
@@ -250,7 +253,7 @@ using Test
     @testset "Step execution" begin
         # Simple echo command
         s = @step test = `echo "hello world"`
-        results = run(s, verbose=false)
+        results = run(s, verbose=false, force=true)
         
         @test length(results) == 1
         @test results[1].success == true
@@ -280,7 +283,7 @@ using Test
         f = () -> (counter[] += 1; "done")
         
         s = Step(:increment, f)
-        results = run(s, verbose=false)
+        results = run(s, verbose=false, force=true)
         
         @test results[1].success
         @test counter[] == 1
@@ -288,7 +291,7 @@ using Test
         # Function returning nothing
         f_nothing = () -> nothing
         s_nothing = Step(:nothing_func, f_nothing)
-        results_nothing = run(s_nothing, verbose=false)
+        results_nothing = run(s_nothing, verbose=false, force=true)
         @test results_nothing[1].success
         @test results_nothing[1].output == ""
     end
@@ -574,14 +577,14 @@ using Test
         
         # Primary succeeds - fallback not used
         f1 = success_step | fallback_step
-        results1 = run(f1, verbose=false)
+        results1 = run(f1, verbose=false, force=true)
         @test length(results1) == 1
         @test results1[1].success
         @test contains(results1[1].output, "primary")
         
         # Primary fails - fallback used
         f2 = fail_step | fallback_step
-        results2 = run(f2, verbose=false)
+        results2 = run(f2, verbose=false, force=true)
         @test results2[end].success
         @test contains(results2[end].output, "fallback")
         
@@ -611,13 +614,13 @@ using Test
         
         # Condition true
         flag[] = true
-        results1 = run(b, verbose=false)
+        results1 = run(b, verbose=false, force=true)
         @test results1[1].success
         @test contains(results1[1].output, "true path")
         
         # Condition false
         flag[] = false
-        results2 = run(b, verbose=false)
+        results2 = run(b, verbose=false, force=true)
         @test results2[1].success
         @test contains(results2[1].output, "false path")
         
@@ -635,7 +638,7 @@ using Test
         safe = @step safe = `echo "safe"`
         
         pipeline = Retry(flaky, 2) | safe
-        results = run(pipeline, verbose=false)
+        results = run(pipeline, verbose=false, force=true)
         
         # Should have run flaky twice, then safe
         @test results[end].success
@@ -730,7 +733,7 @@ using Test
             join(outputs, ",")
         end
         
-        results = run(r, verbose=false)
+        results = run(r, verbose=false, force=true)
         @test length(results) == 3  # a, b, reduce
         @test all(res -> res.success, results)
         @test contains(results[end].output, "output_a")

@@ -1,9 +1,9 @@
 module SimplePipelines
 
 export Step, @step, Sequence, Parallel, Pipeline
-export Retry, Fallback, Branch, Timeout
+export Retry, Fallback, Branch, Timeout, Force
 export Map, Reduce, ForEach
-export count_steps, steps, print_dag
+export count_steps, steps, print_dag, is_fresh, clear_state!
 export @sh_str, sh
 
 import Base: >>, &, |, ^
@@ -11,7 +11,7 @@ import Base: >>, &, |, ^
 using Base.Threads: @spawn, fetch
 
 #==============================================================================#
-# Shell string macro - for commands with shell features (>, |, etc.)
+# Shell string macro
 #==============================================================================#
 
 @doc raw"""
@@ -19,60 +19,29 @@ using Base.Threads: @spawn, fetch
     sh(command::String)
 
 Shell commands: use `sh"..."` for literals, `sh("...")` when you need interpolation.
-Julia's backticks `` `cmd` `` don't allow `>`, `|`, etc., so we use the short `sh` form
-(two characters) and wrap in `sh -c "..."`.
 
 # Examples
 ```julia
-sh"sort data.txt > sorted.txt"           # literal
-sh("pear -f $(sample)_R1 -r $(sample)_R2")  # with interpolation
+sh"sort data.txt > sorted.txt"
+sh("process \$(sample)_R1.fq")
 ```
 """
 macro sh_str(s)
     Cmd(["sh", "-c", s])
 end
 
-@doc raw""" Run a shell command string (with interpolation). Use `sh("cmd $(var)")` in loops or when building commands. """ sh(s::String) = Cmd(["sh", "-c", s])
+sh(s::String) = Cmd(["sh", "-c", s])
 
 #==============================================================================#
-# Core Types - Fully parametric for zero-overhead dispatch
+# Core Types
 #==============================================================================#
 
-"""
-    AbstractNode
-
-Base type for all pipeline nodes. Subtypes are:
-- [`Step`](@ref): A single unit of work
-- [`Sequence`](@ref): Nodes that run in order
-- [`Parallel`](@ref): Nodes that run concurrently
-"""
 abstract type AbstractNode end
 
 """
     Step{F}
 
-A single unit of work in the pipeline.
-
-# Type Parameters
-- `F`: The type of work (e.g., `Cmd` for shell commands, or a `Function` subtype)
-
-# Fields
-- `name::Symbol`: Identifier for the step
-- `work::F`: The work to execute
-- `inputs::Vector{String}`: Input file dependencies (optional)
-- `outputs::Vector{String}`: Output files produced (optional)
-
-# Examples
-```julia
-# Shell command
-Step(:align, `bwa mem ref.fa reads.fq`)
-
-# Julia function
-Step(:qc, () -> run_quality_control())
-
-# With file dependencies
-Step(:variant_call, `bcftools call -m aligned.bam`, ["aligned.bam"], ["variants.vcf"])
-```
+A single unit of work. `F` is the work type (Cmd, Function, etc.)
 """
 struct Step{F} <: AbstractNode
     name::Symbol
@@ -81,336 +50,119 @@ struct Step{F} <: AbstractNode
     outputs::Vector{String}
 end
 
-# Constructors - no runtime type checks, just dispatch
-@inline Step(name::Symbol, work::F) where {F} = Step{F}(name, work, String[], String[])
-@inline Step(work::F) where {F} = Step{F}(gensym(:step), work, String[], String[])
-@inline Step(name::Symbol, work::F, inputs, outputs) where {F} = 
-    Step{F}(name, work, collect(String, inputs), collect(String, outputs))
+Step(name::Symbol, work) = Step(name, work, String[], String[])
+Step(work) = Step(gensym(:step), work, String[], String[])
+Step(name::Symbol, work, inputs, outputs) = Step(name, work, collect(String, inputs), collect(String, outputs))
 
-"""
-    Sequence{T<:Tuple}
-
-A sequence of nodes that execute in order. The type parameter `T` captures
-the exact tuple type for full type stability.
-
-# Examples
-```julia
-# Created via >> operator
-align >> sort >> index
-```
-"""
 struct Sequence{T<:Tuple} <: AbstractNode
     nodes::T
 end
+Sequence(nodes::Vararg{AbstractNode}) = Sequence(nodes)
 
-@inline Sequence(nodes::Vararg{AbstractNode}) = Sequence(nodes)
-
-"""
-    Parallel{T<:Tuple}
-
-Nodes that execute concurrently. The type parameter `T` captures
-the exact tuple type for full type stability.
-
-# Examples
-```julia
-# Created via & operator
-(sample_a & sample_b & sample_c) >> merge
-```
-"""
 struct Parallel{T<:Tuple} <: AbstractNode
     nodes::T
 end
+Parallel(nodes::Vararg{AbstractNode}) = Parallel(nodes)
 
-@inline Parallel(nodes::Vararg{AbstractNode}) = Parallel(nodes)
-
-"""
-    Retry{N<:AbstractNode}
-
-Retry a node up to `max_attempts` times on failure, with optional delay between attempts.
-
-# Examples
-```julia
-# Retry up to 3 times
-Retry(flaky_step, 3)
-
-# Retry with delay between attempts
-Retry(api_call, 5, delay=2.0)
-
-# Using | operator for simple fallback (try once, then fallback)
-risky_step | safe_fallback
-```
-"""
 struct Retry{N<:AbstractNode} <: AbstractNode
     node::N
     max_attempts::Int
     delay::Float64
 end
+Retry(node::AbstractNode, max_attempts::Int=3; delay::Real=0.0) = Retry(node, max_attempts, Float64(delay))
 
-@inline Retry(node::AbstractNode, max_attempts::Int=3; delay::Real=0.0) = 
-    Retry(node, max_attempts, Float64(delay))
-
-"""
-    Fallback{A<:AbstractNode, B<:AbstractNode}
-
-Try the primary node; if it fails, run the fallback node.
-Created with the `|` operator.
-
-# Examples
-```julia
-# If fast_method fails, use slow_method
-fast_method | slow_method
-
-# Chain multiple fallbacks
-method_a | method_b | method_c
-```
-"""
 struct Fallback{A<:AbstractNode, B<:AbstractNode} <: AbstractNode
     primary::A
     fallback::B
 end
 
-"""
-    Branch{C<:Function, T<:AbstractNode, F<:AbstractNode}
-
-Conditional execution: run `if_true` when `condition()` returns true, otherwise `if_false`.
-
-# Examples
-```julia
-# Branch based on file size
-Branch(() -> filesize("data.txt") > 1_000_000, large_file_pipeline, small_file_pipeline)
-
-# Branch based on environment
-Branch(() -> haskey(ENV, "DEBUG"), debug_steps, normal_steps)
-```
-"""
 struct Branch{C<:Function, T<:AbstractNode, F<:AbstractNode} <: AbstractNode
     condition::C
     if_true::T
     if_false::F
 end
 
-"""
-    Timeout{N<:AbstractNode}
-
-Fail if a node doesn't complete within the specified time.
-
-# Examples
-```julia
-# 30 second timeout
-Timeout(long_step, 30.0)
-
-# Combine with retry and fallback
-Retry(Timeout(primary, 10.0), 3) | fallback
-
-# Using ^ operator: step^3 = retry 3 times
-Timeout(api_call, 5.0)^3 | backup
-```
-"""
 struct Timeout{N<:AbstractNode} <: AbstractNode
     node::N
     seconds::Float64
 end
 
-"""
-    Reduce{F<:Function, N<:AbstractNode}
-
-Run a node (typically Parallel) and combine outputs with a reducing function.
-The function receives a vector of outputs from successful steps.
-
-# Examples
-```julia
-# Combine parallel outputs
-Reduce(a & b & c) do outputs
-    join(outputs, "\\n")
+struct Force{N<:AbstractNode} <: AbstractNode
+    node::N
 end
 
-# With a named function
-Reduce(combine_results, process_a & process_b)
-
-# In a pipeline
-fetch >> Reduce(merge, analyze_a & analyze_b) >> report
-```
-"""
 struct Reduce{F<:Function, N<:AbstractNode} <: AbstractNode
     reducer::F
     node::N
     name::Symbol
 end
-
-@inline Reduce(f::Function, node::AbstractNode; name::Symbol=:reduce) = 
-    Reduce{typeof(f), typeof(node)}(f, node, name)
-
-# Curried form for do-block: Reduce(node) do outputs ... end
-@inline Reduce(node::AbstractNode; name::Symbol=:reduce) = f -> Reduce(f, node; name=name)
+Reduce(f::Function, node::AbstractNode; name::Symbol=:reduce) = Reduce(f, node, name)
+Reduce(node::AbstractNode; name::Symbol=:reduce) = f -> Reduce(f, node; name=name)
 
 #==============================================================================#
-# Composition Operators - Pure multiple dispatch, no type checks
+# Composition Operators
 #==============================================================================#
 
-"""
-    a >> b
+# Sequence composition with flattening
+>>(a::AbstractNode, b::AbstractNode) = Sequence((a, b))
+>>(a::Sequence, b::AbstractNode) = Sequence((a.nodes..., b))
+>>(a::AbstractNode, b::Sequence) = Sequence((a, b.nodes...))
+>>(a::Sequence, b::Sequence) = Sequence((a.nodes..., b.nodes...))
 
-Create a [`Sequence`](@ref) where `a` completes before `b` starts.
+# Auto-lift Cmd/Function to Step (explicit methods resolve dispatch ambiguity)
+>>(a::Cmd, b::Cmd) = Step(a) >> Step(b)
+>>(a::Function, b::Function) = Step(a) >> Step(b)
+>>(a::Cmd, b::Function) = Step(a) >> Step(b)
+>>(a::Function, b::Cmd) = Step(a) >> Step(b)
+>>(a::Cmd, b) = Step(a) >> b
+>>(a, b::Cmd) = a >> Step(b)
+>>(a::Function, b) = Step(a) >> b
+>>(a, b::Function) = a >> Step(b)
 
-Supports chaining: `a >> b >> c` creates a single flattened sequence.
+# Parallel composition with flattening
+(&)(a::AbstractNode, b::AbstractNode) = Parallel((a, b))
+(&)(a::Parallel, b::AbstractNode) = Parallel((a.nodes..., b))
+(&)(a::AbstractNode, b::Parallel) = Parallel((a, b.nodes...))
+(&)(a::Parallel, b::Parallel) = Parallel((a.nodes..., b.nodes...))
 
-# Examples
-```julia
-# Basic sequence
-fastqc >> trim >> align
+# Auto-lift Cmd/Function to Step
+(&)(a::Cmd, b::Cmd) = Step(a) & Step(b)
+(&)(a::Function, b::Function) = Step(a) & Step(b)
+(&)(a::Cmd, b::Function) = Step(a) & Step(b)
+(&)(a::Function, b::Cmd) = Step(a) & Step(b)
+(&)(a::Cmd, b) = Step(a) & b
+(&)(a, b::Cmd) = a & Step(b)
+(&)(a::Function, b) = Step(a) & b
+(&)(a, b::Function) = a & Step(b)
 
-# Chain shell commands directly
-`fastqc raw.fq` >> `trimmomatic ...` >> `bwa mem ...`
-```
-"""
-@inline >>(a::AbstractNode, b::AbstractNode) = Sequence((a, b))
-@inline >>(a::Sequence, b::AbstractNode) = Sequence((a.nodes..., b))
-@inline >>(a::AbstractNode, b::Sequence) = Sequence((a, b.nodes...))
-@inline >>(a::Sequence, b::Sequence) = Sequence((a.nodes..., b.nodes...))
+# Fallback composition
+(|)(a::AbstractNode, b::AbstractNode) = Fallback(a, b)
+(|)(a::Fallback, b::AbstractNode) = Fallback(a.primary, Fallback(a.fallback, b))
 
-# Lift Cmd to Step automatically
-@inline >>(a::Cmd, b::Cmd) = Sequence((Step(a), Step(b)))
-@inline >>(a::Cmd, b::AbstractNode) = Sequence((Step(a), b))
-@inline >>(a::AbstractNode, b::Cmd) = Sequence((a, Step(b)))
-@inline >>(a::Cmd, b::Sequence) = Sequence((Step(a), b.nodes...))
-@inline >>(a::Sequence, b::Cmd) = Sequence((a.nodes..., Step(b)))
+# Auto-lift Cmd/Function to Step
+(|)(a::Cmd, b::Cmd) = Step(a) | Step(b)
+(|)(a::Function, b::Function) = Step(a) | Step(b)
+(|)(a::Cmd, b::Function) = Step(a) | Step(b)
+(|)(a::Function, b::Cmd) = Step(a) | Step(b)
+(|)(a::Cmd, b) = Step(a) | b
+(|)(a, b::Cmd) = a | Step(b)
+(|)(a::Function, b) = Step(a) | b
+(|)(a, b::Function) = a | Step(b)
 
-# Lift Function to Step automatically
-@inline >>(a::Function, b::Function) = Sequence((Step(a), Step(b)))
-@inline >>(a::Function, b::AbstractNode) = Sequence((Step(a), b))
-@inline >>(a::AbstractNode, b::Function) = Sequence((a, Step(b)))
-@inline >>(a::Function, b::Sequence) = Sequence((Step(a), b.nodes...))
-@inline >>(a::Sequence, b::Function) = Sequence((a.nodes..., Step(b)))
-@inline >>(a::Cmd, b::Function) = Sequence((Step(a), Step(b)))
-@inline >>(a::Function, b::Cmd) = Sequence((Step(a), Step(b)))
-
-"""
-    a & b
-
-Create a [`Parallel`](@ref) where `a` and `b` run concurrently.
-
-Supports chaining: `a & b & c` creates a single parallel group.
-
-# Examples
-```julia
-# Process multiple samples in parallel
-(sample1 & sample2 & sample3) >> merge_results
-
-# Mix with sequences for complex DAGs
-(trim_a >> align_a) & (trim_b >> align_b) >> joint_call
-```
-"""
-@inline (&)(a::AbstractNode, b::AbstractNode) = Parallel((a, b))
-@inline (&)(a::Parallel, b::AbstractNode) = Parallel((a.nodes..., b))
-@inline (&)(a::AbstractNode, b::Parallel) = Parallel((a, b.nodes...))
-@inline (&)(a::Parallel, b::Parallel) = Parallel((a.nodes..., b.nodes...))
-
-# Lift Cmd to Step
-@inline (&)(a::Cmd, b::Cmd) = Parallel((Step(a), Step(b)))
-@inline (&)(a::Cmd, b::AbstractNode) = Parallel((Step(a), b))
-@inline (&)(a::AbstractNode, b::Cmd) = Parallel((a, Step(b)))
-@inline (&)(a::Cmd, b::Parallel) = Parallel((Step(a), b.nodes...))
-@inline (&)(a::Parallel, b::Cmd) = Parallel((a.nodes..., Step(b)))
-
-# Lift Function to Step
-@inline (&)(a::Function, b::Function) = Parallel((Step(a), Step(b)))
-@inline (&)(a::Function, b::AbstractNode) = Parallel((Step(a), b))
-@inline (&)(a::AbstractNode, b::Function) = Parallel((a, Step(b)))
-@inline (&)(a::Function, b::Parallel) = Parallel((Step(a), b.nodes...))
-@inline (&)(a::Parallel, b::Function) = Parallel((a.nodes..., Step(b)))
-@inline (&)(a::Cmd, b::Function) = Parallel((Step(a), Step(b)))
-@inline (&)(a::Function, b::Cmd) = Parallel((Step(a), Step(b)))
-
-"""
-    a | b
-
-Create a [`Fallback`](@ref): if `a` fails, run `b`.
-
-# Examples
-```julia
-# Try primary, fallback to secondary on failure
-primary_method | fallback_method
-
-# Chain multiple fallbacks
-fast | medium | slow
-```
-"""
-@inline (|)(a::AbstractNode, b::AbstractNode) = Fallback(a, b)
-@inline (|)(a::Fallback, b::AbstractNode) = Fallback(a.primary, Fallback(a.fallback, b))
-
-# Lift Cmd to Step
-@inline (|)(a::Cmd, b::Cmd) = Fallback(Step(a), Step(b))
-@inline (|)(a::Cmd, b::AbstractNode) = Fallback(Step(a), b)
-@inline (|)(a::AbstractNode, b::Cmd) = Fallback(a, Step(b))
-
-# Lift Function to Step
-@inline (|)(a::Function, b::Function) = Fallback(Step(a), Step(b))
-@inline (|)(a::Function, b::AbstractNode) = Fallback(Step(a), b)
-@inline (|)(a::AbstractNode, b::Function) = Fallback(a, Step(b))
-@inline (|)(a::Cmd, b::Function) = Fallback(Step(a), Step(b))
-@inline (|)(a::Function, b::Cmd) = Fallback(Step(a), Step(b))
-
-"""
-    a^n
-
-Create a [`Retry`](@ref) that attempts `a` up to `n` times.
-
-# Examples
-```julia
-# Retry step up to 3 times
-flaky_step^3
-
-# Combine with fallback
-flaky_step^3 | backup
-
-# With timeout
-Timeout(api_call, 5.0)^3
-```
-"""
-@inline (^)(a::AbstractNode, n::Int) = Retry(a, n)
-@inline (^)(a::Cmd, n::Int) = Retry(Step(a), n)
-@inline (^)(a::Function, n::Int) = Retry(Step(a), n)
+(^)(a::AbstractNode, n::Int) = Retry(a, n)
+(^)(a::Cmd, n::Int) = Retry(Step(a), n)
+(^)(a::Function, n::Int) = Retry(Step(a), n)
 
 #==============================================================================#
-# Step Macro - Compile-time transformation only
+# Step Macro
 #==============================================================================#
 
-"""
-    @step expr
-    @step name = expr
-    @step name(inputs => outputs) = expr
-
-Create a [`Step`](@ref) with optional name and file dependencies.
-
-# Examples
-```julia
-# Anonymous step
-@step `fastqc sample.fq`
-
-# Named step
-@step align = `bwa mem ref.fa reads.fq > aligned.sam`
-
-# With file dependencies (for dependency tracking)
-@step sort("aligned.sam" => "sorted.bam") = `samtools sort aligned.sam`
-
-# Julia function
-@step qc_report = generate_multiqc_report
-```
-"""
 macro step(expr)
-    _step_impl(expr)
-end
-
-# Separate function for macro implementation - pure AST transformation
-function _step_impl(expr)
-    # Named step: @step name = work
     if expr isa Expr && expr.head === :(=)
         lhs, rhs = expr.args
         if lhs isa Symbol
-            name = QuoteNode(lhs)
-            return :(Step($name, $(esc(rhs))))
+            return :(Step($(QuoteNode(lhs)), $(esc(rhs))))
         elseif lhs isa Expr && lhs.head === :call
-            # @step name(deps) = work
             name = QuoteNode(lhs.args[1])
             deps = lhs.args[2]
             if deps isa Expr && deps.head === :call && deps.args[1] === :(=>)
@@ -422,25 +174,13 @@ function _step_impl(expr)
             end
         end
     end
-    # Anonymous step
     :(Step($(esc(expr))))
 end
 
 #==============================================================================#
-# Result Types
+# Result Type
 #==============================================================================#
 
-"""
-    StepResult{S<:Step}
-
-Result of executing a single step. Fully parametric for type stability.
-
-# Fields
-- `step::S`: The step that was executed
-- `success::Bool`: Whether execution succeeded
-- `duration::Float64`: Execution time in seconds
-- `output::String`: Captured stdout/stderr or return value
-"""
 struct StepResult{S<:Step}
     step::S
     success::Bool
@@ -449,525 +189,378 @@ struct StepResult{S<:Step}
 end
 
 #==============================================================================#
-# Execution - Pure multiple dispatch
+# State Persistence (Make-like freshness)
 #==============================================================================#
 
-# File checking as separate functions for clarity
-@inline function check_inputs(inputs::Vector{String})
-    for input in inputs
-        isfile(input) || return (false, "Missing input file: $input")
+const STATE_FILE = Ref(".pipeline_state")
+
+step_hash(step::Step) = hash((step.name, step.work, step.inputs, step.outputs))
+
+function load_state()
+    isfile(STATE_FILE[]) || return Set{UInt64}()
+    try
+        Set{UInt64}(parse(UInt64, line) for line in eachline(STATE_FILE[]) if !isempty(strip(line)))
+    catch
+        Set{UInt64}()
     end
-    return (true, "")
 end
 
-@inline function check_outputs(outputs::Vector{String})
-    for output in outputs
-        isfile(output) || return (false, "Output file not created: $output")
+function save_state!(completed::Set{UInt64})
+    open(STATE_FILE[], "w") do io
+        for h in completed
+            println(io, h)
+        end
     end
-    return (true, "")
 end
 
-"""
-    execute(step::Step{Cmd}) -> StepResult
+function mark_complete!(step::Step)
+    completed = load_state()
+    push!(completed, step_hash(step))
+    save_state!(completed)
+end
 
-Execute a shell command step. Captures stdout/stderr.
+clear_state!() = isfile(STATE_FILE[]) && rm(STATE_FILE[])
+
 """
+    is_fresh(step::Step) -> Bool
+
+Check if step can be skipped. Fresh if:
+- Has inputs+outputs: all outputs exist and are newer than all inputs
+- Has only outputs: outputs exist and step completed before  
+- No files: was completed before (state-based)
+"""
+function is_fresh(step::Step)
+    has_in, has_out = !isempty(step.inputs), !isempty(step.outputs)
+    
+    # Check outputs exist
+    if has_out
+        all(isfile, step.outputs) || return false
+    end
+    
+    # Make-style timestamp check
+    if has_in && has_out
+        oldest_out = minimum(mtime, step.outputs)
+        for inp in step.inputs
+            isfile(inp) || return false
+            mtime(inp) >= oldest_out && return false
+        end
+        return true
+    end
+    
+    # Fall back to state-based tracking
+    step_hash(step) in load_state()
+end
+
+#==============================================================================#
+# Execution
+#==============================================================================#
+
 function execute(step::Step{Cmd})
     start = time()
-    
-    # Check inputs
-    ok, msg = check_inputs(step.inputs)
-    ok || return StepResult(step, false, time() - start, msg)
-    
-    # Execute command
-    output = IOBuffer()
-    try
-        run(pipeline(step.work, stdout=output, stderr=output))
-    catch e
-        return StepResult(step, false, time() - start, 
-            string("Error: ", sprint(showerror, e), "\n", String(take!(output))))
+    for inp in step.inputs
+        isfile(inp) || return StepResult(step, false, time() - start, "Missing input file: $inp")
     end
     
-    # Check outputs
-    ok, msg = check_outputs(step.outputs)
-    ok || return StepResult(step, false, time() - start, msg)
+    buf = IOBuffer()
+    try
+        run(pipeline(step.work, stdout=buf, stderr=buf))
+    catch e
+        return StepResult(step, false, time() - start, "Error: $(sprint(showerror, e))\n$(String(take!(buf)))")
+    end
     
-    return StepResult(step, true, time() - start, String(take!(output)))
+    for out in step.outputs
+        isfile(out) || return StepResult(step, false, time() - start, "Output not created: $out")
+    end
+    StepResult(step, true, time() - start, String(take!(buf)))
 end
 
-"""
-    execute(step::Step{F}) -> StepResult where F<:Function
-
-Execute a Julia function step. Captures the return value as string.
-"""
 function execute(step::Step{F}) where {F<:Function}
     start = time()
-    
-    # Check inputs
-    ok, msg = check_inputs(step.inputs)
-    ok || return StepResult(step, false, time() - start, msg)
-    
-    # Execute function
-    local result_str::String
-    try
-        result = step.work()
-        result_str = result === nothing ? "" : string(result)
-    catch e
-        return StepResult(step, false, time() - start,
-            string("Error: ", sprint(showerror, e)))
+    for inp in step.inputs
+        isfile(inp) || return StepResult(step, false, time() - start, "Missing input file: $inp")
     end
     
-    # Check outputs
-    ok, msg = check_outputs(step.outputs)
-    ok || return StepResult(step, false, time() - start, msg)
+    local output::String
+    try
+        result = step.work()
+        output = result === nothing ? "" : string(result)
+    catch e
+        return StepResult(step, false, time() - start, "Error: $(sprint(showerror, e))")
+    end
     
-    return StepResult(step, true, time() - start, result_str)
+    for out in step.outputs
+        isfile(out) || return StepResult(step, false, time() - start, "Output not created: $out")
+    end
+    StepResult(step, true, time() - start, output)
 end
 
 #==============================================================================#
-# Node Execution - Recursive dispatch on node types
+# Node Execution (multiple dispatch)
 #==============================================================================#
 
-# Verbose printing as separate dispatch
+# Verbosity via dispatch
 struct Verbose end
 struct Silent end
 
-@inline print_start(::Silent, ::Step) = nothing
-@inline print_start(::Verbose, step::Step) = println("▶ Running: $(step.name)")
+log_start(::Silent, ::Step) = nothing
+log_start(::Verbose, s::Step) = println("▶ Running: $(s.name)")
 
-@inline print_result(::Silent, ::StepResult) = nothing
-@inline function print_result(::Verbose, result::StepResult)
-    status = result.success ? "✓" : "✗"
-    println("  $status Completed in $(round(result.duration, digits=2))s")
-    result.success || println("  Error: $(result.output)")
-    nothing
+log_skip(::Silent, ::Step) = nothing
+log_skip(::Verbose, s::Step) = println("⊳ Skipping (fresh): $(s.name)")
+
+log_result(::Silent, ::StepResult) = nothing
+function log_result(::Verbose, r::StepResult)
+    println("  $(r.success ? "✓" : "✗") Completed in $(round(r.duration, digits=2))s")
+    r.success || println("  Error: $(r.output)")
 end
 
-@inline print_parallel(::Silent, ::Int) = nothing
-@inline print_parallel(::Verbose, n::Int) = println("⊕ Running $n branches in parallel...")
+log_parallel(::Silent, ::Int) = nothing
+log_parallel(::Verbose, n::Int) = println("⊕ Running $n branches in parallel...")
 
-"""
-    run_node(node, verbosity) -> Vector{StepResult}
+log_retry(::Silent, ::Int, ::Int) = nothing
+log_retry(::Verbose, n::Int, max::Int) = println("↻ Attempt $n/$max")
 
-Execute a pipeline node. Dispatches on node type for type-stable execution.
-"""
-# Step wrapping a Sequence/Parallel/etc (e.g. @step name = a >> b) — run inner node
-function run_node(step::Step{N}, verbosity) where {N<:AbstractNode}
-    print_start(verbosity, step)
-    return run_node(step.work, verbosity)
+log_fallback(::Silent) = nothing
+log_fallback(::Verbose) = println("↯ Primary failed, trying fallback...")
+
+log_branch(::Silent, ::Bool) = nothing
+log_branch(::Verbose, c::Bool) = println("? Condition: $(c ? "true → if_true" : "false → if_false")")
+
+log_timeout(::Silent, ::Float64) = nothing
+log_timeout(::Verbose, s::Float64) = println("⏱ Timeout: $(s)s")
+
+log_force(::Silent) = nothing
+log_force(::Verbose) = println("⚡ Forcing execution...")
+
+log_reduce(::Silent, ::Symbol) = nothing
+log_reduce(::Verbose, n::Symbol) = println("⊕ Reducing: $n")
+
+# Step wrapping another node (e.g. @step name = a >> b)
+function run_node(step::Step{N}, v, forced::Bool=false) where {N<:AbstractNode}
+    log_start(v, step)
+    run_node(step.work, v, forced)
 end
 
-function run_node(step::Step, verbosity)
-    print_start(verbosity, step)
+function run_node(step::Step, v, forced::Bool=false)
+    if !forced && is_fresh(step)
+        log_skip(v, step)
+        return [StepResult(step, true, 0.0, "skipped (fresh)")]
+    end
+    
+    log_start(v, step)
     result = execute(step)
-    print_result(verbosity, result)
-    return [result]
+    log_result(v, result)
+    result.success && mark_complete!(step)
+    [result]
 end
 
-function run_node(seq::Sequence, verbosity)
+function run_node(seq::Sequence, v, forced::Bool)
     results = StepResult[]
-    _run_sequence!(results, seq.nodes, verbosity)
-    return results
-end
-
-# Unroll sequence execution via recursion for type stability
-@inline _run_sequence!(results, ::Tuple{}, verbosity) = nothing
-
-function _run_sequence!(results, nodes::Tuple, verbosity)
-    node_results = run_node(first(nodes), verbosity)
-    append!(results, node_results)
-    # Stop on failure
-    any_failed = false
-    for r in node_results
-        r.success || (any_failed = true; break)
+    for node in seq.nodes
+        node_results = run_node(node, v, forced)
+        append!(results, node_results)
+        any(r -> !r.success, node_results) && break
     end
-    any_failed || _run_sequence!(results, Base.tail(nodes), verbosity)
-    nothing
+    results
 end
 
-function run_node(par::Parallel, verbosity)
-    print_parallel(verbosity, length(par.nodes))
-    
-    # Spawn all branches
-    spawned = _spawn_parallel(par.nodes, verbosity)
-    
-    # Collect results
-    results = StepResult[]
-    _collect_results!(results, spawned)
-    return results
+function run_node(par::Parallel, v, forced::Bool)
+    log_parallel(v, length(par.nodes))
+    tasks = [(@spawn run_node(node, v, forced)) for node in par.nodes]
+    reduce(vcat, fetch.(tasks))
 end
 
-# Spawn parallel nodes via tuple recursion
-@inline _spawn_parallel(::Tuple{}, verbosity) = ()
-
-@inline function _spawn_parallel(nodes::Tuple, verbosity)
-    task = @spawn run_node(first(nodes), verbosity)
-    return (task, _spawn_parallel(Base.tail(nodes), verbosity)...)
-end
-
-# Collect spawned results
-@inline _collect_results!(results, ::Tuple{}) = nothing
-
-@inline function _collect_results!(results, tasks::Tuple)
-    append!(results, fetch(first(tasks)))
-    _collect_results!(results, Base.tail(tasks))
-    nothing
-end
-
-#==============================================================================#
-# Retry, Fallback, Branch Execution
-#==============================================================================#
-
-@inline print_retry(::Silent, ::Int, ::Int) = nothing
-@inline print_retry(::Verbose, attempt::Int, max::Int) = println("↻ Attempt $attempt/$max")
-
-@inline print_retry_fail(::Silent, ::Float64) = nothing
-@inline print_retry_fail(::Verbose, delay::Float64) = 
-    delay > 0 ? println("  Failed, retrying in $(delay)s...") : println("  Failed, retrying...")
-
-function run_node(r::Retry, verbosity)
+function run_node(r::Retry, v, forced::Bool)
     local results::Vector{StepResult}
-    
     for attempt in 1:r.max_attempts
-        print_retry(verbosity, attempt, r.max_attempts)
-        results = run_node(r.node, verbosity)
-        
-        # Success - return immediately
-        all(res -> res.success, results) && return results
-        
-        # Failure - maybe retry
-        if attempt < r.max_attempts
-            print_retry_fail(verbosity, r.delay)
-            r.delay > 0 && sleep(r.delay)
-        end
+        log_retry(v, attempt, r.max_attempts)
+        results = run_node(r.node, v, forced)
+        all(r -> r.success, results) && return results
+        attempt < r.max_attempts && r.delay > 0 && sleep(r.delay)
     end
-    
-    return results
+    results
 end
 
-@inline print_fallback(::Silent) = nothing
-@inline print_fallback(::Verbose) = println("↯ Primary failed, trying fallback...")
-
-function run_node(f::Fallback, verbosity)
-    results = run_node(f.primary, verbosity)
-    
-    # If primary succeeded, return
+function run_node(f::Fallback, v, forced::Bool)
+    results = run_node(f.primary, v, forced)
     all(r -> r.success, results) && return results
-    
-    # Primary failed, try fallback
-    print_fallback(verbosity)
-    return run_node(f.fallback, verbosity)
+    log_fallback(v)
+    run_node(f.fallback, v, forced)
 end
 
-@inline print_branch(::Silent, ::Bool) = nothing
-@inline print_branch(::Verbose, cond::Bool) = 
-    println("? Condition: $(cond ? "true → if_true branch" : "false → if_false branch")")
-
-function run_node(b::Branch, verbosity)
-    cond_result = b.condition()
-    print_branch(verbosity, cond_result)
-    
-    return cond_result ? run_node(b.if_true, verbosity) : run_node(b.if_false, verbosity)
+function run_node(b::Branch, v, forced::Bool)
+    cond = b.condition()
+    log_branch(v, cond)
+    run_node(cond ? b.if_true : b.if_false, v, forced)
 end
 
-@inline print_timeout(::Silent, ::Float64) = nothing
-@inline print_timeout(::Verbose, secs::Float64) = println("⏱ Timeout: $(secs)s")
-
-@inline print_timeout_fail(::Silent) = nothing
-@inline print_timeout_fail(::Verbose) = println("  ✗ Timeout exceeded")
-
-function run_node(t::Timeout, verbosity)
-    print_timeout(verbosity, t.seconds)
+function run_node(t::Timeout, v, forced::Bool)
+    log_timeout(v, t.seconds)
+    ch = Channel{Vector{StepResult}}(1)
+    @async put!(ch, run_node(t.node, v, forced))
     
-    # Run in a task
-    result_channel = Channel{Vector{StepResult}}(1)
-    task = @async put!(result_channel, run_node(t.node, verbosity))
-    
-    # Wait with timeout
     deadline = time() + t.seconds
-    while !isready(result_channel) && time() < deadline
+    while !isready(ch) && time() < deadline
         sleep(0.01)
     end
     
-    if isready(result_channel)
-        return take!(result_channel)
-    else
-        # Timeout - return failure
-        print_timeout_fail(verbosity)
-        return [StepResult(Step(:timeout, `true`), false, t.seconds, "Timeout after $(t.seconds)s")]
-    end
+    isready(ch) ? take!(ch) : [StepResult(Step(:timeout, `true`), false, t.seconds, "Timeout after $(t.seconds)s")]
 end
 
-@inline print_reduce(::Silent, ::Symbol) = nothing
-@inline print_reduce(::Verbose, name::Symbol) = println("⊕ Reducing: $name")
+function run_node(f::Force, v, forced::Bool)
+    log_force(v)
+    run_node(f.node, v, true)
+end
 
-function run_node(r::Reduce, verbosity)
+function run_node(r::Reduce, v, forced::Bool)
     start = time()
+    results = run_node(r.node, v, forced)
+    outputs = [res.output for res in results if res.success]
     
-    # Run the inner node
-    results = run_node(r.node, verbosity)
-    
-    # Collect outputs from successful steps
-    outputs = String[res.output for res in results if res.success]
-    
-    # If any step failed, propagate failure
     if length(outputs) < length(results)
-        failed = first(res for res in results if !res.success)
-        return vcat(results, [StepResult(Step(r.name, r.reducer), false, time() - start, 
-            "Reduce aborted: upstream step failed")])
+        return vcat(results, [StepResult(Step(r.name, r.reducer), false, time() - start, "Reduce aborted: upstream failed")])
     end
     
-    print_reduce(verbosity, r.name)
-    
-    # Apply reducer
-    local reduced_output::String
+    log_reduce(v, r.name)
+    local reduced::String
     try
         result = r.reducer(outputs)
-        reduced_output = result === nothing ? "" : string(result)
+        reduced = result === nothing ? "" : string(result)
     catch e
-        return vcat(results, [StepResult(Step(r.name, r.reducer), false, time() - start,
-            "Reduce error: $(sprint(showerror, e))")])
+        return vcat(results, [StepResult(Step(r.name, r.reducer), false, time() - start, "Reduce error: $(sprint(showerror, e))")])
     end
     
-    # Return all results plus the reduce result
-    reduce_result = StepResult(Step(r.name, r.reducer), true, time() - start, reduced_output)
-    return vcat(results, [reduce_result])
+    vcat(results, [StepResult(Step(r.name, r.reducer), true, time() - start, reduced)])
 end
 
 #==============================================================================#
-# Pipeline - Top-level interface
+# Pipeline
 #==============================================================================#
 
-"""
-    Pipeline{N<:AbstractNode}
-
-A complete pipeline ready for execution.
-
-# Fields
-- `root::N`: The root node of the pipeline DAG
-- `name::String`: Human-readable name for the pipeline
-
-# Examples
-```julia
-# Create from composed nodes
-p = Pipeline(align >> sort >> index, name="alignment")
-
-# Or wrap multiple nodes (creates a Sequence)
-p = Pipeline(step1, step2, step3)
-```
-"""
 struct Pipeline{N<:AbstractNode}
     root::N
     name::String
 end
 
-@inline Pipeline(node::AbstractNode; name::String="pipeline") = Pipeline(node, name)
-@inline Pipeline(nodes::Vararg{AbstractNode}; name::String="pipeline") = 
-    Pipeline(Sequence(nodes), name)
+Pipeline(node::AbstractNode; name::String="pipeline") = Pipeline(node, name)
+Pipeline(nodes::Vararg{AbstractNode}; name::String="pipeline") = Pipeline(Sequence(nodes), name)
 
 """
-    run(p::Pipeline; verbose=true, dry_run=false)
-    run(node::AbstractNode; verbose=true, dry_run=false)
+    run(p::Pipeline; verbose=true, dry_run=false, force=false)
 
-Execute a pipeline or node. Extends `Base.run` (no conflict with `run(::Cmd)` — dispatch by type).
-Use `run(pipeline)` or `pipeline |> run`; both accept `verbose` and `dry_run` kwargs.
-
-# Arguments
-- `verbose::Bool=true`: Print progress information
-- `dry_run::Bool=false`: Show DAG structure without executing
-
-# Returns
-- `Vector{StepResult}`: Results from all executed steps
-
-# Examples
-```julia
-results = run(pipeline)
-pipeline |> run
-results = run(pipeline, verbose=false)
-run(pipeline, dry_run=true)
-```
+Execute pipeline. Steps are skipped if outputs are fresh (Make-like).
+Use `force=true` or `Force(step)` to override.
 """
-function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false)
+function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false)
     verbose && println("═══ Pipeline: $(p.name) ═══")
-    dry_run && return _dry_run(p.root, verbose)
-    verbosity = verbose ? Verbose() : Silent()
+    
+    if dry_run
+        verbose && print_dag(p.root)
+        return StepResult[]
+    end
+    
+    v = verbose ? Verbose() : Silent()
     start = time()
-    results = run_node(p.root, verbosity)
-    _print_summary(verbose, results, time() - start)
-    return results
+    results = run_node(p.root, v, force)
+    
+    if verbose
+        n = count(r -> r.success, results)
+        println("═══ Completed: $n/$(length(results)) steps in $(round(time() - start, digits=2))s ═══")
+    end
+    results
 end
 
-@inline Base.run(node::AbstractNode; kwargs...) = run(Pipeline(node); kwargs...)
-
-# Dry run implementation
-function _dry_run(root, verbose)
-    verbose && print_dag(root)
-    return StepResult[]
-end
-
-# Summary printing
-@inline _print_summary(verbose::Bool, results, elapsed) = 
-    verbose && _print_summary_impl(results, elapsed)
-
-function _print_summary_impl(results, elapsed)
-    n_success = count(r -> r.success, results)
-    n_total = length(results)
-    println("═══ Completed: $n_success/$n_total steps in $(round(elapsed, digits=2))s ═══")
-    nothing
-end
-
-# (run(::Pipeline) and run(::AbstractNode) above; Base.run(::Cmd) unchanged)
+Base.run(node::AbstractNode; kwargs...) = run(Pipeline(node); kwargs...)
 
 #==============================================================================#
-# DAG Visualization
+# DAG Visualization (multiple dispatch per node type)
 #==============================================================================#
 
-"""
-    print_dag(node; indent=0)
-    print_dag(io, node, indent=0)
-
-Print the DAG structure of a pipeline node. In the REPL, pipelines and nodes show this
-structure by default (via `show(io, MIME(\"text/plain\"), x)`).
-
-# Examples
-```julia
-pipeline = (a & b) >> c >> (d & e)
-print_dag(pipeline)
-# Or just display in REPL:
-pipeline
-# Output:
-# Sequence:
-#   Parallel:
-#     a
-#     b
-#   c
-#   Parallel:
-#     d
-#     e
-```
-"""
 print_dag(node::AbstractNode; indent::Int=0) = print_dag(stdout, node, indent)
 
-# Single descent over the DAG: each node type prints its label and recurses into children.
-function print_dag(io::IO, step::Step, indent::Int)
-    prefix = "  " ^ indent
-    print(io, prefix, step.name, "\n")
-    isempty(step.inputs) || print(io, prefix, "  ← ", join(step.inputs, ", "), "\n")
-    isempty(step.outputs) || print(io, prefix, "  → ", join(step.outputs, ", "), "\n")
-    nothing
+function print_dag(io::IO, s::Step, indent::Int)
+    pre = "  "^indent
+    println(io, pre, s.name)
+    isempty(s.inputs) || println(io, pre, "  ← ", join(s.inputs, ", "))
+    isempty(s.outputs) || println(io, pre, "  → ", join(s.outputs, ", "))
 end
 
-function print_dag(io::IO, seq::Sequence, indent::Int)
-    prefix = "  " ^ indent
-    print(io, prefix, "Sequence:\n")
-    print_dag_nodes(io, seq.nodes, indent + 1)
-    nothing
+function print_dag(io::IO, s::Sequence, indent::Int)
+    println(io, "  "^indent, "Sequence:")
+    foreach(n -> print_dag(io, n, indent + 1), s.nodes)
 end
 
-function print_dag(io::IO, par::Parallel, indent::Int)
-    prefix = "  " ^ indent
-    print(io, prefix, "Parallel:\n")
-    print_dag_nodes(io, par.nodes, indent + 1)
-    nothing
-end
-
-@inline print_dag_nodes(io::IO, ::Tuple{}, indent) = nothing
-@inline function print_dag_nodes(io::IO, nodes::Tuple, indent)
-    print_dag(io, first(nodes), indent)
-    print_dag_nodes(io, Base.tail(nodes), indent)
+function print_dag(io::IO, p::Parallel, indent::Int)
+    println(io, "  "^indent, "Parallel:")
+    foreach(n -> print_dag(io, n, indent + 1), p.nodes)
 end
 
 function print_dag(io::IO, r::Retry, indent::Int)
-    prefix = "  " ^ indent
-    print(io, prefix, "Retry(max=$(r.max_attempts), delay=$(r.delay)s):\n")
+    println(io, "  "^indent, "Retry(max=$(r.max_attempts), delay=$(r.delay)s):")
     print_dag(io, r.node, indent + 1)
-    nothing
 end
 
 function print_dag(io::IO, f::Fallback, indent::Int)
-    prefix = "  " ^ indent
-    print(io, prefix, "Fallback:\n", prefix, "  primary:\n")
+    pre = "  "^indent
+    println(io, pre, "Fallback:")
+    println(io, pre, "  primary:")
     print_dag(io, f.primary, indent + 2)
-    print(io, prefix, "  fallback:\n")
+    println(io, pre, "  fallback:")
     print_dag(io, f.fallback, indent + 2)
-    nothing
 end
 
 function print_dag(io::IO, b::Branch, indent::Int)
-    prefix = "  " ^ indent
-    print(io, prefix, "Branch:\n", prefix, "  if_true:\n")
+    pre = "  "^indent
+    println(io, pre, "Branch:")
+    println(io, pre, "  if_true:")
     print_dag(io, b.if_true, indent + 2)
-    print(io, prefix, "  if_false:\n")
+    println(io, pre, "  if_false:")
     print_dag(io, b.if_false, indent + 2)
-    nothing
 end
 
 function print_dag(io::IO, t::Timeout, indent::Int)
-    prefix = "  " ^ indent
-    print(io, prefix, "Timeout($(t.seconds)s):\n")
+    println(io, "  "^indent, "Timeout($(t.seconds)s):")
     print_dag(io, t.node, indent + 1)
-    nothing
 end
 
 function print_dag(io::IO, r::Reduce, indent::Int)
-    prefix = "  " ^ indent
-    print(io, prefix, "Reduce($(r.name)):\n")
+    println(io, "  "^indent, "Reduce($(r.name)):")
     print_dag(io, r.node, indent + 1)
-    nothing
+end
+
+function print_dag(io::IO, f::Force, indent::Int)
+    println(io, "  "^indent, "Force:")
+    print_dag(io, f.node, indent + 1)
 end
 
 #==============================================================================#
 # Utilities
 #==============================================================================#
 
-"""
-    steps(node::AbstractNode) -> Vector{Step}
-
-Flatten all steps from a pipeline node into a vector.
-"""
-steps(step::Step) = [step]
-steps(seq::Sequence) = _collect_steps(seq.nodes)
-steps(par::Parallel) = _collect_steps(par.nodes)
+steps(s::Step) = [s]
+steps(s::Sequence) = reduce(vcat, steps.(s.nodes))
+steps(p::Parallel) = reduce(vcat, steps.(p.nodes))
 steps(r::Retry) = steps(r.node)
 steps(f::Fallback) = vcat(steps(f.primary), steps(f.fallback))
 steps(b::Branch) = vcat(steps(b.if_true), steps(b.if_false))
 steps(t::Timeout) = steps(t.node)
 steps(r::Reduce) = steps(r.node)
+steps(f::Force) = steps(f.node)
 
-function _collect_steps(nodes::Tuple)
-    result = Step[]
-    _collect_steps!(result, nodes)
-    return result
-end
-
-@inline _collect_steps!(result, ::Tuple{}) = nothing
-@inline function _collect_steps!(result, nodes::Tuple)
-    append!(result, steps(first(nodes)))
-    _collect_steps!(result, Base.tail(nodes))
-end
-
-"""
-    count_steps(node::AbstractNode) -> Int
-
-Count total steps in a pipeline node.
-"""
 count_steps(::Step) = 1
-count_steps(seq::Sequence) = _count_steps(seq.nodes)
-count_steps(par::Parallel) = _count_steps(par.nodes)
+count_steps(s::Sequence) = sum(count_steps, s.nodes)
+count_steps(p::Parallel) = sum(count_steps, p.nodes)
 count_steps(r::Retry) = count_steps(r.node)
 count_steps(f::Fallback) = count_steps(f.primary) + count_steps(f.fallback)
 count_steps(b::Branch) = max(count_steps(b.if_true), count_steps(b.if_false))
 count_steps(t::Timeout) = count_steps(t.node)
-count_steps(r::Reduce) = count_steps(r.node) + 1  # +1 for the reduce step itself
-
-@inline _count_steps(::Tuple{}) = 0
-@inline _count_steps(nodes::Tuple) = count_steps(first(nodes)) + _count_steps(Base.tail(nodes))
+count_steps(r::Reduce) = count_steps(r.node) + 1
+count_steps(f::Force) = count_steps(f.node)
 
 #==============================================================================#
-# Display: default is DAG tree (REPL); one-line for string/compact
+# Display
 #==============================================================================#
 
-# One-line (string, compact)
 Base.show(io::IO, s::Step) = print(io, "Step(:", s.name, ")")
 Base.show(io::IO, s::Sequence) = print(io, "Sequence(", join(s.nodes, " >> "), ")")
 Base.show(io::IO, p::Parallel) = print(io, "Parallel(", join(p.nodes, " & "), ")")
@@ -976,158 +569,84 @@ Base.show(io::IO, f::Fallback) = print(io, "(", f.primary, " | ", f.fallback, ")
 Base.show(io::IO, b::Branch) = print(io, "Branch(?, ", b.if_true, ", ", b.if_false, ")")
 Base.show(io::IO, t::Timeout) = print(io, "Timeout(", t.node, ", ", t.seconds, "s)")
 Base.show(io::IO, r::Reduce) = print(io, "Reduce(:", r.name, ", ", r.node, ")")
+Base.show(io::IO, f::Force) = print(io, "Force(", f.node, ")")
 Base.show(io::IO, p::Pipeline) = print(io, "Pipeline(\"", p.name, "\", ", count_steps(p.root), " steps)")
 
-# REPL / display: DAG tree (default when you type the variable)
-Base.show(io::IO, ::MIME"text/plain", p::Pipeline) = (print(io, "Pipeline: ", p.name, " (", count_steps(p.root), " steps)\n"); print_dag(io, p.root, 0))
+Base.show(io::IO, ::MIME"text/plain", p::Pipeline) = (println(io, "Pipeline: ", p.name, " (", count_steps(p.root), " steps)"); print_dag(io, p.root, 0))
 Base.show(io::IO, ::MIME"text/plain", node::AbstractNode) = print_dag(io, node, 0)
 
 #==============================================================================#
-# Map Helper - Fan-out over collection
+# Map & ForEach
 #==============================================================================#
 
-"""
-    Map(f, items) -> Parallel
-
-Apply function `f` to each item, creating parallel steps.
-
-# Examples
-```julia
-# Process files in parallel
-Map(["a.txt", "b.txt", "c.txt"]) do file
-    @step Symbol(file) = `process \$file`
-end
-
-# With named steps
-samples = ["sample_A", "sample_B", "sample_C"]
-Map(samples) do s
-    Step(Symbol("process_", s), `analyze \$s.fastq`)
-end >> merge_step
-```
-"""
 function Map(f::Function, items)
     nodes = [f(item) for item in items]
     isempty(nodes) && error("Map requires at least one item")
     length(nodes) == 1 && return first(nodes)
-    return reduce(&, nodes)
+    reduce(&, nodes)
 end
-
-# Curried form: Map(items) do ... end
 Map(f::Function) = items -> Map(f, items)
 
-#==============================================================================#
-# ForEach - Pattern-based file discovery with wildcard extraction
-#==============================================================================#
-
-@doc raw"""
-    ForEach(pattern::String) do wildcard...
-        # commands using wildcard
+"""
+    ForEach(pattern) do wildcards...
+        # build pipeline
     end
 
-Discover files matching `pattern` with `{name}` placeholders and create a
-parallel branch for each match. Extracted values are passed to your function.
-
-# Examples
-```julia
-# With interpolation use sh("...") for shell commands
-ForEach("data/{sample}_R1.fq.gz") do sample
-    sh("pear -f $(sample)_R1 -r $(sample)_R2") >> sh("process $(sample)")
-end
-
-# Multiple wildcards
-ForEach("data/{project}/{sample}.csv") do project, sample
-    sh("process $(project)/$(sample).csv")
-end
-
-# Chain with downstream step
-ForEach("{id}.fastq") do id
-    sh("align $(id).fastq")
-end >> @step merge = sh"merge *.bam"
-```
+Discover files matching pattern with `{name}` placeholders, create parallel branches.
 """
 function ForEach(f::Function, pattern::String)
-    # Extract {name} wildcards from pattern
-    wildcard_regex = r"\{(\w+)\}"
-    wildcard_names = [m.captures[1] for m in eachmatch(wildcard_regex, pattern)]
-    isempty(wildcard_names) && error("ForEach pattern must contain at least one {wildcard}: $pattern")
+    wildcard_rx = r"\{(\w+)\}"
+    contains(pattern, wildcard_rx) || error("ForEach pattern must contain {wildcard}: $pattern")
     
-    # Build regex to match files and extract wildcard values
-    # First replace {name} with a placeholder, escape regex special chars, then restore capture group
-    placeholder = "\x00WILDCARD\x00"
-    temp = replace(pattern, wildcard_regex => placeholder)
-    # Escape regex special chars (not backslash since pattern shouldn't contain it)
+    # Build file-matching regex
+    placeholder = "\x00WILD\x00"
+    temp = replace(pattern, wildcard_rx => placeholder)
     for c in ".+^*?\$()[]|"
         temp = replace(temp, string(c) => "\\" * c)
     end
-    regex_pattern = replace(temp, placeholder => "([^/]+)")
-    regex = Regex("^" * regex_pattern * "\$")
+    regex = Regex("^" * replace(temp, placeholder => "([^/]+)") * "\$")
     
-    # Find matching files using simple glob
-    matches = _foreach_glob(pattern, regex)
-    isempty(matches) && error("ForEach: no files match pattern '$pattern'")
+    # Find matching files
+    matches = find_matches(pattern, regex)
+    isempty(matches) && error("ForEach: no files match '$pattern'")
     
-    # Create a pipeline branch for each match
     nodes = AbstractNode[]
     for captured in matches
         result = length(captured) == 1 ? f(captured[1]) : f(captured...)
-        # Auto-lift Cmd or Function to Step for convenience
-        node = result isa AbstractNode ? result : Step(result)
-        push!(nodes, node)
+        push!(nodes, result isa AbstractNode ? result : Step(result))
     end
     
-    length(nodes) == 1 && return first(nodes)
-    return reduce(&, nodes)
+    length(nodes) == 1 ? first(nodes) : reduce(&, nodes)
 end
-
-# do-block syntax: ForEach("pattern") do x ... end
 ForEach(pattern::String) = f -> ForEach(f, pattern)
 
-# Simple recursive glob that finds files matching pattern with {wildcards}
-function _foreach_glob(pattern::String, regex::Regex)
-    # Split pattern into parts
+function find_matches(pattern::String, regex::Regex)
     parts = split(pattern, "/")
-    
-    # Find first part with wildcard
     first_wild = findfirst(p -> contains(p, "{"), parts)
     first_wild === nothing && error("Pattern must contain {wildcard}")
     
-    # Base directory (parts before first wildcard)
-    base_parts = parts[1:first_wild-1]
-    base_dir = isempty(base_parts) ? "." : joinpath(base_parts...)
+    base = first_wild == 1 ? "." : joinpath(parts[1:first_wild-1]...)
+    isdir(base) || return Vector{Vector{String}}()
     
-    isdir(base_dir) || return Vector{Vector{String}}()
-    
-    # Collect all matching files recursively
     matches = Vector{Vector{String}}()
-    _foreach_scan!(matches, base_dir, base_dir, parts, first_wild, regex)
-    return matches
+    scan_dir!(matches, base, base, parts, first_wild, regex)
+    matches
 end
 
-function _foreach_scan!(matches::Vector{Vector{String}}, base_dir::String, dir::String, parts::Vector{<:AbstractString}, idx::Int, regex::Regex)
+function scan_dir!(matches, base, dir, parts, idx, regex)
     idx > length(parts) && return
-    
     is_last = idx == length(parts)
     
     for entry in readdir(dir)
-        full_path = joinpath(dir, entry)
-        
-        if is_last
-            # Final part - must be a file and match regex
-            if isfile(full_path)
-                # Normalize to forward slashes so pattern "{a}/{b}.csv" matches on Windows too
-                match_path = replace(relpath(full_path, base_dir), "\\" => "/")
-                m = match(regex, match_path)
-                if m !== nothing
-                    push!(matches, collect(String, m.captures))
-                end
-            end
-        else
-            # Intermediate part - must be a directory
-            if isdir(full_path)
-                _foreach_scan!(matches, base_dir, full_path, parts, idx + 1, regex)
-            end
+        path = joinpath(dir, entry)
+        if is_last && isfile(path)
+            rel = replace(relpath(path, base), "\\" => "/")
+            m = match(regex, rel)
+            m !== nothing && push!(matches, collect(String, m.captures))
+        elseif !is_last && isdir(path)
+            scan_dir!(matches, base, path, parts, idx + 1, regex)
         end
     end
 end
 
-end # module SimplePipelines
+end # module
