@@ -360,6 +360,15 @@ does not execute step work. Shell commands (backtick/`sh"..."`) are also only ex
 # With file dependencies (enables Make-like freshness checks)
 @step process(["input.csv"] => ["output.csv"]) = sh"sort input.csv > output.csv"
 
+# Inputs-only shorthand: declare input(s), function receives them as arguments (no => [] needed).
+# Use the function name without calling it: = process_file not = process_file("path")
+@step process("tsv-test/filtered-\$(donor).tsv.gz") = process_file   # process_file(path) gets the path
+@step process(donor, "tsv-test/filtered-\$(donor).tsv.gz") = process_file   # process_file(donor, path) gets both; path-like strings are checked as files, other values (e.g. donor ID) pass through
+@step merge(in1, in2) = combine_files   # combine_files(in1, in2) for multiple inputs
+
+# Full form (inputs => outputs) when you have both
+@step process(["input.csv"] => ["output.csv"]) = process_file
+
 # Anonymous step (auto-named)
 @step sh"echo hello"
 ```
@@ -387,17 +396,23 @@ function step_lhs(lhs::Expr, rhs)
     lhs.head === :call || return :(Step($(esc(Expr(:(=), lhs, rhs)))))
     name = QuoteNode(lhs.args[1])
     length(lhs.args) >= 2 || return :(Step($name, $(step_work_expr(rhs))))
-    deps = lhs.args[2]
+    # One arg -> single input; multiple args -> vector of inputs (inputs-only, no =>)
+    deps = length(lhs.args) == 2 ? lhs.args[2] : Expr(:vect, lhs.args[2:end]...)
     step_deps(name, deps, rhs)
 end
 
-step_deps(name, deps, rhs) = :(Step($name, $(step_work_expr(rhs))))
+step_deps(name, deps, rhs) = :(Step($name, $(step_work_expr(rhs)), [$(esc(deps))], []))
 
 function step_deps(name, deps::Expr, rhs)
-    deps.head === :call && length(deps.args) >= 3 && deps.args[1] === :(=>) || return :(Step($name, $(step_work_expr(rhs))))
-    inputs = deps.args[2]
-    outputs = deps.args[3]
-    :(Step($name, $(step_work_expr(rhs)), $(step_inputs_expr(inputs)), $(step_outputs_expr(outputs))))
+    # Explicit (inputs => outputs) form
+    if deps.head === :call && length(deps.args) >= 3 && deps.args[1] === :(=>)
+        inputs = deps.args[2]
+        outputs = deps.args[3]
+        return :(Step($name, $(step_work_expr(rhs)), $(step_inputs_expr(inputs)), $(step_outputs_expr(outputs))))
+    end
+    # Inputs-only shorthand: name("path") or name(a, b) -> inputs, no outputs
+    inputs_expr = deps.head === :vect ? esc(deps) : :([$(esc(deps))])
+    :(Step($name, $(step_work_expr(rhs)), $inputs_expr, []))
 end
 step_inputs_expr(s::String) = :([$s])
 step_inputs_expr(x) = x
@@ -531,9 +546,11 @@ function run_safely(f)::RunOutcome
 end
 
 # Input/output readiness: only check path-like (String) inputs/outputs; other types pass (dispatch, no isa).
-input_ready_error(inp::String) = isfile(inp) ? nothing : "Missing input: $inp"
+# Strings that look like paths (path separator or dot, e.g. "file.txt" or "dir/file") are checked for file existence; plain labels (e.g. "donor1") pass through.
+path_like(s::String) = occursin(r"[/\\]", s) || occursin('.', s)
+input_ready_error(inp::String) = path_like(inp) && !isfile(inp) ? "Missing input: $inp" : nothing
 input_ready_error(inp) = nothing
-output_ready_error(out::String) = isfile(out) ? nothing : "Missing output: $out"
+output_ready_error(out::String) = path_like(out) && !isfile(out) ? "Missing output: $out" : nothing
 output_ready_error(out) = nothing
 
 function execute(step::Step{Cmd})
@@ -564,8 +581,9 @@ function execute(step::Step{F}) where {F<:Function}
         err = input_ready_error(inp)
         err !== nothing && return StepResult(step, false, time() - start, step.inputs, err)
     end
+    # When inputs are declared, pass them to the function; otherwise call with no args (thunk).
     outcome = run_safely() do
-        r = step.work()
+        r = isempty(step.inputs) ? step.work() : step.work(step.inputs...)
         r === nothing ? "" : r
     end
     if !outcome.ok
@@ -576,6 +594,15 @@ function execute(step::Step{F}) where {F<:Function}
         err !== nothing && return StepResult(step, false, time() - start, step.inputs, err)
     end
     StepResult(step, true, time() - start, step.inputs, outcome.value)
+end
+
+# Step work was not Cmd, Function, or Nothing (e.g. RHS was evaluated at build time)
+function execute(step::Step{T}) where T
+    error(
+        "Step work must be a command (Cmd), a function, or nothing. Got $(typeof(step.work)). " *
+        "If you used @step name(input) = process_file(...), the call runs at build time. " *
+        "Use @step name(\"path\") = process_file (function without parentheses) so the function receives the input at run time."
+    )
 end
 
 #==============================================================================#
