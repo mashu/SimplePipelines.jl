@@ -369,7 +369,8 @@ macro step(expr)
 end
 
 # Lazy step work: RHS that is a :call expr is wrapped in a thunk so it runs only when the step runs.
-step_work_expr(rhs) = (rhs isa Expr && rhs.head === :call) ? :(() -> $(esc(rhs))) : esc(rhs)
+step_work_expr(e::Expr) = (e.head === :call ? :(() -> $(esc(e))) : esc(e))
+step_work_expr(rhs) = esc(rhs)
 
 step_expr(expr::Symbol) = :(Step($(esc(expr))))
 step_expr(expr) = :(Step($(esc(expr))))
@@ -567,7 +568,7 @@ function execute(step::Step{F}) where {F<:Function}
         isfile(out_path) || return StepResult(step, false, time() - start, "Output not created: $out_path")
     end
     val = outcome.value
-    out_str = val isa String ? val : (s = string(val); length(s) > 200 ? s[1:200] * "…" : s)
+    out_str = step_output_display(val)
     StepResult(step, true, time() - start, out_str, val)
 end
 
@@ -1090,16 +1091,30 @@ count_steps(::Map) = 0      # lazy: nodes built only when run
 # Display
 #==============================================================================#
 
-# Custom show so StepResult doesn't print the ugly closure type
+# Display string for step output (truncate non-String values for logs)
+step_output_display(val::String) = val
+step_output_display(val) = (s = string(val); length(s) > 200 ? first(s, 200) * "…" : s)
+
+# Custom show so StepResult doesn't print the ugly closure type (dispatch on value type, no isa)
+function Base.show(io::IO, r::StepResult{S, Nothing}) where S
+    print(io, "StepResult(")
+    show(io, r.step)
+    print(io, ", ", r.success, ", ", round(r.duration; digits=2), ", ")
+    show(io, r.output)
+    print(io, ")")
+end
+function Base.show(io::IO, r::StepResult{S, String}) where S
+    print(io, "StepResult(")
+    show(io, r.step)
+    print(io, ", ", r.success, ", ", round(r.duration; digits=2), ", ")
+    show(io, r.output)
+    print(io, ")")
+end
 function Base.show(io::IO, r::StepResult{S, V}) where {S, V}
     print(io, "StepResult(")
     show(io, r.step)
     print(io, ", ", r.success, ", ", round(r.duration; digits=2), ", ")
-    if r.value !== nothing && !(r.value isa String)
-        print(io, "<", summary(r.value), ">")
-    else
-        show(io, r.output)
-    end
+    print(io, "<", summary(r.value), ">")
     print(io, ")")
 end
 
