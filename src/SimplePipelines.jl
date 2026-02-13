@@ -892,7 +892,7 @@ Pipeline(node::AbstractNode; name::String="pipeline") = Pipeline(node, name)
 Pipeline(nodes::Vararg{AbstractNode}; name::String="pipeline") = Pipeline(Sequence(nodes), name)
 
 """
-    run(p::Pipeline; verbose=true, dry_run=false, force=false, jobs=8) -> Vector{AbstractStepResult}
+    run(p::Pipeline; verbose=true, dry_run=false, force=false, jobs=8, keep_outputs=:last) -> Vector{AbstractStepResult}
     run(node::AbstractNode; kwargs...) -> Vector{AbstractStepResult}
 
 Execute a pipeline or node, returning results for each step.
@@ -902,6 +902,10 @@ Execute a pipeline or node, returning results for each step.
 - `dry_run=false`: If true, show DAG structure without executing
 - `force=false`: If true, run all steps regardless of freshness
 - `jobs=8`: Max concurrent branches for Parallel/ForEach/Map. All branches run; when `jobs > 0`, they run in rounds of `jobs` (each round waits for the previous). `jobs=0` = unbounded (all at once).
+- `keep_outputs=:last`: What to retain in each result's `.output`. `:last` (default) keeps only the last result's output (others get `nothing`); `:all` keeps every step's output; `:none` drops all outputs.
+
+# Low-memory / large data
+To avoid holding many large outputs in memory: (1) Have steps write to a file and return the path (String). (2) Reduce's reducer then receives a vector of paths and can open/process one at a time, write the combined result to a file, and return that path. (3) Default is `keep_outputs=:last` so the returned results vector only retains the final output; use `keep_outputs=:all` to keep every step's output. Step results still carry success, duration, and inputs; only the `.output` field is cleared for non-final steps when using `:last` or `:none`.
 
 # Output
 With `verbose=true`, shows tree-structured output: `▶` running, `✓` success, `✗` failure, `⊳` up to date (not re-run).
@@ -910,7 +914,7 @@ With `verbose=true`, shows tree-structured output: `▶` running, `✓` success,
 ```julia
 run(pipeline)                # Default: up to 8 branches at a time
 run(pipeline, jobs=0)         # Unbounded (all branches at once)
-run(pipeline, jobs=4)         # At most 4 concurrent
+run(pipeline, keep_outputs=:all)   # Keep every step's output (default is :last)
 run(pipeline, verbose=false)
 run(pipeline, dry_run=true)
 run(pipeline, force=true)
@@ -918,15 +922,15 @@ run(pipeline, force=true)
 
 See also: [`is_fresh`](@ref), [`Force`](@ref), [`print_dag`](@ref)
 """
-function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false, jobs::Int=8)
+function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false, jobs::Int=8, keep_outputs::Symbol=:last)
     prev = MAX_PARALLEL[]
     MAX_PARALLEL[] = jobs
-    results = run_pipeline(p, verbose, dry_run, force)
+    results = run_pipeline(p, verbose, dry_run, force, keep_outputs)
     MAX_PARALLEL[] = prev
     results
 end
 
-function run_pipeline(p::Pipeline, verbose::Bool, dry_run::Bool, force::Bool)
+function run_pipeline(p::Pipeline, verbose::Bool, dry_run::Bool, force::Bool, keep_outputs::Symbol=:last)
     if verbose
         printstyled("═══ Pipeline: ", color=:blue, bold=true)
         printstyled(p.name, " ═══\n", color=:blue, bold=true)
@@ -951,6 +955,13 @@ function run_pipeline(p::Pipeline, verbose::Bool, dry_run::Bool, force::Bool)
         save_state!(union(state_loaded[], pending_completions[]))
     end
     run_depth[] -= 1
+
+    if keep_outputs === :none && !isempty(results)
+        results = [StepResult(r.step, r.success, r.duration, r.inputs, nothing) for r in results]
+    elseif keep_outputs === :last && !isempty(results)
+        n = length(results)
+        results = [StepResult(r.step, r.success, r.duration, r.inputs, i == n ? r.output : nothing) for (i, r) in enumerate(results)]
+    end
 
     if verbose
         n = count(r -> r.success, results)

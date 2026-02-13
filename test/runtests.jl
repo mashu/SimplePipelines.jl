@@ -928,7 +928,7 @@ clear_state!()
             @test count_steps(pipeline) == 0  # lazy: not expanded until run
 
             # Execute and verify (block runs here)
-            results = run(pipeline, verbose=false)
+            results = run(pipeline, verbose=false, keep_outputs=:all)
             @test length(results) == 3
             @test all(r -> r.success, results)
             outputs = sort([r.output for r in results])
@@ -983,7 +983,7 @@ clear_state!()
                 Step(Symbol("process_", donor), `echo $donor`)
             end
             @test pipeline isa ForEach
-            results = run(pipeline, verbose=false, force=true)
+            results = run(pipeline, verbose=false, force=true, keep_outputs=:all)
             @test all(r -> r.success, results)
             outputs = sort([r.output for r in results])
             @test "donor1\n" in outputs
