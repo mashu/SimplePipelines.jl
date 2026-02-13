@@ -54,6 +54,13 @@ Step(name::Symbol, work) = Step(name, work, String[], String[])
 Step(work) = Step(gensym(:step), work, String[], String[])
 Step(name::Symbol, work, inputs, outputs) = Step(name, work, collect(String, inputs), collect(String, outputs))
 
+# Display name: use name if explicit, otherwise show the work
+is_gensym(s::Symbol) = startswith(string(s), "##")
+step_label(s::Step) = is_gensym(s.name) ? work_label(s.work) : string(s.name)
+work_label(c::Cmd) = length(c.exec) ≤ 3 ? join(c.exec, " ") : join(c.exec[1:3], " ") * "…"
+work_label(f::Function) = string(nameof(f))
+work_label(x) = string(typeof(x))
+
 struct Sequence{T<:Tuple} <: AbstractNode
     nodes::T
 end
@@ -303,37 +310,71 @@ struct Verbose end
 struct Silent end
 
 log_start(::Silent, ::Step) = nothing
-log_start(::Verbose, s::Step) = println("▶ Running: $(s.name)")
+function log_start(::Verbose, s::Step)
+    printstyled("▶ Running: ", color=:cyan)
+    println(step_label(s))
+end
 
 log_skip(::Silent, ::Step) = nothing
-log_skip(::Verbose, s::Step) = println("⊳ Skipping (fresh): $(s.name)")
+function log_skip(::Verbose, s::Step)
+    printstyled("⊳ Skipping (fresh): ", color=:light_black)
+    printstyled(step_label(s), "\n", color=:light_black)
+end
 
 log_result(::Silent, ::StepResult) = nothing
 function log_result(::Verbose, r::StepResult)
-    println("  $(r.success ? "✓" : "✗") Completed in $(round(r.duration, digits=2))s")
-    r.success || println("  Error: $(r.output)")
+    if r.success
+        printstyled("  ✓ ", color=:green)
+        println("Completed in $(round(r.duration, digits=2))s")
+    else
+        printstyled("  ✗ ", color=:red, bold=true)
+        println("Completed in $(round(r.duration, digits=2))s")
+        printstyled("  Error: ", color=:red)
+        println(r.output)
+    end
 end
 
 log_parallel(::Silent, ::Int) = nothing
-log_parallel(::Verbose, n::Int) = println("⊕ Running $n branches in parallel...")
+function log_parallel(::Verbose, n::Int)
+    printstyled("⊕ ", color=:magenta)
+    println("Running $n branches in parallel...")
+end
 
 log_retry(::Silent, ::Int, ::Int) = nothing
-log_retry(::Verbose, n::Int, max::Int) = println("↻ Attempt $n/$max")
+function log_retry(::Verbose, n::Int, max::Int)
+    printstyled("↻ ", color=:yellow)
+    println("Attempt $n/$max")
+end
 
 log_fallback(::Silent) = nothing
-log_fallback(::Verbose) = println("↯ Primary failed, trying fallback...")
+function log_fallback(::Verbose)
+    printstyled("↯ ", color=:yellow)
+    println("Primary failed, trying fallback...")
+end
 
 log_branch(::Silent, ::Bool) = nothing
-log_branch(::Verbose, c::Bool) = println("? Condition: $(c ? "true → if_true" : "false → if_false")")
+function log_branch(::Verbose, c::Bool)
+    printstyled("? ", color=:blue)
+    println("Condition: $(c ? "true → if_true" : "false → if_false")")
+end
 
 log_timeout(::Silent, ::Float64) = nothing
-log_timeout(::Verbose, s::Float64) = println("⏱ Timeout: $(s)s")
+function log_timeout(::Verbose, s::Float64)
+    printstyled("⏱ ", color=:cyan)
+    println("Timeout: $(s)s")
+end
 
 log_force(::Silent) = nothing
-log_force(::Verbose) = println("⚡ Forcing execution...")
+function log_force(::Verbose)
+    printstyled("⚡ ", color=:yellow, bold=true)
+    println("Forcing execution...")
+end
 
 log_reduce(::Silent, ::Symbol) = nothing
-log_reduce(::Verbose, n::Symbol) = println("⊕ Reducing: $n")
+function log_reduce(::Verbose, n::Symbol)
+    printstyled("⊛ ", color=:magenta)
+    println("Reducing: $n")
+end
 
 # Step wrapping another node (e.g. @step name = a >> b)
 function run_node(step::Step{N}, v, forced::Bool=false) where {N<:AbstractNode}
@@ -452,7 +493,10 @@ Execute pipeline. Steps are skipped if outputs are fresh (Make-like).
 Use `force=true` or `Force(step)` to override.
 """
 function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false)
-    verbose && println("═══ Pipeline: $(p.name) ═══")
+    if verbose
+        printstyled("═══ Pipeline: ", color=:blue, bold=true)
+        printstyled(p.name, " ═══\n", color=:blue, bold=true)
+    end
     
     if dry_run
         verbose && print_dag(p.root)
@@ -465,7 +509,11 @@ function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::B
     
     if verbose
         n = count(r -> r.success, results)
-        println("═══ Completed: $n/$(length(results)) steps in $(round(time() - start, digits=2))s ═══")
+        total = length(results)
+        success_color = n == total ? :green : :red
+        printstyled("═══ Completed: ", color=:blue, bold=true)
+        printstyled("$n/$total", color=success_color, bold=true)
+        printstyled(" steps in $(round(time() - start, digits=2))s ═══\n", color=:blue, bold=true)
     end
     results
 end
@@ -476,61 +524,99 @@ Base.run(node::AbstractNode; kwargs...) = run(Pipeline(node); kwargs...)
 # DAG Visualization (multiple dispatch per node type)
 #==============================================================================#
 
-print_dag(node::AbstractNode; indent::Int=0) = print_dag(stdout, node, indent)
+# Entry points
+print_dag(node::AbstractNode; color::Bool=true) = print_dag(stdout, node, "", "", color)
+print_dag(io::IO, node::AbstractNode, ::Int=0) = print_dag(io, node, "", "", false)
 
-function print_dag(io::IO, s::Step, indent::Int)
-    pre = "  "^indent
-    println(io, pre, s.name)
-    isempty(s.inputs) || println(io, pre, "  ← ", join(s.inputs, ", "))
-    isempty(s.outputs) || println(io, pre, "  → ", join(s.outputs, ", "))
+# pre = prefix for first line, cont = continuation prefix for subsequent lines
+function print_dag(io::IO, s::Step, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    color ? printstyled(io, "○ ", color=:cyan) : print(io, "○ ")
+    println(io, step_label(s))
+    if !isempty(s.inputs)
+        print(io, cont, "    ")
+        color ? printstyled(io, "← ", color=:green) : print(io, "← ")
+        println(io, join(s.inputs, ", "))
+    end
+    if !isempty(s.outputs)
+        print(io, cont, "    ")
+        color ? printstyled(io, "→ ", color=:yellow) : print(io, "→ ")
+        println(io, join(s.outputs, ", "))
+    end
 end
 
-function print_dag(io::IO, s::Sequence, indent::Int)
-    println(io, "  "^indent, "Sequence:")
-    foreach(n -> print_dag(io, n, indent + 1), s.nodes)
+function print_dag(io::IO, s::Sequence, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    color ? printstyled(io, "▸ Sequence\n", color=:blue) : println(io, "▸ Sequence")
+    print_children(io, s.nodes, cont, color)
 end
 
-function print_dag(io::IO, p::Parallel, indent::Int)
-    println(io, "  "^indent, "Parallel:")
-    foreach(n -> print_dag(io, n, indent + 1), p.nodes)
+function print_dag(io::IO, p::Parallel, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    color ? printstyled(io, "⊕ Parallel\n", color=:magenta) : println(io, "⊕ Parallel")
+    print_children(io, p.nodes, cont, color)
 end
 
-function print_dag(io::IO, r::Retry, indent::Int)
-    println(io, "  "^indent, "Retry(max=$(r.max_attempts), delay=$(r.delay)s):")
-    print_dag(io, r.node, indent + 1)
+function print_dag(io::IO, r::Retry, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    color ? printstyled(io, "↻ Retry", color=:yellow) : print(io, "↻ Retry")
+    println(io, " ×$(r.max_attempts)", r.delay > 0 ? " ($(r.delay)s delay)" : "")
+    print_dag(io, r.node, cont * "    ", cont * "    ", color)
 end
 
-function print_dag(io::IO, f::Fallback, indent::Int)
-    pre = "  "^indent
-    println(io, pre, "Fallback:")
-    println(io, pre, "  primary:")
-    print_dag(io, f.primary, indent + 2)
-    println(io, pre, "  fallback:")
-    print_dag(io, f.fallback, indent + 2)
+function print_dag(io::IO, f::Fallback, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    color ? printstyled(io, "↯ Fallback\n", color=:yellow) : println(io, "↯ Fallback")
+    print_dag(io, f.primary,  cont * "  ├─", cont * "  │ ", color)
+    print_dag(io, f.fallback, cont * "  └─", cont * "    ", color)
 end
 
-function print_dag(io::IO, b::Branch, indent::Int)
-    pre = "  "^indent
-    println(io, pre, "Branch:")
-    println(io, pre, "  if_true:")
-    print_dag(io, b.if_true, indent + 2)
-    println(io, pre, "  if_false:")
-    print_dag(io, b.if_false, indent + 2)
+function print_dag(io::IO, b::Branch, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    color ? printstyled(io, "? Branch\n", color=:blue) : println(io, "? Branch")
+    if color
+        print_dag(io, b.if_true,  cont * "  ├─", cont * "  │ ", color, :green, "✓ ")
+        print_dag(io, b.if_false, cont * "  └─", cont * "    ", color, :red, "✗ ")
+    else
+        print_dag(io, b.if_true,  cont * "  ├─✓ ", cont * "  │   ", false)
+        print_dag(io, b.if_false, cont * "  └─✗ ", cont * "      ", false)
+    end
 end
 
-function print_dag(io::IO, t::Timeout, indent::Int)
-    println(io, "  "^indent, "Timeout($(t.seconds)s):")
-    print_dag(io, t.node, indent + 1)
+function print_dag(io::IO, t::Timeout, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    color ? printstyled(io, "⏱ Timeout", color=:cyan) : print(io, "⏱ Timeout")
+    println(io, " $(t.seconds)s")
+    print_dag(io, t.node, cont * "    ", cont * "    ", color)
 end
 
-function print_dag(io::IO, r::Reduce, indent::Int)
-    println(io, "  "^indent, "Reduce($(r.name)):")
-    print_dag(io, r.node, indent + 1)
+function print_dag(io::IO, r::Reduce, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    color ? printstyled(io, "⊛ Reduce", color=:magenta) : print(io, "⊛ Reduce")
+    println(io, " :$(r.name)")
+    print_dag(io, r.node, cont * "    ", cont * "    ", color)
 end
 
-function print_dag(io::IO, f::Force, indent::Int)
-    println(io, "  "^indent, "Force:")
-    print_dag(io, f.node, indent + 1)
+function print_dag(io::IO, f::Force, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    color ? printstyled(io, "⚡ Force\n", color=:yellow, bold=true) : println(io, "⚡ Force")
+    print_dag(io, f.node, cont * "    ", cont * "    ", color)
+end
+
+# Branch helper with marker
+function print_dag(io::IO, node::AbstractNode, pre::String, cont::String, color::Bool, marker_color::Symbol, marker::String)
+    printstyled(io, marker, color=marker_color)
+    print_dag(io, node, pre, cont * "  ", color)
+end
+
+function print_children(io::IO, nodes, cont::String, color::Bool)
+    n = length(nodes)
+    for (i, node) in enumerate(nodes)
+        last = i == n
+        pre  = cont * (last ? "  └─" : "  ├─")
+        next = cont * (last ? "    " : "  │ ")
+        print_dag(io, node, pre, next, color)
+    end
 end
 
 #==============================================================================#
@@ -572,8 +658,22 @@ Base.show(io::IO, r::Reduce) = print(io, "Reduce(:", r.name, ", ", r.node, ")")
 Base.show(io::IO, f::Force) = print(io, "Force(", f.node, ")")
 Base.show(io::IO, p::Pipeline) = print(io, "Pipeline(\"", p.name, "\", ", count_steps(p.root), " steps)")
 
-Base.show(io::IO, ::MIME"text/plain", p::Pipeline) = (println(io, "Pipeline: ", p.name, " (", count_steps(p.root), " steps)"); print_dag(io, p.root, 0))
-Base.show(io::IO, ::MIME"text/plain", node::AbstractNode) = print_dag(io, node, 0)
+function Base.show(io::IO, ::MIME"text/plain", p::Pipeline)
+    color = get(io, :color, false)::Bool
+    if color
+        printstyled(io, "Pipeline: ", color=:blue, bold=true)
+        printstyled(io, p.name, color=:white, bold=true)
+        printstyled(io, " ($(count_steps(p.root)) steps)\n", color=:light_black)
+    else
+        println(io, "Pipeline: ", p.name, " (", count_steps(p.root), " steps)")
+    end
+    print_dag(io, p.root, "", "", color)
+end
+
+function Base.show(io::IO, ::MIME"text/plain", node::AbstractNode)
+    color = get(io, :color, false)::Bool
+    print_dag(io, node, "", "", color)
+end
 
 #==============================================================================#
 # Map & ForEach

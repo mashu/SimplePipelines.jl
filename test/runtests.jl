@@ -407,18 +407,18 @@ clear_state!()
         print_dag(io, fall, 0)
         out = String(take!(io))
         @test occursin("Fallback", out)
-        @test occursin("primary", out)
-        @test occursin("fallback", out)
         @test occursin("a", out)
         @test occursin("b", out)
+        @test occursin("├─", out)  # tree branches
+        @test occursin("└─", out)
 
         br = Branch(() -> true, a, b)
         io = IOBuffer()
         print_dag(io, br, 0)
         out = String(take!(io))
         @test occursin("Branch", out)
-        @test occursin("if_true", out)
-        @test occursin("if_false", out)
+        @test occursin("✓", out)  # true branch marker
+        @test occursin("✗", out)  # false branch marker
 
         tmo = Timeout(a, 5.0)
         io = IOBuffer()
