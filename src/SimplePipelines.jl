@@ -1,3 +1,36 @@
+"""
+    SimplePipelines
+
+Minimal, type-stable DAG pipelines for Julia with Make-like incremental builds.
+
+# Quick Start
+```julia
+using SimplePipelines
+
+# Chain steps with >>
+pipeline = sh"echo hello" >> sh"echo world"
+
+# Run in parallel with &
+pipeline = sh"task_a" & sh"task_b"
+
+# Fallback on failure with |
+pipeline = sh"primary" | sh"backup"
+
+# Named steps with file dependencies
+download = @step download([] => ["data.csv"]) = sh"curl -o data.csv http://example.com"
+process = @step process(["data.csv"] => ["out.csv"]) = sh"sort data.csv > out.csv"
+
+run(download >> process)
+```
+
+# Features
+- **Make-like freshness**: Steps skip if outputs are newer than inputs
+- **State persistence**: Tracks completed steps across runs
+- **Colored output**: Visual tree structure with status indicators
+- **Force execution**: `Force(step)` or `run(p, force=true)`
+
+See also: [`Step`](@ref), [`Pipeline`](@ref), [`run`](@ref), [`is_fresh`](@ref)
+"""
 module SimplePipelines
 
 export Step, @step, Sequence, Parallel, Pipeline
@@ -30,18 +63,55 @@ macro sh_str(s)
     Cmd(["sh", "-c", s])
 end
 
+"""Shell command with string interpolation. See also [`@sh_str`](@ref)."""
 sh(s::String) = Cmd(["sh", "-c", s])
 
 #==============================================================================#
 # Core Types
 #==============================================================================#
 
+"""
+    AbstractNode
+
+Abstract supertype of all pipeline nodes (Step, Sequence, Parallel, Retry, Fallback, Branch, Timeout, Force, Reduce).
+"""
 abstract type AbstractNode end
 
 """
-    Step{F}
+    Step{F} <: AbstractNode
 
-A single unit of work. `F` is the work type (Cmd, Function, etc.)
+A single unit of work in a pipeline. `F` is the work type (`Cmd` or `Function`).
+
+# Fields
+- `name::Symbol` — Step identifier (auto-generated if not provided)
+- `work::F` — The command or function to execute
+- `inputs::Vector{String}` — Input file dependencies
+- `outputs::Vector{String}` — Output file paths
+
+# Constructors
+```julia
+Step(work)                           # Auto-generated name
+Step(name::Symbol, work)             # Named step
+Step(name, work, inputs, outputs)    # Full specification
+@step name = work                    # Macro form
+@step name(inputs => outputs) = work # Macro with dependencies
+```
+
+# Examples
+```julia
+# Command step
+Step(`sort data.txt`)
+Step(:sort, `sort data.txt`)
+
+# Function step  
+Step(() -> println("hello"))
+Step(:greet, () -> println("hello"))
+
+# With file dependencies (enables Make-like freshness)
+Step(:process, `sort in.txt > out.txt`, ["in.txt"], ["out.txt"])
+```
+
+See also: [`@step`](@ref), [`is_fresh`](@ref), [`Force`](@ref)
 """
 struct Step{F} <: AbstractNode
     name::Symbol
@@ -61,16 +131,47 @@ work_label(c::Cmd) = length(c.exec) ≤ 3 ? join(c.exec, " ") : join(c.exec[1:3]
 work_label(f::Function) = string(nameof(f))
 work_label(x) = string(typeof(x))
 
+"""
+    Sequence{T} <: AbstractNode
+
+Executes nodes sequentially, stopping on first failure.
+Created automatically by the `>>` operator.
+
+```julia
+a >> b >> c  # equivalent to Sequence((a, b, c))
+```
+"""
 struct Sequence{T<:Tuple} <: AbstractNode
     nodes::T
 end
 Sequence(nodes::Vararg{AbstractNode}) = Sequence(nodes)
 
+"""
+    Parallel{T} <: AbstractNode
+
+Executes nodes concurrently using threads.
+Created automatically by the `&` operator.
+
+```julia
+a & b & c  # equivalent to Parallel((a, b, c))
+```
+"""
 struct Parallel{T<:Tuple} <: AbstractNode
     nodes::T
 end
 Parallel(nodes::Vararg{AbstractNode}) = Parallel(nodes)
 
+"""
+    Retry{N} <: AbstractNode
+
+Retries a node up to `max_attempts` times on failure, with optional delay.
+Created by the `^` operator or `Retry()` constructor.
+
+```julia
+step^3                      # Retry up to 3 times
+Retry(step, 5; delay=2.0)   # 5 attempts with 2s delay between
+```
+"""
 struct Retry{N<:AbstractNode} <: AbstractNode
     node::N
     max_attempts::Int
@@ -78,26 +179,78 @@ struct Retry{N<:AbstractNode} <: AbstractNode
 end
 Retry(node::AbstractNode, max_attempts::Int=3; delay::Real=0.0) = Retry(node, max_attempts, Float64(delay))
 
+"""
+    Fallback{A,B} <: AbstractNode
+
+Executes fallback node if primary fails.
+Created by the `|` operator.
+
+```julia
+primary | backup  # Run backup if primary fails
+```
+"""
 struct Fallback{A<:AbstractNode, B<:AbstractNode} <: AbstractNode
     primary::A
     fallback::B
 end
 
+"""
+    Branch{C,T,F} <: AbstractNode
+
+Conditional execution based on a predicate function.
+
+```julia
+Branch(() -> should_update(), update_step, skip_step)
+```
+"""
 struct Branch{C<:Function, T<:AbstractNode, F<:AbstractNode} <: AbstractNode
     condition::C
     if_true::T
     if_false::F
 end
 
+"""
+    Timeout{N} <: AbstractNode
+
+Wraps a node with a time limit. Returns failure if time exceeded.
+
+```julia
+Timeout(slow_step, 30.0)  # 30 second timeout
+```
+"""
 struct Timeout{N<:AbstractNode} <: AbstractNode
     node::N
     seconds::Float64
 end
 
+"""
+    Force{N} <: AbstractNode
+
+Forces execution of a node, bypassing freshness checks.
+Use when you need to re-run a step even if outputs are up-to-date.
+
+```julia
+Force(step)              # Force this specific step
+run(pipeline, force=true) # Force all steps in pipeline
+```
+
+See also: [`is_fresh`](@ref), [`clear_state!`](@ref)
+"""
 struct Force{N<:AbstractNode} <: AbstractNode
     node::N
 end
 
+"""
+    Reduce{F,N} <: AbstractNode
+
+Runs a parallel node and combines successful step outputs with a reducer function.
+
+```julia
+Reduce((a & b), join)           # Reduce(join, a & b)
+Reduce(a & b)(join)             # curried: reducer later
+Reduce(join, a & b; name=:merge)
+```
+"""
 struct Reduce{F<:Function, N<:AbstractNode} <: AbstractNode
     reducer::F
     node::N
@@ -164,6 +317,25 @@ Reduce(node::AbstractNode; name::Symbol=:reduce) = f -> Reduce(f, node; name=nam
 # Step Macro
 #==============================================================================#
 
+"""
+    @step name = work
+    @step name(inputs => outputs) = work
+    @step work
+
+Create a named step with optional file dependencies.
+
+# Examples
+```julia
+# Named step
+@step download = sh"curl -o data.csv http://example.com"
+
+# With file dependencies (enables Make-like freshness checks)
+@step process(["input.csv"] => ["output.csv"]) = sh"sort input.csv > output.csv"
+
+# Anonymous step (auto-named)
+@step sh"echo hello"
+```
+"""
 macro step(expr)
     if expr isa Expr && expr.head === :(=)
         lhs, rhs = expr.args
@@ -226,15 +398,35 @@ function mark_complete!(step::Step)
     save_state!(completed)
 end
 
+"""
+    clear_state!()
+
+Remove the pipeline state file (`.pipeline_state`), forcing all steps
+to run on the next execution regardless of freshness.
+
+See also: [`is_fresh`](@ref), [`Force`](@ref)
+"""
 clear_state!() = isfile(STATE_FILE[]) && rm(STATE_FILE[])
 
 """
     is_fresh(step::Step) -> Bool
 
-Check if step can be skipped. Fresh if:
-- Has inputs+outputs: all outputs exist and are newer than all inputs
-- Has only outputs: outputs exist and step completed before  
-- No files: was completed before (state-based)
+Check if a step can be skipped based on Make-like freshness rules.
+
+# Freshness Rules
+1. **Has inputs and outputs**: Fresh if all outputs exist and are newer than all inputs
+2. **Has only outputs**: Fresh if outputs exist and step was previously completed
+3. **No file dependencies**: Fresh if step was previously completed (state-based tracking)
+
+State is persisted in `.pipeline_state` file.
+
+# Examples
+```julia
+step = @step process(["in.txt"] => ["out.txt"]) = sh"sort in.txt > out.txt"
+is_fresh(step)  # true if out.txt exists and is newer than in.txt
+```
+
+See also: [`Force`](@ref), [`clear_state!`](@ref)
 """
 function is_fresh(step::Step)
     has_in, has_out = !isempty(step.inputs), !isempty(step.outputs)
@@ -478,6 +670,17 @@ end
 # Pipeline
 #==============================================================================#
 
+"""
+    Pipeline{N} <: Any
+
+A named pipeline wrapping a root node for execution.
+
+```julia
+p = Pipeline(step1 >> step2, name="ETL")
+run(p)
+display(p)  # Shows tree structure
+```
+"""
 struct Pipeline{N<:AbstractNode}
     root::N
     name::String
@@ -487,10 +690,32 @@ Pipeline(node::AbstractNode; name::String="pipeline") = Pipeline(node, name)
 Pipeline(nodes::Vararg{AbstractNode}; name::String="pipeline") = Pipeline(Sequence(nodes), name)
 
 """
-    run(p::Pipeline; verbose=true, dry_run=false, force=false)
+    run(p::Pipeline; verbose=true, dry_run=false, force=false) -> Vector{StepResult}
+    run(node::AbstractNode; kwargs...) -> Vector{StepResult}
 
-Execute pipeline. Steps are skipped if outputs are fresh (Make-like).
-Use `force=true` or `Force(step)` to override.
+Execute a pipeline or node, returning results for each step.
+
+# Keywords
+- `verbose=true`: Show colored progress output
+- `dry_run=false`: If true, show DAG structure without executing
+- `force=false`: If true, run all steps regardless of freshness
+
+# Output
+With `verbose=true`, shows colored tree-structured output:
+- `▶` Running step
+- `✓` Success (green)
+- `✗` Failure (red)  
+- `⊳` Skipped (gray, fresh)
+
+# Examples
+```julia
+run(pipeline)                    # Normal execution
+run(pipeline, verbose=false)     # Silent execution
+run(pipeline, dry_run=true)      # Preview DAG only
+run(pipeline, force=true)        # Force all steps to run
+```
+
+See also: [`is_fresh`](@ref), [`Force`](@ref), [`print_dag`](@ref)
 """
 function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false)
     if verbose
@@ -524,7 +749,12 @@ Base.run(node::AbstractNode; kwargs...) = run(Pipeline(node); kwargs...)
 # DAG Visualization (multiple dispatch per node type)
 #==============================================================================#
 
-# Entry points
+"""
+    print_dag(node [; color=true])
+    print_dag(io, node [, indent])
+
+Print a tree visualization of the pipeline DAG. With `color=true` (default when writing to a terminal), uses colors for node types and status. See also [`run`](@ref) and `display(pipeline)`.
+"""
 print_dag(node::AbstractNode; color::Bool=true) = print_dag(stdout, node, "", "", color)
 print_dag(io::IO, node::AbstractNode, ::Int=0) = print_dag(io, node, "", "", false)
 
@@ -623,6 +853,11 @@ end
 # Utilities
 #==============================================================================#
 
+"""
+    steps(node) -> Vector{Step}
+
+Return all leaf steps in the DAG (flattened).
+"""
 steps(s::Step) = [s]
 steps(s::Sequence) = reduce(vcat, steps.(s.nodes))
 steps(p::Parallel) = reduce(vcat, steps.(p.nodes))
@@ -633,6 +868,11 @@ steps(t::Timeout) = steps(t.node)
 steps(r::Reduce) = steps(r.node)
 steps(f::Force) = steps(f.node)
 
+"""
+    count_steps(node) -> Int
+
+Return the number of steps in the DAG (leaf count for execution).
+"""
 count_steps(::Step) = 1
 count_steps(s::Sequence) = sum(count_steps, s.nodes)
 count_steps(p::Parallel) = sum(count_steps, p.nodes)
@@ -679,6 +919,19 @@ end
 # Map & ForEach
 #==============================================================================#
 
+"""
+    Map(f, items)
+    Map(f)
+
+Build a parallel node by applying `f` to each item. `Map(f)` returns a function `items -> Map(f, items)`.
+
+# Examples
+```julia
+Map([1, 2, 3]) do n
+    @step step_n = `echo n=\$n`
+end
+```
+"""
 function Map(f::Function, items)
     nodes = [f(item) for item in items]
     isempty(nodes) && error("Map requires at least one item")

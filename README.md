@@ -7,7 +7,7 @@
 [![codecov](https://codecov.io/gh/mashu/SimplePipelines.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/mashu/SimplePipelines.jl)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Minimal, type-stable DAG pipelines for Julia.
+Minimal, type-stable DAG pipelines for Julia with Make-like incremental builds.
 
 ## Quick Start
 
@@ -34,11 +34,60 @@ run(pipeline)
 
 > **Commands** — `sh"cmd"` · `sh("$(var)")` (interpolation)
 
-> **Operators** — `a >> b` sequence (chaining; not `|>`) · `a & b` parallel · `a | b` fallback · `a^3` retry
+> **Operators** — `a >> b` sequence · `a & b` parallel · `a | b` fallback · `a^3` retry
 
 > **Control** — `Branch(cond,a,b)` · `Timeout(a,t)` · `Map(f, items)` · `Reduce(f,a&b)` · `ForEach(pat) do ...`
 
-> **Run** — `run(pipeline)` or `pipeline |> run`
+> **Freshness** — `Force(step)` · `run(p, force=true)` · `is_fresh(step)` · `clear_state!()`
+
+> **Run** — `run(pipeline)` · `run(p, verbose=false)` · `run(p, dry_run=true)`
+
+## Make-like Incremental Builds
+
+Steps are automatically skipped if their outputs are fresh:
+
+```julia
+# Define steps with input/output dependencies
+download = @step download([] => ["data.csv"]) = sh"curl -o data.csv http://example.com/data"
+process  = @step process(["data.csv"] => ["result.csv"]) = sh"sort data.csv > result.csv"
+
+pipeline = download >> process
+run(pipeline)  # First run: executes both steps
+run(pipeline)  # Second run: skips both (outputs exist and are newer than inputs)
+```
+
+Force execution when needed:
+```julia
+run(pipeline, force=true)    # Force all steps
+Force(process) >> cleanup    # Force specific step
+```
+
+## Colored Output
+
+Pipeline execution shows colored, tree-structured output:
+
+```
+═══ Pipeline: ETL ═══
+▶ Running: download
+  ✓ Completed in 0.5s
+⊕ Running 2 branches in parallel...
+▶ Running: parse
+▶ Running: validate  
+  ✓ Completed in 0.1s
+  ✓ Completed in 0.2s
+═══ Completed: 3/3 steps in 0.8s ═══
+```
+
+Visualize pipeline structure:
+```julia
+display(pipeline)
+# ▸ Sequence
+#   ├─○ download
+#   ├─⊕ Parallel
+#   │   ├─○ parse
+#   │   └─○ validate
+#   └─○ save
+```
 
 ## Multi-file Processing
 

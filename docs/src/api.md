@@ -1,5 +1,11 @@
 # API Reference
 
+## Module
+
+```@docs
+SimplePipelines
+```
+
 ## Types
 
 ```@docs
@@ -12,6 +18,7 @@ Fallback
 Branch
 Timeout
 Reduce
+Force
 Pipeline
 ```
 
@@ -19,16 +26,19 @@ Pipeline
 
 ```@docs
 @step
+@sh_str
 ```
 
 ## Operators
 
-```@docs
->>
-&
-|
-^
-```
+The package extends these operators for pipeline composition. `Cmd` and `Function` arguments are auto-wrapped in `Step`.
+
+| Operator | Name     | Description                          |
+| -------- | -------- | ------------------------------------ |
+| `>>`     | Sequence | Run nodes in order                   |
+| `&`      | Parallel | Run nodes concurrently               |
+| `\|`     | Fallback | Run fallback if primary fails        |
+| `^`      | Retry    | Wrap with retries, e.g. `node^3`     |
 
 ## Functions
 
@@ -37,10 +47,9 @@ Map
 ForEach
 ```
 
-## Shell helpers
+## Shell
 
 ```@docs
-@sh_str
 sh
 ```
 
@@ -48,6 +57,13 @@ sh
 
 ```@docs
 run
+```
+
+## Freshness and state
+
+```@docs
+is_fresh
+clear_state!
 ```
 
 ## Utilities

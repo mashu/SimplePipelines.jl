@@ -345,9 +345,25 @@ clear_state!()
         
         dag = a >> (b & c)
         
-        # Just call print_dag to exercise code path
+        # Just call print_dag to exercise code path (color=true to stdout)
         print_dag(dag)
+        # print_dag(io, node, 0) uses color=false internally
+        io = IOBuffer()
+        print_dag(io, dag, 0)
+        @test length(String(take!(io))) > 0
         @test true  # If we get here, it worked
+    end
+
+    @testset "is_fresh and clear_state!" begin
+        clear_state!()
+        # Step with no file deps: freshness is state-based
+        s = @step nofiles = `echo ok`
+        @test !is_fresh(s)
+        run(s, verbose=false, force=true)
+        @test is_fresh(s)
+        # clear_state! removes state so step is no longer fresh
+        clear_state!()
+        @test !is_fresh(s)
     end
     
     @testset "Base.show" begin
