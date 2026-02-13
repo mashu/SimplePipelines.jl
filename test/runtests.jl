@@ -623,13 +623,13 @@ clear_state!()
         s_cmd = Step(:cmd_missing, `cat nonexistent.txt`, ["nonexistent_file_12345.txt"], String[])
         results = run(s_cmd, verbose=false)
         @test !results[1].success
-        @test contains(results[1].output, "Missing input file")
+        @test contains(results[1].output, "Missing input")
         
         # Function step with missing input file
         s_func = Step(:func_missing, () -> "test", ["nonexistent_file_12345.txt"], String[])
         results_func = run(s_func, verbose=false)
         @test !results_func[1].success
-        @test contains(results_func[1].output, "Missing input file")
+        @test contains(results_func[1].output, "Missing input")
     end
     
     @testset "Error handling - command failure" begin

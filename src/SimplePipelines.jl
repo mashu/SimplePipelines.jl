@@ -412,23 +412,21 @@ step_outputs_expr(x) = x
 abstract type AbstractStepResult end
 
 """
-    StepResult(step, success, duration, output [; value])
+    StepResult(step, success, duration, inputs, output)
 
-Result of running one step. Type is `StepResult{S, V}`: `S` is the step type, `V` is the type of
-`value` (e.g. `Nothing` for command steps, `DataFrame` when the step returns one).
-Use `results[i].value` for the actual return value; `output` is a string for display/logging.
+Result of running one step. Type is `StepResult{S, I, V}`: `S` step type, `I` input type, `V` output type.
+`inputs` and `output` are not assumed to be any specific type—they are whatever the pipeline provides
+(e.g. file paths, DataFrame, or other). Type-stable: no `Any`.
 """
-struct StepResult{S<:Step, V} <: AbstractStepResult
+struct StepResult{S<:Step, I, V} <: AbstractStepResult
     step::S
     success::Bool
     duration::Float64
-    output::String
-    value::V
-    StepResult{S, Nothing}(step::S, success::Bool, duration::Float64, output::String) where S<:Step = new{S, Nothing}(step, success, duration, output, nothing)
-    StepResult{S, V}(step::S, success::Bool, duration::Float64, output::String, value::V) where {S<:Step, V} = new{S, V}(step, success, duration, output, value)
+    inputs::I
+    output::V
+    StepResult{S, I, V}(step::S, success::Bool, duration::Float64, inputs::I, output::V) where {S<:Step, I, V} = new{S, I, V}(step, success, duration, inputs, output)
 end
-StepResult(step::S, success::Bool, duration::Float64, output::String) where S<:Step = StepResult{S, Nothing}(step, success, duration, output)
-StepResult(step::S, success::Bool, duration::Float64, output::String, value::V) where {S<:Step, V} = StepResult{S, V}(step, success, duration, output, value)
+StepResult(step::S, success::Bool, duration::Float64, inputs::I, output::V) where {S<:Step, I, V} = StepResult{S, I, V}(step, success, duration, inputs, output)
 
 #==============================================================================#
 # State Persistence (Make-like freshness)
@@ -532,44 +530,52 @@ function run_safely(f)::RunOutcome
     end
 end
 
+# Input/output readiness: only check path-like (String) inputs/outputs; other types pass (dispatch, no isa).
+input_ready_error(inp::String) = isfile(inp) ? nothing : "Missing input: $inp"
+input_ready_error(inp) = nothing
+output_ready_error(out::String) = isfile(out) ? nothing : "Missing output: $out"
+output_ready_error(out) = nothing
+
 function execute(step::Step{Cmd})
     start = time()
     for inp in step.inputs
-        isfile(inp) || return StepResult(step, false, time() - start, "Missing input file: $inp")
+        err = input_ready_error(inp)
+        err !== nothing && return StepResult(step, false, time() - start, step.inputs, err)
     end
     buf = IOBuffer()
     outcome = run_safely() do; Base.run(Base.pipeline(step.work, stdout=buf, stderr=buf)); end
     if !outcome.ok
-        return StepResult(step, false, time() - start, "Error: $(outcome.value)\n$(String(take!(buf)))")
+        return StepResult(step, false, time() - start, step.inputs, "Error: $(outcome.value)\n$(String(take!(buf)))")
     end
     for out_path in step.outputs
-        isfile(out_path) || return StepResult(step, false, time() - start, "Output not created: $out_path")
+        err = output_ready_error(out_path)
+        err !== nothing && return StepResult(step, false, time() - start, step.inputs, err)
     end
-    StepResult(step, true, time() - start, String(take!(buf)))
+    StepResult(step, true, time() - start, step.inputs, String(take!(buf)))
 end
 
 function execute(step::Step{Nothing})
-    StepResult(step, false, 0.0, "Step has no work (ForEach block returned nothing). The block must return a Step or node, e.g. @step name = sh\"cmd\".")
+    StepResult(step, false, 0.0, step.inputs, "Step has no work (ForEach block returned nothing). The block must return a Step or node, e.g. @step name = sh\"cmd\".")
 end
 
 function execute(step::Step{F}) where {F<:Function}
     start = time()
     for inp in step.inputs
-        isfile(inp) || return StepResult(step, false, time() - start, "Missing input file: $inp")
+        err = input_ready_error(inp)
+        err !== nothing && return StepResult(step, false, time() - start, step.inputs, err)
     end
     outcome = run_safely() do
         r = step.work()
         r === nothing ? "" : r
     end
     if !outcome.ok
-        return StepResult(step, false, time() - start, "Error: $(outcome.value)")
+        return StepResult(step, false, time() - start, step.inputs, "Error: $(outcome.value)")
     end
     for out_path in step.outputs
-        isfile(out_path) || return StepResult(step, false, time() - start, "Output not created: $out_path")
+        err = output_ready_error(out_path)
+        err !== nothing && return StepResult(step, false, time() - start, step.inputs, err)
     end
-    val = outcome.value
-    out_str = step_output_display(val)
-    StepResult(step, true, time() - start, out_str, val)
+    StepResult(step, true, time() - start, step.inputs, outcome.value)
 end
 
 #==============================================================================#
@@ -666,7 +672,7 @@ end
 function run_node(step::Step{F}, v, forced::Bool=false) where F
     if !forced && is_fresh(step)
         log_skip(v, step)
-        return [StepResult(step, true, 0.0, "up to date (not re-run)")]
+        return [StepResult(step, true, 0.0, step.inputs, "up to date (not re-run)")]
     end
     log_start(v, step)
     result = execute(step)
@@ -736,7 +742,8 @@ function run_node(t::Timeout, v, forced::Bool)
         sleep(0.01)
     end
     
-    isready(ch) ? take!(ch) : [StepResult(Step(:timeout, `true`), false, t.seconds, "Timeout after $(t.seconds)s")]
+    timeout_step = Step(:timeout, `true`)
+    isready(ch) ? take!(ch) : [StepResult(timeout_step, false, t.seconds, timeout_step.inputs, "Timeout after $(t.seconds)s")]
 end
 
 function run_node(f::Force, v, ::Bool)
@@ -747,22 +754,22 @@ end
 function run_node(r::Reduce, v, forced::Bool)
     start = time()
     results = run_node(r.node, v, forced)
-    # Use .value when step returned a real value (e.g. DataFrame); else .output (string)
-    outputs = [res.value !== nothing ? res.value : res.output for res in results if res.success]
-    
+    outputs = [res.output for res in results if res.success]
+
+    reduce_step = Step(r.name, r.reducer)
     if length(outputs) < length(results)
-        return vcat(results, [StepResult(Step(r.name, r.reducer), false, time() - start, "Reduce aborted: upstream failed")])
+        return vcat(results, [StepResult(reduce_step, false, time() - start, reduce_step.inputs, "Reduce aborted: upstream failed")])
     end
-    
+
     log_reduce(v, r.name)
     outcome = run_safely() do
         result = r.reducer(outputs)
         result === nothing ? "" : string(result)
     end
     if !outcome.ok
-        return vcat(results, [StepResult(Step(r.name, r.reducer), false, time() - start, "Reduce error: $(outcome.value)")])
+        return vcat(results, [StepResult(reduce_step, false, time() - start, reduce_step.inputs, "Reduce error: $(outcome.value)")])
     end
-    vcat(results, [StepResult(Step(r.name, r.reducer), true, time() - start, outcome.value)])
+    vcat(results, [StepResult(reduce_step, true, time() - start, reduce_step.inputs, outcome.value)])
 end
 
 # Cycle check: does node contain needle? (ForEach/Map expansion only)
@@ -1091,30 +1098,20 @@ count_steps(::Map) = 0      # lazy: nodes built only when run
 # Display
 #==============================================================================#
 
-# Display string for step output (truncate non-String values for logs)
-step_output_display(val::String) = val
-step_output_display(val) = (s = string(val); length(s) > 200 ? first(s, 200) * "…" : s)
-
-# Custom show so StepResult doesn't print the ugly closure type (dispatch on value type, no isa)
-function Base.show(io::IO, r::StepResult{S, Nothing}) where S
+# Custom show so StepResult doesn't print the ugly closure type (dispatch on output type)
+function Base.show(io::IO, r::StepResult{S, I, String}) where {S, I}
     print(io, "StepResult(")
     show(io, r.step)
     print(io, ", ", r.success, ", ", round(r.duration; digits=2), ", ")
-    show(io, r.output)
+    s = r.output
+    show(io, length(s) > 200 ? first(s, 200) * "…" : s)
     print(io, ")")
 end
-function Base.show(io::IO, r::StepResult{S, String}) where S
+function Base.show(io::IO, r::StepResult{S, I, V}) where {S, I, V}
     print(io, "StepResult(")
     show(io, r.step)
     print(io, ", ", r.success, ", ", round(r.duration; digits=2), ", ")
-    show(io, r.output)
-    print(io, ")")
-end
-function Base.show(io::IO, r::StepResult{S, V}) where {S, V}
-    print(io, "StepResult(")
-    show(io, r.step)
-    print(io, ", ", r.success, ", ", round(r.duration; digits=2), ", ")
-    print(io, "<", summary(r.value), ">")
+    print(io, "<", summary(r.output), ">")
     print(io, ")")
 end
 
