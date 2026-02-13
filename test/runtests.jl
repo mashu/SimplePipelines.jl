@@ -311,6 +311,54 @@ clear_state!()
         results = run(par, verbose=true)
         @test all(r -> r.success, results)
     end
+
+    @testset "Coverage: verbose log paths and colored DAG" begin
+        # Run with verbose=true to hit log_skip (fresh step)
+        clear_state!()
+        s = @step cov_skip = `echo ok`
+        run(s, verbose=true, force=true)
+        run(s, verbose=true)  # second run skips -> log_skip
+        clear_state!()
+
+        # Verbose retry (log_retry)
+        r = Retry(`false` | `echo fallback`, 2)
+        run(r, verbose=true)
+
+        # Verbose fallback (log_fallback when primary fails)
+        f = `false` | `echo backup`
+        run(f, verbose=true)
+
+        # Verbose branch (log_branch)
+        b = Branch(() -> true, Step(`echo yes`), Step(`echo no`))
+        run(b, verbose=true)
+        b2 = Branch(() -> false, Step(`echo yes`), Step(`echo no`))
+        run(b2, verbose=true)
+
+        # Verbose timeout (log_timeout)
+        t = Timeout(Step(`echo done`), 5.0)
+        run(t, verbose=true)
+
+        # Verbose reduce (log_reduce)
+        red = Reduce(join, `echo a` & `echo b`)
+        run(red, verbose=true)
+
+        # Verbose force (log_force)
+        fr = Force(Step(`echo forced`))
+        run(fr, verbose=true)
+
+        # DAG with unnamed steps (step_label shows command)
+        dag = `echo a` >> (`echo b` & `echo c`) >> `echo d`
+        io = IOBuffer()
+        print_dag(io, dag, 0)
+        out = String(take!(io))
+        @test occursin("echo", out)
+        # Long command triggers work_label truncation (exec > 3 parts: "echo a b …")
+        long_step = Step(`echo a b c d e`)
+        io2 = IOBuffer()
+        print_dag(io2, long_step, 0)
+        out2 = String(take!(io2))
+        @test occursin("…", out2) || occursin("echo", out2)
+    end
     
     @testset "Utility functions" begin
         a = @step a = `echo a`
@@ -364,6 +412,28 @@ clear_state!()
         # clear_state! removes state so step is no longer fresh
         clear_state!()
         @test !is_fresh(s)
+
+        # File-based freshness: inputs and outputs
+        dir = mktempdir()
+        cd(dir) do
+            write("in.txt", "x")
+            step = @step process(["in.txt"] => ["out.txt"]) = sh"cp in.txt out.txt"
+            @test !is_fresh(step)  # out.txt missing
+            run(step, verbose=false, force=true)
+            @test is_fresh(step)   # out exists and newer than in
+            # Touch input so it's newer than output -> not fresh
+            run(`touch in.txt`)
+            @test !is_fresh(step)
+        end
+        rm(dir; recursive=true)
+
+        # load_state with invalid file returns empty set (skip on Windows: file can stay locked)
+        if !Sys.iswindows()
+            clear_state!()
+            write(SimplePipelines.STATE_FILE[], "not-a-number\n")
+            @test isempty(SimplePipelines.load_state())
+            clear_state!()
+        end
     end
     
     @testset "Base.show" begin

@@ -6,6 +6,13 @@
 [![Build Status](https://github.com/mashu/SimplePipelines.jl/workflows/CI/badge.svg)](https://github.com/mashu/SimplePipelines.jl/actions)
 [![codecov](https://codecov.io/gh/mashu/SimplePipelines.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/mashu/SimplePipelines.jl)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-lightgrey)](https://github.com/mashu/SimplePipelines.jl/actions)
+
+| Platform | Tested (CI) | Supported |
+|----------|:-----------:|:---------:|
+| Linux    | ✓           | ✓         |
+| macOS    | ✓           | ✓         |
+| Windows  | —           | ✗         |
 
 Minimal, type-stable DAG pipelines for Julia with Make-like incremental builds.
 
