@@ -569,7 +569,7 @@ end
 
 log_skip(::Silent, ::Step) = nothing
 function log_skip(::Verbose, s::Step)
-    printstyled("⊳ Skipping (fresh): ", color=:light_black)
+    printstyled("⊳ Up to date: ", color=:light_black)
     printstyled(step_label(s), "\n", color=:light_black)
 end
 
@@ -638,7 +638,7 @@ end
 function run_node(step::Step{Cmd}, v, forced::Bool=false)
     if !forced && is_fresh(step)
         log_skip(v, step)
-        return [StepResult(step, true, 0.0, "skipped (fresh)")]
+        return [StepResult(step, true, 0.0, "up to date (not re-run)")]
     end
     log_start(v, step)
     result = execute(step)
@@ -650,7 +650,7 @@ end
 function run_node(step::Step, v, forced::Bool=false)
     if !forced && is_fresh(step)
         log_skip(v, step)
-        return [StepResult(step, true, 0.0, "skipped (fresh)")]
+        return [StepResult(step, true, 0.0, "up to date (not re-run)")]
     end
     log_start(v, step)
     result = execute(step)
@@ -852,7 +852,7 @@ Execute a pipeline or node, returning results for each step.
 - `jobs=8`: Max concurrent branches for Parallel/ForEach/Map. All branches run; when `jobs > 0`, they run in rounds of `jobs` (each round waits for the previous). `jobs=0` = unbounded (all at once).
 
 # Output
-With `verbose=true`, shows tree-structured output: `▶` running, `✓` success, `✗` failure, `⊳` skipped (fresh).
+With `verbose=true`, shows tree-structured output: `▶` running, `✓` success, `✗` failure, `⊳` up to date (not re-run).
 
 # Examples
 ```julia
@@ -1070,6 +1070,15 @@ count_steps(::Map) = 0      # lazy: nodes built only when run
 #==============================================================================#
 # Display
 #==============================================================================#
+
+# Custom show so StepResult doesn't print the ugly closure type (e.g. Step{var"#20#21"{String}})
+function Base.show(io::IO, r::StepResult)
+    print(io, "StepResult(")
+    show(io, r.step)
+    print(io, ", ", r.success, ", ", round(r.duration; digits=2), ", ")
+    show(io, r.output)
+    print(io, ")")
+end
 
 Base.show(io::IO, s::Step) = print(io, "Step(:", s.name, ")")
 Base.show(io::IO, s::Sequence) = print(io, "Sequence(", join(s.nodes, " >> "), ")")
