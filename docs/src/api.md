@@ -45,6 +45,7 @@ The package extends these operators for pipeline composition. `Cmd` and `Functio
 ```@docs
 Map
 ForEach
+fe
 ```
 
 ## Shell
@@ -61,9 +62,20 @@ run
 
 ## Freshness and state
 
+State is stored in `.pipeline_state` as a fixed-layout, memory-mapped file. Completions are batched and written when `run()` finishes.
+
 ```@docs
 is_fresh
 clear_state!
+```
+
+### State file format
+
+The state file uses a fixed binary layout (see `src/StateFormat.jl`) for random access and mmap.
+
+```@docs
+SimplePipelines.StateFormat
+SimplePipelines.StateFormat.StateFileLayout
 ```
 
 ## Utilities

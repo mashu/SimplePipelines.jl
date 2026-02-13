@@ -409,6 +409,11 @@ clear_state!()
         @test !is_fresh(s)
         run(s, verbose=false, force=true)
         @test is_fresh(s)
+        # State roundtrip: run writes state, load_state reads it
+        @test !isempty(SimplePipelines.load_state())
+        # State file exists with valid layout (header + at least one hash slot)
+        @test isfile(SimplePipelines.STATE_FILE[])
+        @test filesize(SimplePipelines.STATE_FILE[]) >= 16
         # clear_state! removes state so step is no longer fresh
         clear_state!()
         @test !is_fresh(s)

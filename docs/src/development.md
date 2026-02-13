@@ -2,6 +2,22 @@
 
 SimplePipelines is designed for easy extension via Julia's multiple dispatch.
 
+## Testing and coverage
+
+Run the test suite:
+
+```bash
+julia --project=. -e 'using Pkg; Pkg.test()'
+```
+
+Run tests with code coverage (for local profiling or CI):
+
+```bash
+julia --project=. -e 'using Pkg; Pkg.test(coverage=true)'
+```
+
+Coverage is reported in `lcov.info`; CI uploads it to Codecov.
+
 ## Architecture
 
 All nodes inherit from `AbstractNode`. To add custom behavior, define a new subtype and implement dispatch methods:

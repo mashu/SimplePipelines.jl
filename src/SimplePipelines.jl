@@ -42,7 +42,11 @@ export @sh_str, sh
 import Base: >>, &, |, ^
 
 using Base.Threads: @spawn, fetch
-using Serialization
+using Mmap
+
+include("StateFormat.jl")
+using .StateFormat: StateFileLayout, STATE_LAYOUT,
+    layout_file_size, layout_read_header, layout_write_header, layout_validate_count
 
 #==============================================================================#
 # Shell string macro
@@ -387,22 +391,32 @@ end
 #==============================================================================#
 # State Persistence (Make-like freshness)
 #==============================================================================#
-# PipelineState struct; Serialization for read/write. One read at run start, one write at end.
+# Memory-mapped file; layout and accessors live in StateFormat. State file path
+# and in-memory state refs are here; I/O uses StateFormat layout.
 
 const STATE_FILE = Ref(".pipeline_state")
-const STATE_MAX_HASHES = 1_000_000
 
-"""On-disk state: fixed max number of step hashes. Saved via Serialization."""
 struct PipelineState
     hashes::Vector{UInt64}
 end
 PipelineState() = PipelineState(UInt64[])
-function PipelineState(s::Set{UInt64})
-    n = min(length(s), STATE_MAX_HASHES)
+function PipelineState(s::Set{UInt64}, layout::StateFileLayout=STATE_LAYOUT)
+    n = min(length(s), layout.max_hashes)
     PipelineState(collect(Iterators.take(s, n)))
 end
 Base.length(st::PipelineState) = length(st.hashes)
 Base.convert(::Type{Set{UInt64}}, st::PipelineState) = Set{UInt64}(st.hashes)
+
+function init_state_file()
+    path = STATE_FILE[]
+    layout = STATE_LAYOUT
+    if !isfile(path) || filesize(path) < layout_file_size(layout)
+        open(path, "w") do io
+            layout_write_header(io, layout, UInt64(0))
+            truncate(io, layout_file_size(layout))
+        end
+    end
+end
 
 const state_loaded = Ref{Set{UInt64}}(Set{UInt64}())
 const pending_completions = Ref{Set{UInt64}}(Set{UInt64}())
@@ -414,15 +428,30 @@ current_state()::Set{UInt64} = run_depth[] >= 1 ? union(state_loaded[], pending_
 
 function load_state()::Set{UInt64}
     path = STATE_FILE[]
+    layout = STATE_LAYOUT
     isfile(path) || return Set{UInt64}()
     open(path, "r") do io
-        convert(Set{UInt64}, deserialize(io)::PipelineState)
+        filesize(io) < layout.header_len && return Set{UInt64}()
+        magic_ok, n = layout_read_header(io, layout)
+        (!magic_ok || !layout_validate_count(layout, n) || n == 0) && return Set{UInt64}()
+        arr = Mmap.mmap(io, Vector{UInt64}, (layout.max_hashes,); grow=false)
+        Set{UInt64}(@view arr[1:n])
     end
 end
 
 function save_state!(completed::Set{UInt64})
-    open(STATE_FILE[], "w") do io
-        serialize(io, PipelineState(completed))
+    init_state_file()
+    path = STATE_FILE[]
+    layout = STATE_LAYOUT
+    st = PipelineState(completed)
+    n = length(st.hashes)
+    open(path, "r+") do io
+        layout_write_header(io, layout, UInt64(n))
+        arr = Mmap.mmap(io, Vector{UInt64}, (layout.max_hashes,); grow=false)
+        for i in 1:n
+            arr[i] = st.hashes[i]
+        end
+        Mmap.sync!(arr)
     end
 end
 
@@ -431,9 +460,25 @@ function mark_complete!(step::Step)
     if run_depth[] >= 1
         push!(pending_completions[], h)
     else
-        completed = load_state()
-        push!(completed, h)
-        save_state!(completed)
+        init_state_file()
+        path = STATE_FILE[]
+        layout = STATE_LAYOUT
+        count = open(path, "r") do io
+            magic_ok, n = layout_read_header(io, layout)
+            magic_ok ? n : UInt64(layout.max_hashes)
+        end
+        if count >= layout.max_hashes
+            save_state!(union(load_state(), Set{UInt64}([h])))
+            return
+        end
+        open(path, "r+") do io
+            seek(io, layout.hashes_offset)
+            arr = Mmap.mmap(io, Vector{UInt64}, (layout.max_hashes,); grow=false)
+            arr[count + 1] = h
+            Mmap.sync!(arr)
+            seek(io, layout.count_offset)
+            write(io, count + 1)
+        end
     end
 end
 
@@ -441,7 +486,8 @@ end
     clear_state!()
 
 Remove the pipeline state file (`.pipeline_state`), forcing all steps
-to run on the next execution regardless of freshness.
+to run on the next execution regardless of freshness. The file uses the
+fixed binary layout defined in the `StateFormat` module.
 
 See also: [`is_fresh`](@ref), [`Force`](@ref)
 """
@@ -457,7 +503,7 @@ Check if a step can be skipped based on Make-like freshness rules.
 2. **Has only outputs**: Fresh if outputs exist and step was previously completed
 3. **No file dependencies**: Fresh if step was previously completed (state-based tracking)
 
-State is persisted in `.pipeline_state` via `Serialization.serialize`/`deserialize` of a `PipelineState` struct. Completions during a run are batched and written once when `run()` finishes.
+State is persisted in `.pipeline_state` as a fixed-layout, memory-mapped file (see `StateFormat` in `src/StateFormat.jl`: magic, count, then hash array). Completions during a run are batched and written once when `run()` finishes.
 
 # Examples
 ```julia
@@ -1068,8 +1114,8 @@ function ForEach(f::Function, pattern::String)
 end
 ForEach(pattern::String) = f -> ForEach(f, pattern)
 
-"""Short alias for `ForEach`. Use `fe("pattern") do x ... end`."""
 const fe = ForEach
+@doc "Short alias for [`ForEach`](@ref). Use `fe(\"pattern\") do x ... end`." fe
 
 function find_matches(pattern::String, regex::Regex)
     parts = split(pattern, "/")
