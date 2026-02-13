@@ -78,6 +78,10 @@ The state file uses a fixed binary layout (see `src/StateFormat.jl`) for random 
 ```@docs
 SimplePipelines.StateFormat
 SimplePipelines.StateFormat.StateFileLayout
+SimplePipelines.StateFormat.state_init
+SimplePipelines.StateFormat.state_read
+SimplePipelines.StateFormat.state_write
+SimplePipelines.StateFormat.state_append
 ```
 
 ## Utilities
