@@ -35,13 +35,14 @@ module SimplePipelines
 
 export Step, @step, Sequence, Parallel, Pipeline
 export Retry, Fallback, Branch, Timeout, Force
-export Map, Reduce, ForEach
+export Map, Reduce, ForEach, fe
 export count_steps, steps, print_dag, is_fresh, clear_state!
 export @sh_str, sh
 
 import Base: >>, &, |, ^
 
 using Base.Threads: @spawn, fetch
+using Serialization
 
 #==============================================================================#
 # Shell string macro
@@ -129,7 +130,7 @@ is_gensym(s::Symbol) = startswith(string(s), "##")
 step_label(s::Step) = is_gensym(s.name) ? work_label(s.work) : string(s.name)
 work_label(c::Cmd) = length(c.exec) ≤ 3 ? join(c.exec, " ") : join(c.exec[1:3], " ") * "…"
 work_label(f::Function) = string(nameof(f))
-work_label(x) = string(typeof(x))
+work_label(x) = repr(x)
 
 """
     Sequence{T} <: AbstractNode
@@ -337,24 +338,40 @@ Create a named step with optional file dependencies.
 ```
 """
 macro step(expr)
-    if expr isa Expr && expr.head === :(=)
-        lhs, rhs = expr.args
-        if lhs isa Symbol
-            return :(Step($(QuoteNode(lhs)), $(esc(rhs))))
-        elseif lhs isa Expr && lhs.head === :call
-            name = QuoteNode(lhs.args[1])
-            deps = lhs.args[2]
-            if deps isa Expr && deps.head === :call && deps.args[1] === :(=>)
-                inputs = deps.args[2]
-                outputs = deps.args[3]
-                inputs_expr = inputs isa String ? :([$(inputs)]) : inputs
-                outputs_expr = outputs isa String ? :([$(outputs)]) : outputs
-                return :(Step($name, $(esc(rhs)), $inputs_expr, $outputs_expr))
-            end
-        end
-    end
-    :(Step($(esc(expr))))
+    step_expr(expr)
 end
+
+step_expr(expr::Symbol) = :(Step($(esc(expr))))
+step_expr(expr) = :(Step($(esc(expr))))
+
+function step_expr(expr::Expr)
+    expr.head === :(=) || return :(Step($(esc(expr))))
+    lhs, rhs = expr.args[1], expr.args[2]
+    step_lhs(lhs, rhs)
+end
+
+step_lhs(lhs::Symbol, rhs) = :(Step($(QuoteNode(lhs)), $(esc(rhs))))
+
+function step_lhs(lhs::Expr, rhs)
+    lhs.head === :call || return :(Step($(esc(Expr(:(=), lhs, rhs)))))
+    name = QuoteNode(lhs.args[1])
+    length(lhs.args) >= 2 || return :(Step($name, $(esc(rhs))))
+    deps = lhs.args[2]
+    step_deps(name, deps, rhs)
+end
+
+step_deps(name, deps, rhs) = :(Step($name, $(esc(rhs))))
+
+function step_deps(name, deps::Expr, rhs)
+    deps.head === :call && length(deps.args) >= 3 && deps.args[1] === :(=>) || return :(Step($name, $(esc(rhs))))
+    inputs = deps.args[2]
+    outputs = deps.args[3]
+    :(Step($name, $(esc(rhs)), $(step_inputs_expr(inputs)), $(step_outputs_expr(outputs))))
+end
+step_inputs_expr(s::String) = :([$s])
+step_inputs_expr(x) = x
+step_outputs_expr(s::String) = :([$s])
+step_outputs_expr(x) = x
 
 #==============================================================================#
 # Result Type
@@ -370,32 +387,54 @@ end
 #==============================================================================#
 # State Persistence (Make-like freshness)
 #==============================================================================#
+# PipelineState struct; Serialization for read/write. One read at run start, one write at end.
 
 const STATE_FILE = Ref(".pipeline_state")
+const STATE_MAX_HASHES = 1_000_000
+
+"""On-disk state: fixed max number of step hashes. Saved via Serialization."""
+struct PipelineState
+    hashes::Vector{UInt64}
+end
+PipelineState() = PipelineState(UInt64[])
+function PipelineState(s::Set{UInt64})
+    n = min(length(s), STATE_MAX_HASHES)
+    PipelineState(collect(Iterators.take(s, n)))
+end
+Base.length(st::PipelineState) = length(st.hashes)
+Base.convert(::Type{Set{UInt64}}, st::PipelineState) = Set{UInt64}(st.hashes)
+
+const state_loaded = Ref{Set{UInt64}}(Set{UInt64}())
+const pending_completions = Ref{Set{UInt64}}(Set{UInt64}())
+const run_depth = Ref{Int}(0)
 
 step_hash(step::Step) = hash((step.name, step.work, step.inputs, step.outputs))
 
-function load_state()
-    isfile(STATE_FILE[]) || return Set{UInt64}()
-    try
-        Set{UInt64}(parse(UInt64, line) for line in eachline(STATE_FILE[]) if !isempty(strip(line)))
-    catch
-        Set{UInt64}()
+current_state()::Set{UInt64} = run_depth[] >= 1 ? union(state_loaded[], pending_completions[]) : load_state()
+
+function load_state()::Set{UInt64}
+    path = STATE_FILE[]
+    isfile(path) || return Set{UInt64}()
+    open(path, "r") do io
+        convert(Set{UInt64}, deserialize(io)::PipelineState)
     end
 end
 
 function save_state!(completed::Set{UInt64})
     open(STATE_FILE[], "w") do io
-        for h in completed
-            println(io, h)
-        end
+        serialize(io, PipelineState(completed))
     end
 end
 
 function mark_complete!(step::Step)
-    completed = load_state()
-    push!(completed, step_hash(step))
-    save_state!(completed)
+    h = step_hash(step)
+    if run_depth[] >= 1
+        push!(pending_completions[], h)
+    else
+        completed = load_state()
+        push!(completed, h)
+        save_state!(completed)
+    end
 end
 
 """
@@ -418,7 +457,7 @@ Check if a step can be skipped based on Make-like freshness rules.
 2. **Has only outputs**: Fresh if outputs exist and step was previously completed
 3. **No file dependencies**: Fresh if step was previously completed (state-based tracking)
 
-State is persisted in `.pipeline_state` file.
+State is persisted in `.pipeline_state` via `Serialization.serialize`/`deserialize` of a `PipelineState` struct. Completions during a run are batched and written once when `run()` finishes.
 
 # Examples
 ```julia
@@ -447,28 +486,38 @@ function is_fresh(step::Step)
     end
     
     # Fall back to state-based tracking
-    step_hash(step) in load_state()
+    step_hash(step) in current_state()
 end
 
-#==============================================================================#
-# Execution
-#==============================================================================#
+# Bounded parallelism: run(; max_parallel=n); 0 means unbounded (all branches at once)
+const MAX_PARALLEL = Ref{Int}(0)
+
+# Base.run(::Cmd) and user f() throw on failure; no check-based API. One boundary only.
+function run_safely(f)::Tuple{Bool,String}
+    result = Ref{String}("")
+    ok = Ref{Bool}(false)
+    try
+        out = f()
+        result[] = out === nothing ? "" : string(out)
+        ok[] = true
+    catch e
+        result[] = sprint(showerror, e)
+    end
+    (ok[], result[])
+end
 
 function execute(step::Step{Cmd})
     start = time()
     for inp in step.inputs
         isfile(inp) || return StepResult(step, false, time() - start, "Missing input file: $inp")
     end
-    
     buf = IOBuffer()
-    try
-        run(pipeline(step.work, stdout=buf, stderr=buf))
-    catch e
-        return StepResult(step, false, time() - start, "Error: $(sprint(showerror, e))\n$(String(take!(buf)))")
+    ok, err = run_safely() do; run(pipeline(step.work, stdout=buf, stderr=buf)); end
+    if !ok
+        return StepResult(step, false, time() - start, "Error: $err\n$(String(take!(buf)))")
     end
-    
-    for out in step.outputs
-        isfile(out) || return StepResult(step, false, time() - start, "Output not created: $out")
+    for out_path in step.outputs
+        isfile(out_path) || return StepResult(step, false, time() - start, "Output not created: $out_path")
     end
     StepResult(step, true, time() - start, String(take!(buf)))
 end
@@ -478,17 +527,15 @@ function execute(step::Step{F}) where {F<:Function}
     for inp in step.inputs
         isfile(inp) || return StepResult(step, false, time() - start, "Missing input file: $inp")
     end
-    
-    local output::String
-    try
-        result = step.work()
-        output = result === nothing ? "" : string(result)
-    catch e
-        return StepResult(step, false, time() - start, "Error: $(sprint(showerror, e))")
+    ok, output = run_safely() do
+        r = step.work()
+        r === nothing ? "" : string(r)
     end
-    
-    for out in step.outputs
-        isfile(out) || return StepResult(step, false, time() - start, "Output not created: $out")
+    if !ok
+        return StepResult(step, false, time() - start, "Error: $output")
+    end
+    for out_path in step.outputs
+        isfile(out_path) || return StepResult(step, false, time() - start, "Output not created: $out_path")
     end
     StepResult(step, true, time() - start, output)
 end
@@ -599,8 +646,26 @@ end
 
 function run_node(par::Parallel, v, forced::Bool)
     log_parallel(v, length(par.nodes))
-    tasks = [(@spawn run_node(node, v, forced)) for node in par.nodes]
-    reduce(vcat, fetch.(tasks))
+    max_p = MAX_PARALLEL[]
+    if max_p > 0
+        # Bounded concurrency: at most max_p branches run at once
+        sem = Channel{Nothing}(max_p)
+        for _ in 1:max_p
+            put!(sem, nothing)
+        end
+        tasks = [@spawn begin
+            take!(sem)
+            try
+                run_node(node, v, forced)
+            finally
+                put!(sem, nothing)
+            end
+        end for node in par.nodes]
+        reduce(vcat, fetch.(tasks))
+    else
+        tasks = [(@spawn run_node(node, v, forced)) for node in par.nodes]
+        reduce(vcat, fetch.(tasks))
+    end
 end
 
 function run_node(r::Retry, v, forced::Bool)
@@ -640,9 +705,9 @@ function run_node(t::Timeout, v, forced::Bool)
     isready(ch) ? take!(ch) : [StepResult(Step(:timeout, `true`), false, t.seconds, "Timeout after $(t.seconds)s")]
 end
 
-function run_node(f::Force, v, forced::Bool)
+function run_node(f::Force, v, ::Bool)
     log_force(v)
-    run_node(f.node, v, true)
+    run_node(f.node, v, true)  # Force always runs the inner node
 end
 
 function run_node(r::Reduce, v, forced::Bool)
@@ -655,14 +720,13 @@ function run_node(r::Reduce, v, forced::Bool)
     end
     
     log_reduce(v, r.name)
-    local reduced::String
-    try
+    ok, reduced = run_safely() do
         result = r.reducer(outputs)
-        reduced = result === nothing ? "" : string(result)
-    catch e
-        return vcat(results, [StepResult(Step(r.name, r.reducer), false, time() - start, "Reduce error: $(sprint(showerror, e))")])
+        result === nothing ? "" : string(result)
     end
-    
+    if !ok
+        return vcat(results, [StepResult(Step(r.name, r.reducer), false, time() - start, "Reduce error: $reduced")])
+    end
     vcat(results, [StepResult(Step(r.name, r.reducer), true, time() - start, reduced)])
 end
 
@@ -671,7 +735,7 @@ end
 #==============================================================================#
 
 """
-    Pipeline{N} <: Any
+    Pipeline{N<:AbstractNode}
 
 A named pipeline wrapping a root node for execution.
 
@@ -690,7 +754,7 @@ Pipeline(node::AbstractNode; name::String="pipeline") = Pipeline(node, name)
 Pipeline(nodes::Vararg{AbstractNode}; name::String="pipeline") = Pipeline(Sequence(nodes), name)
 
 """
-    run(p::Pipeline; verbose=true, dry_run=false, force=false) -> Vector{StepResult}
+    run(p::Pipeline; verbose=true, dry_run=false, force=false, max_parallel=nothing) -> Vector{StepResult}
     run(node::AbstractNode; kwargs...) -> Vector{StepResult}
 
 Execute a pipeline or node, returning results for each step.
@@ -699,6 +763,7 @@ Execute a pipeline or node, returning results for each step.
 - `verbose=true`: Show colored progress output
 - `dry_run=false`: If true, show DAG structure without executing
 - `force=false`: If true, run all steps regardless of freshness
+- `max_parallel=0`: If set to a positive integer N, run at most N parallel branches at a time (e.g. ForEach/Map); 0 means unbounded
 
 # Output
 With `verbose=true`, shows colored tree-structured output:
@@ -713,25 +778,45 @@ run(pipeline)                    # Normal execution
 run(pipeline, verbose=false)     # Silent execution
 run(pipeline, dry_run=true)      # Preview DAG only
 run(pipeline, force=true)        # Force all steps to run
+    run(pipeline, max_parallel=4)   # At most 4 branches (0 = unbounded)
 ```
 
 See also: [`is_fresh`](@ref), [`Force`](@ref), [`print_dag`](@ref)
 """
-function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false)
+function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false, max_parallel::Int=0)
+    prev_max = MAX_PARALLEL[]
+    MAX_PARALLEL[] = max_parallel
+    results = run_pipeline(p, verbose, dry_run, force)
+    MAX_PARALLEL[] = prev_max
+    results
+end
+
+function run_pipeline(p::Pipeline, verbose::Bool, dry_run::Bool, force::Bool)
     if verbose
         printstyled("═══ Pipeline: ", color=:blue, bold=true)
         printstyled(p.name, " ═══\n", color=:blue, bold=true)
     end
-    
+
     if dry_run
         verbose && print_dag(p.root)
         return StepResult[]
     end
-    
+
+    run_depth[] += 1
+    if run_depth[] == 1
+        state_loaded[] = load_state()
+        pending_completions[] = Set{UInt64}()
+    end
+
     v = verbose ? Verbose() : Silent()
     start = time()
     results = run_node(p.root, v, force)
-    
+
+    if run_depth[] == 1
+        save_state!(union(state_loaded[], pending_completions[]))
+    end
+    run_depth[] -= 1
+
     if verbose
         n = count(r -> r.success, results)
         total = length(results)
@@ -940,12 +1025,17 @@ function Map(f::Function, items)
 end
 Map(f::Function) = items -> Map(f, items)
 
+as_node(n::AbstractNode) = n
+as_node(x) = Step(x)
+
 """
     ForEach(pattern) do wildcards...
         # build pipeline
     end
+    fe(pattern) do wildcards... end   # short alias
 
 Discover files matching pattern with `{name}` placeholders, create parallel branches.
+Use `fe("tsv/filtered-{donor}.tsv.gz") do donor ... end` as a shortcut.
 """
 function ForEach(f::Function, pattern::String)
     wildcard_rx = r"\{(\w+)\}"
@@ -971,12 +1061,15 @@ function ForEach(f::Function, pattern::String)
     nodes = AbstractNode[]
     for captured in matches
         result = length(captured) == 1 ? f(captured[1]) : f(captured...)
-        push!(nodes, result isa AbstractNode ? result : Step(result))
+        push!(nodes, as_node(result))
     end
     
     length(nodes) == 1 ? first(nodes) : reduce(&, nodes)
 end
 ForEach(pattern::String) = f -> ForEach(f, pattern)
+
+"""Short alias for `ForEach`. Use `fe("pattern") do x ... end`."""
+const fe = ForEach
 
 function find_matches(pattern::String, regex::Regex)
     parts = split(pattern, "/")
