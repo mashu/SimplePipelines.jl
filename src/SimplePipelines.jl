@@ -498,8 +498,8 @@ function is_fresh(step::Step)
     step_hash(step) in current_state()
 end
 
-# Bounded parallelism: run(; max_parallel=n); 0 means unbounded (all branches at once)
-const MAX_PARALLEL = Ref{Int}(0)
+# Bounded concurrency: run(; jobs=n). 0 = unbounded. Set at run time, not on node constructors.
+const MAX_PARALLEL = Ref{Int}(8)
 
 # Base.run(::Cmd) and user f() throw on failure; no check-based API. Sole exception boundary (see .cursor/rules: no other try/catch).
 function run_safely(f)::Tuple{Bool,String}
@@ -673,17 +673,15 @@ function run_node(par::Parallel, v, forced::Bool)
     log_parallel(v, length(par.nodes))
     max_p = MAX_PARALLEL[]
     if max_p > 0
-        # Bounded concurrency: run in chunks so we never use try/finally
+        # Run all branches in rounds of max_p; each round waits before starting the next (no skipping)
         results = StepResult[]
         for i in 1:max_p:length(par.nodes)
             chunk = par.nodes[i:min(i + max_p - 1, end)]
-            tasks = [@spawn run_node(node, v, forced) for node in chunk]
-            append!(results, reduce(vcat, fetch.(tasks)))
+            append!(results, reduce(vcat, fetch.([@spawn run_node(node, v, forced) for node in chunk])))
         end
         results
     else
-        tasks = [(@spawn run_node(node, v, forced)) for node in par.nodes]
-        reduce(vcat, fetch.(tasks))
+        reduce(vcat, fetch.([@spawn run_node(node, v, forced) for node in par.nodes]))
     end
 end
 
@@ -784,6 +782,7 @@ function run_node(fe::ForEach, v, forced::Bool)
     log_parallel(v, length(nodes))
     max_p = MAX_PARALLEL[]
     if max_p > 0
+        # Run all branches in rounds of max_p; each round waits before the next (no skipping)
         results = StepResult[]
         for i in 1:max_p:length(nodes)
             chunk = nodes[i:min(i + max_p - 1, end)]
@@ -805,6 +804,7 @@ function run_node(m::Map, v, forced::Bool)
     log_parallel(v, length(nodes))
     max_p = MAX_PARALLEL[]
     if max_p > 0
+        # Run all branches in rounds of max_p; each round waits before the next (no skipping)
         results = StepResult[]
         for i in 1:max_p:length(nodes)
             chunk = nodes[i:min(i + max_p - 1, end)]
@@ -840,7 +840,7 @@ Pipeline(node::AbstractNode; name::String="pipeline") = Pipeline(node, name)
 Pipeline(nodes::Vararg{AbstractNode}; name::String="pipeline") = Pipeline(Sequence(nodes), name)
 
 """
-    run(p::Pipeline; verbose=true, dry_run=false, force=false, max_parallel=nothing) -> Vector{StepResult}
+    run(p::Pipeline; verbose=true, dry_run=false, force=false, jobs=8) -> Vector{StepResult}
     run(node::AbstractNode; kwargs...) -> Vector{StepResult}
 
 Execute a pipeline or node, returning results for each step.
@@ -849,31 +849,28 @@ Execute a pipeline or node, returning results for each step.
 - `verbose=true`: Show colored progress output
 - `dry_run=false`: If true, show DAG structure without executing
 - `force=false`: If true, run all steps regardless of freshness
-- `max_parallel=0`: If set to a positive integer N, run at most N parallel branches at a time (e.g. ForEach/Map); 0 means unbounded
+- `jobs=8`: Max concurrent branches for Parallel/ForEach/Map. All branches run; when `jobs > 0`, they run in rounds of `jobs` (each round waits for the previous). `jobs=0` = unbounded (all at once).
 
 # Output
-With `verbose=true`, shows colored tree-structured output:
-- `▶` Running step
-- `✓` Success (green)
-- `✗` Failure (red)  
-- `⊳` Skipped (gray, fresh)
+With `verbose=true`, shows tree-structured output: `▶` running, `✓` success, `✗` failure, `⊳` skipped (fresh).
 
 # Examples
 ```julia
-run(pipeline)                    # Normal execution
-run(pipeline, verbose=false)     # Silent execution
-run(pipeline, dry_run=true)      # Preview DAG only
-run(pipeline, force=true)        # Force all steps to run
-    run(pipeline, max_parallel=4)   # At most 4 branches (0 = unbounded)
+run(pipeline)                # Default: up to 8 branches at a time
+run(pipeline, jobs=0)         # Unbounded (all branches at once)
+run(pipeline, jobs=4)         # At most 4 concurrent
+run(pipeline, verbose=false)
+run(pipeline, dry_run=true)
+run(pipeline, force=true)
 ```
 
 See also: [`is_fresh`](@ref), [`Force`](@ref), [`print_dag`](@ref)
 """
-function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false, max_parallel::Int=0)
-    prev_max = MAX_PARALLEL[]
-    MAX_PARALLEL[] = max_parallel
+function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false, jobs::Int=8)
+    prev = MAX_PARALLEL[]
+    MAX_PARALLEL[] = jobs
     results = run_pipeline(p, verbose, dry_run, force)
-    MAX_PARALLEL[] = prev_max
+    MAX_PARALLEL[] = prev
     results
 end
 
@@ -1156,6 +1153,7 @@ end
 Discover files matching pattern with `{name}` placeholders; create one parallel branch per match.
 The block is run once per match **when you call `run(pipeline)`**, not when the pipeline is built.
 It must return a Step or other node (e.g. `@step name = sh\"cmd\"`).
+Concurrency is set at run time: `run(pipeline; jobs=8)` (default 8; use `jobs=0` for unbounded).
 """
 function ForEach(f::Function, pattern::String)
     wildcard_rx = r"\{(\w+)\}"
