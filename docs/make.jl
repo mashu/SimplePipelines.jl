@@ -7,6 +7,7 @@ makedocs(
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
         canonical = "https://mashu.github.io/SimplePipelines.jl",
+        edit_link = "main",  # avoid git remote lookup when building locally
     ),
     pages = [
         "Home" => "index.md",

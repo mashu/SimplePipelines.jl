@@ -10,6 +10,16 @@ Run the test suite:
 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
+## Building the docs
+
+From the repo root, install Documenter (if needed) and run the doc build. **Note:** `Pkg.activate` does not accept an `extras` argument; use `Pkg.add("Documenter")` to pull in the docs dependency.
+
+```bash
+julia --project=. -e 'using Pkg; Pkg.add("Documenter"); using Documenter; using SimplePipelines; cd("docs"); include("make.jl")'
+```
+
+Or in the Julia REPL (start with `julia --project=.`): run `using Pkg; Pkg.add("Documenter"); cd("docs"); include("make.jl")`.
+
 Run tests with code coverage (for local profiling or CI):
 
 ```bash
