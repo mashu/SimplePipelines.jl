@@ -1,4 +1,4 @@
-# State persistence (Make-like freshness), concurrency and memory limits. Requires Types.jl, Macro.jl (for Step).
+# State persistence (Make-like freshness) and concurrency. Requires Types.jl, Macro.jl (for Step).
 
 const STATE_FILE = Ref(".pipeline_state")
 const state_loaded = Ref{Set{UInt64}}(Set{UInt64}())
@@ -65,13 +65,3 @@ function is_fresh(step::Step)
 end
 
 const MAX_PARALLEL = Ref{Int}(8)
-const MEMORY_LIMIT = Ref{UInt64}(0)
-
-function wait_if_over_memory_limit()
-    limit = MEMORY_LIMIT[]
-    limit == 0 && return
-    while Base.gc_live_bytes() > limit
-        GC.gc()
-        sleep(0.5)
-    end
-end

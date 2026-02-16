@@ -12,24 +12,26 @@ Execute a pipeline or node, returning results for each step.
 - `force=false`: If true, run all steps regardless of freshness
 - `jobs=8`: Max concurrent branches for Parallel/ForEach/Map. All branches run; when `jobs > 0`, they run in rounds of `jobs` (each round waits for the previous). `jobs=0` = unbounded (all at once).
 - `keep_outputs=:last`: What to retain in each result's `.output`. `:last` (default) keeps only the last result's output (others get `nothing`); `:all` keeps every step's output; `:none` drops all outputs.
-- `memory_limit=nothing`: If set to an integer (bytes), we wait before starting each new batch of parallel tasks when `Base.gc_live_bytes()` exceeds this (best-effort backpressure).
 
 # When output is kept vs dropped
-`keep_outputs` only affects the **returned** results vector: after the run we replace `.output` with `nothing` for non-final steps. **During execution** all step outputs stay in memory (e.g. Reduce collects every branch output before calling the reducer). So to limit memory you must (1) have steps write to a file and return the path; (2) reducer streams paths (open one at a time); (3) use `keep_outputs=:last` so the returned vector doesn't hold intermediate data.
+`keep_outputs` only affects the **returned** results vector: after the run we replace `.output` with `nothing` for non-final steps. **During execution** all step outputs stay in memory until the run finishes.
 
-# Memory limit (best-effort)
-- `memory_limit=nothing`: No limit (default).
-- `memory_limit=N` (integer, bytes): Before starting each new batch of parallel tasks we check `Base.gc_live_bytes()`. If over `N`, we run `GC.gc()` and sleep briefly until below limit, then start the next batch. This backpressures concurrency when heap usage is high. Use together with `jobs` to cap both concurrency and memory.
+# Memory: path-based I/O and streaming reducers
+To avoid holding large data in memory:
+1. **Steps**: Write large results to files and **return only the path** (or a small summary). Then the runner only holds path strings, not file contents.
+2. **Reduce**: The reducer receives a **vector of all branch outputs**. If those are paths, implement a **streaming reducer**: open one path at a time, read/aggregate, then close. Do not load all files into memory inside the reducer. Example: `reducer(paths) = (acc = init; for p in paths; acc = merge(acc, read_stats(p)); end; acc)`.
+3. Use `keep_outputs=:last` so the returned result vector does not retain every step's output.
+
+If you follow (1) and (2), you only hold paths and small aggregates; full file contents are never all in memory. If a step returns a large object (e.g. a DataFrame of the whole file), that object is held until the run ends.
 
 # Output
 With `verbose=true`, shows tree-structured output: `▶` running, `✓` success, `✗` failure, `⊳` up to date (not re-run).
 
 # Examples
 ```julia
-run(pipeline)                # Default: up to 8 branches at a time
-run(pipeline, jobs=0)         # Unbounded (all branches at once)
-run(pipeline, keep_outputs=:all)   # Keep every step's output (default is :last)
-run(pipeline, memory_limit=2^31)   # Wait when heap > 2GB before starting next batch (best-effort)
+run(pipeline)
+run(pipeline, jobs=0)
+run(pipeline, keep_outputs=:all)
 run(pipeline, verbose=false)
 run(pipeline, dry_run=true)
 run(pipeline, force=true)
@@ -37,14 +39,11 @@ run(pipeline, force=true)
 
 See also: [`is_fresh`](@ref), [`Force`](@ref), [`print_dag`](@ref)
 """
-function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false, jobs::Int=8, keep_outputs::Symbol=:last, memory_limit=nothing)
+function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false, jobs::Int=8, keep_outputs::Symbol=:last)
     prev_jobs = MAX_PARALLEL[]
-    prev_mem = MEMORY_LIMIT[]
     MAX_PARALLEL[] = jobs
-    MEMORY_LIMIT[] = memory_limit === nothing ? UInt64(0) : UInt64(memory_limit)
     results = run_pipeline(p, verbose, dry_run, force, keep_outputs)
     MAX_PARALLEL[] = prev_jobs
-    MEMORY_LIMIT[] = prev_mem
     results
 end
 

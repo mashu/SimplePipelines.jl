@@ -36,7 +36,6 @@ function run_node(par::Parallel, v, forced::Bool)
     if max_p > 0 && n > 0
         results = AbstractStepResult[]
         for i in 1:max_p:n
-            wait_if_over_memory_limit()
             chunk = par.nodes[i:min(i + max_p - 1, end)]
             append!(results, reduce(vcat, fetch.([@spawn run_node(node, v, forced) for node in chunk])))
             log_progress(v, length(results), n)
@@ -148,7 +147,6 @@ function run_node(fe::ForEach, v, forced::Bool)
     if max_p > 0 && n > 0
         results = AbstractStepResult[]
         for i in 1:max_p:n
-            wait_if_over_memory_limit()
             chunk = nodes[i:min(i + max_p - 1, end)]
             append!(results, reduce(vcat, fetch.([@spawn run_node(node, v, forced) for node in chunk])))
             log_progress(v, length(results), n)
@@ -172,7 +170,6 @@ function run_node(m::Map, v, forced::Bool)
     if max_p > 0 && n > 0
         results = AbstractStepResult[]
         for i in 1:max_p:n
-            wait_if_over_memory_limit()
             chunk = nodes[i:min(i + max_p - 1, end)]
             append!(results, reduce(vcat, fetch.([@spawn run_node(node, v, forced) for node in chunk])))
             log_progress(v, length(results), n)
