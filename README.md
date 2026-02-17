@@ -35,7 +35,7 @@ run(pipeline)
 
 > **Commands** — `sh"cmd"` · `sh("$(var)")` (interpolation)
 
-> **Operators** — `a >> b` sequence (passes output to next) · `a & b` parallel · `a | b` fallback · `a^3` retry · `a |> b` pipe (output → input) · `a >>> b` same input · `a .>> b` attach step to each branch
+> **Operators** — `a >> b` sequence: next (function) step gets previous output; if left has many branches, only the **last** is passed. `a |> b` pipe: next step gets left's output(s); if many branches, **all** as one vector; RHS must be a function step. `a & b` parallel · `a | b` fallback · `a^3` retry · `a >>> b` same input · `a .>> b` per-branch
 
 > **Control** — `Branch(cond,a,b)` · `Timeout(a,t)` · `Reduce(f,a&b)` · `ForEach(pat)` / `ForEach(items) do ...`
 
