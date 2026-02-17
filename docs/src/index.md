@@ -29,10 +29,10 @@ using intuitive operators.
 
 When the left has **multiple** outputs (e.g. ForEach), `>>` passes only the **last** to the next step; `|>` passes a **vector** of all; `.>>` runs the next step **per branch**.
 
-| Left side     | `>>`              | `|>`                 | `.>>`                    |
-| ------------- | ------------------ | -------------------- | ------------------------ |
-| Single output | step(one value)    | step(one value)      | step(one value)          |
-| Multi output  | step(**last** only)| step(**vector** of all) | step **per branch** |
+| Left side     | ``>>``               | Pipe                  | ``.>>``                   |
+|:-------------|:---------------------|:----------------------|:--------------------------|
+| Single output | step(one value)      | step(one value)       | step(one value)           |
+| Multi output  | step(**last** only)  | step(**vector** of all)| step **per branch**      |
 
 ### Control Flow
 

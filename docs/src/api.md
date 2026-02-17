@@ -50,9 +50,9 @@ The package extends these operators for pipeline composition. `Cmd` and `Functio
 
 When the left has one output, `>>`, `|>`, and `.>>` all pass that value to the next step. When the left has **multiple** outputs (ForEach, Parallel):
 
-| Left side     | `a >> step`         | `a |> step`            | `a .>> step`                 |
-| ------------- | ------------------- | ---------------------- | ---------------------------- |
-| Single output | step(one value)     | step(one value)        | step(one value)              |
+| Left side     | ``>>``               | Pipe                  | ``.>>``                    |
+|:-------------|:---------------------|:----------------------|:----------------------------|
+| Single output | step(one value)      | step(one value)       | step(one value)             |
 | Multi output  | step(**last** only)  | step(**vector** of all) | step **per branch** (one call each) |
 
 ## Functions

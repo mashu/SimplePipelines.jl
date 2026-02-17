@@ -61,9 +61,9 @@ pipeline = step_a >> step_b >> step_c
 
 When the left has **one** output, `>>`, `|>`, and `.>>` all pass that value to the next (function) step. When the left has **multiple** outputs (e.g. ForEach, Parallel), they differ:
 
-| Left side     | `a >> step`         | `a |> step`            | `a .>> step`                 |
-| ------------- | ------------------- | ---------------------- | ---------------------------- |
-| Single output | step(one value)     | step(one value)        | step(one value)              |
+| Left side     | ``>>``               | Pipe                  | ``.>>``                    |
+|:-------------|:---------------------|:----------------------|:----------------------------|
+| Single output | step(one value)      | step(one value)       | step(one value)             |
 | Multi output  | step(**last** only)  | step(**vector** of all) | step **per branch** (one call each) |
 
 - **`a |> b`** — Run `a`, then run `b` with `a`'s output(s). RHS must be a function step. Multi-branch → one call with a vector.

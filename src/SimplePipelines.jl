@@ -28,12 +28,12 @@ run(download >> process)
 - **Recursive execution**: Dispatch on node type; Sequence runs in order, Parallel/ForEach run branches with optional parallelism.
 - **Data passing**: When the left has one output, `>>`, `|>`, and `.>>` all pass that value to the next (function) step. When the left has **multiple** outputs (e.g. ForEach, Parallel), they differ:
 
-  | Left side     | `a >> step`        | `a |> step`           | `a .>> step`              |
-  | ------------- | ------------------ | --------------------- | ------------------------- |
-  | Single output | step(one value)     | step(one value)       | step(one value)           |
-  | Multi output  | step(**last** only) | step(**vector** of all) | step **per branch** (one call each) |
+| Left side     | ``>>``              | Pipe                  | ``.>>``                   |
+|:-------------|:--------------------|:----------------------|:--------------------------|
+| Single output | step(one value)     | step(one value)       | step(one value)           |
+| Multi output  | step(**last** only) | step(**vector** of all)| step **per branch** (one call each) |
 
-  Use `a >>> b` so both run on the **same** input (e.g. branch id). RHS of `|>` must be a function step.
+Use `a >>> b` so both run on the **same** input (e.g. branch id). RHS of `|>` must be a function step.
 - **Make-like freshness**: Steps skip if outputs are newer than inputs.
 - **State persistence**: Tracks completed steps across runs.
 - **Colored output**: Visual tree structure with status indicators.
