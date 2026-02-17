@@ -7,6 +7,34 @@ function Base.Broadcast.broadcasted(::typeof(>>), left::AbstractNode, right::Abs
     BroadcastPipe(left, right)
 end
 
+# Internal: run a set of (node, context) pairs in parallel. Dispatched via run_node, not a private helper.
+struct ParallelBranches{N,C}
+    nodes::Vector{N}
+    contexts::Vector{C}
+end
+
+function run_node(pb::ParallelBranches, v, forced::Bool, context_input=nothing)
+    nodes = pb.nodes
+    contexts = pb.contexts
+    n = length(nodes)
+    length(contexts) == n || throw(ArgumentError("nodes and contexts length mismatch"))
+    log_parallel(v, n)
+    max_p = MAX_PARALLEL[]
+    if max_p > 0 && n > 0
+        results = AbstractStepResult[]
+        for i in 1:max_p:n
+            chunk_inds = i:min(i + max_p - 1, n)
+            chunk_nodes = [nodes[j] for j in chunk_inds]
+            chunk_ctx = [contexts[j] for j in chunk_inds]
+            append!(results, reduce(vcat, [fetch(@spawn run_node(chunk_nodes[k], v, forced, chunk_ctx[k])) for k in eachindex(chunk_nodes)]))
+            log_progress(v, length(results), n)
+        end
+        return results
+    else
+        return n == 1 ? run_node(nodes[1], v, forced, contexts[1]) : reduce(vcat, [fetch(@spawn run_node(nodes[j], v, forced, contexts[j])) for j in 1:n])
+    end
+end
+
 # Step wrapping another node (e.g. @step name = a >> b): delegate when work is AbstractNode
 function run_node(step::Step{N}, v, forced::Bool=false, context_input=nothing) where {N<:AbstractNode}
     log_start(v, step)
@@ -146,15 +174,7 @@ function run_node(pipe::Pipe, v, forced::Bool, context_input=nothing)
     r1 = run_node(pipe.first, v, forced, context_input)
     any(!r.success for r in r1) && return r1
     out = length(r1) == 1 ? r1[1].output : [r.output for r in r1 if r.success]
-    r2 = if pipe.second isa Step && pipe.second.work isa Function
-        log_start(v, pipe.second)
-        res = execute(pipe.second, out)
-        log_result(v, res)
-        res.success && mark_complete!(pipe.second)
-        [res]
-    else
-        run_node(pipe.second, v, forced, nothing)
-    end
+    r2 = run_node(pipe.second, v, forced, out)
     vcat(r1, r2)
 end
 
@@ -165,7 +185,7 @@ function run_node(sip::SameInputPipe, v, forced::Bool, context_input=nothing)
     vcat(r1, r2)
 end
 
-# BroadcastPipe(ForEach, step): expand to one (branch >> step) per item, run in parallel with context
+# BroadcastPipe(ForEach, step): expand to one (branch >> step) per item, run via shared parallel helper
 function run_node(bp::BroadcastPipe{<:ForEach, <:AbstractNode}, v, forced::Bool, context_input=nothing)
     fe = bp.first
     step = bp.second
@@ -181,44 +201,11 @@ function run_node(bp::BroadcastPipe{<:ForEach, <:AbstractNode}, v, forced::Bool,
             push!(nodes, as_node(r) >> step)
         end
         contexts = [length(matches[i]) == 1 ? matches[i][1] : matches[i] for i in 1:length(nodes)]
-        n = length(nodes)
-        log_parallel(v, n)
-        max_p = MAX_PARALLEL[]
-        if max_p > 0 && n > 0
-            results = AbstractStepResult[]
-            for i in 1:max_p:n
-                chunk_inds = i:min(i + max_p - 1, n)
-                chunk_nodes = [nodes[j] for j in chunk_inds]
-                chunk_ctx = [contexts[j] for j in chunk_inds]
-                append!(results, reduce(vcat, [fetch(@spawn run_node(chunk_nodes[k], v, forced, chunk_ctx[k])) for k in eachindex(chunk_nodes)]))
-                log_progress(v, length(results), n)
-            end
-            results
-        else
-            reduce(vcat, [run_node(nodes[j], v, forced, contexts[j]) for j in 1:n])
-        end
+        return run_node(ParallelBranches(nodes, contexts), v, forced, nothing)
     else
         items = collect(fe.source)
-        nodes = AbstractNode[]
-        for item in items
-            push!(nodes, as_node(fe.f(item)) >> step)
-        end
-        n = length(nodes)
-        log_parallel(v, n)
-        max_p = MAX_PARALLEL[]
-        if max_p > 0 && n > 0
-            results = AbstractStepResult[]
-            for i in 1:max_p:n
-                chunk_inds = i:min(i + max_p - 1, n)
-                chunk_nodes = [nodes[j] for j in chunk_inds]
-                chunk_ctx = [items[j] for j in chunk_inds]
-                append!(results, reduce(vcat, [fetch(@spawn run_node(chunk_nodes[k], v, forced, chunk_ctx[k])) for k in eachindex(chunk_nodes)]))
-                log_progress(v, length(results), n)
-            end
-            results
-        else
-            length(nodes) == 1 ? run_node(nodes[1], v, forced, items[1]) : reduce(vcat, [fetch(@spawn run_node(nodes[j], v, forced, items[j])) for j in 1:n])
-        end
+        nodes = [as_node(fe.f(item)) >> step for item in items]
+        return run_node(ParallelBranches(nodes, items), v, forced, nothing)
     end
 end
 function run_node(bp::BroadcastPipe{<:Parallel, <:AbstractNode}, v, forced::Bool, context_input=nothing)
@@ -241,22 +228,8 @@ function run_node(fe::ForEach{F, String}, v, forced::Bool, context_input=nothing
         contains_node(fe, node) && error("Pipeline cycle: ForEach block returned a node containing this ForEach.")
         push!(nodes, node)
     end
-    n = length(nodes)
-    log_parallel(v, n)
-    max_p = MAX_PARALLEL[]
-    ctx(i) = length(matches[i]) == 1 ? matches[i][1] : matches[i]
-    if max_p > 0 && n > 0
-        results = AbstractStepResult[]
-        for i in 1:max_p:n
-            chunk_inds = i:min(i + max_p - 1, n)
-            chunk = [nodes[j] for j in chunk_inds]
-            append!(results, reduce(vcat, fetch.([@spawn run_node(chunk[k], v, forced, ctx(chunk_inds[k])) for k in eachindex(chunk)])))
-            log_progress(v, length(results), n)
-        end
-        results
-    else
-        reduce(vcat, [run_node(nodes[j], v, forced, ctx(j)) for j in 1:n])
-    end
+    contexts = [length(matches[i]) == 1 ? matches[i][1] : matches[i] for i in 1:length(nodes)]
+    run_node(ParallelBranches(nodes, contexts), v, forced, nothing)
 end
 
 function run_node(fe::ForEach{F, Vector{T}}, v, forced::Bool, context_input=nothing) where {F, T}
@@ -267,22 +240,7 @@ function run_node(fe::ForEach{F, Vector{T}}, v, forced::Bool, context_input=noth
         contains_node(fe, node) && error("Pipeline cycle: ForEach block returned a node containing this ForEach.")
         push!(nodes, node)
     end
-    n = length(nodes)
-    log_parallel(v, n)
-    max_p = MAX_PARALLEL[]
-    ctx(j) = items[j]
-    if max_p > 0 && n > 0
-        results = AbstractStepResult[]
-        for i in 1:max_p:n
-            chunk_inds = i:min(i + max_p - 1, n)
-            chunk = [nodes[j] for j in chunk_inds]
-            append!(results, reduce(vcat, fetch.([@spawn run_node(chunk[k], v, forced, ctx(chunk_inds[k])) for k in eachindex(chunk)])))
-            log_progress(v, length(results), n)
-        end
-        results
-    else
-        length(nodes) == 1 ? run_node(nodes[1], v, forced, ctx(1)) : reduce(vcat, fetch.([@spawn run_node(nodes[j], v, forced, ctx(j)) for j in 1:n]))
-    end
+    run_node(ParallelBranches(nodes, items), v, forced, nothing)
 end
 
 """
