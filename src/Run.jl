@@ -10,7 +10,7 @@ Execute a pipeline or node, returning results for each step.
 - `verbose=true`: Show colored progress output
 - `dry_run=false`: If true, show DAG structure without executing
 - `force=false`: If true, run all steps regardless of freshness
-- `jobs=8`: Max concurrent branches for Parallel/ForEach/Map. All branches run; when `jobs > 0`, they run in rounds of `jobs` (each round waits for the previous). `jobs=0` = unbounded (all at once).
+- `jobs=8`: Max concurrent branches for Parallel/ForEach. All branches run; when `jobs > 0`, they run in rounds of `jobs` (each round waits for the previous). `jobs=0` = unbounded (all at once).
 - `keep_outputs=:last`: What to retain in each result's `.output`. `:last` (default) keeps only the last result's output (others get `nothing`); `:all` keeps every step's output; `:none` drops all outputs.
 
 # When output is kept vs dropped

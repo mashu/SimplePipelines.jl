@@ -30,7 +30,7 @@ using intuitive operators.
 |----------|-------------|
 | `Timeout(a, secs)` | Fail if exceeds time |
 | `Branch(cond, a, b)` | Conditional execution |
-| `Map(f, items)` | Fan-out over collection |
+| `ForEach(items) do x ... end` | Fan-out over collection |
 | `Reduce(f, a & b)` | Combine parallel outputs |
 | `ForEach(pattern) do ...` | Discover files by pattern |
 | `Retry(a, n, delay=d)` | Retry with delay |
@@ -132,7 +132,7 @@ pipeline = (branch1 & branch2 & branch3) >> merge
 ## Features
 
 - **Intuitive operators** - `>>` sequence, `&` parallel, `|` fallback, `^` retry
-- **Control flow** - `Timeout`, `Branch`, `Map` for complex workflows
+- **Control flow** - `Timeout`, `Branch`, `ForEach` (pattern or collection) for complex workflows
 - **Type-stable** - Zero runtime type checks, full compile-time specialization
 - **Minimal overhead** - `@inline` functions and tuple recursion
 - **Composable** - All operators work together seamlessly

@@ -216,21 +216,19 @@ backup = @step backup = sh"echo fallback"
 pipeline = Timeout(api_call, 5.0)^3 | backup
 ```
 
-## Map (Fan-out)
+## ForEach (pattern or collection)
 
-Apply a function to each item, creating parallel steps:
+ForEach has two modes (dispatch on second argument). **Collection:** apply the block to each item (like Map). **Pattern:** discover files by pattern and run the block per match.
 
 ```julia
-# Process files in parallel (list supplied in code)
+# Over a collection (list supplied in code)
 samples = ["sample_A", "sample_B", "sample_C"]
-pipeline = Map(samples) do s
+pipeline = ForEach(samples) do s
     Step(Symbol("process_", s), sh("analyze $s.fastq"))
 end >> merge_results
 ```
 
-## ForEach (Pattern-based discovery)
-
-Discover files by pattern, create parallel branches automatically. ForEach scans the filesystem, so matching files must exist. Example with a temp dir:
+**Pattern-based discovery:** ForEach(pattern) scans the filesystem; matching files must exist. Example with a temp dir:
 
 ```julia
 # Create dummy files so ForEach can find matches (run in a temp dir)

@@ -84,16 +84,16 @@ function print_dag(io::IO, f::Force, pre::String, cont::String, color::Bool)
     print_dag(io, f.node, cont * "    ", cont * "    ", color)
 end
 
-function print_dag(io::IO, fe::ForEach, pre::String, cont::String, color::Bool)
+function print_dag(io::IO, fe::ForEach{F, String}, pre::String, cont::String, color::Bool) where F
     print(io, pre)
     color ? printstyled(io, "⊕ ForEach", color=:magenta) : print(io, "⊕ ForEach")
-    println(io, " \"", fe.pattern, "\"")
+    println(io, " \"", fe.source, "\"")
 end
 
-function print_dag(io::IO, m::Map, pre::String, cont::String, color::Bool)
+function print_dag(io::IO, fe::ForEach{F, Vector{T}}, pre::String, cont::String, color::Bool) where {F, T}
     print(io, pre)
-    color ? printstyled(io, "⊕ Map", color=:magenta) : print(io, "⊕ Map")
-    println(io, " ($(length(m.items)) items)")
+    color ? printstyled(io, "⊕ ForEach", color=:magenta) : print(io, "⊕ ForEach")
+    println(io, " ($(length(fe.source)) items)")
 end
 
 # Branch helper with marker
@@ -138,8 +138,8 @@ Base.show(io::IO, b::Branch) = print(io, "Branch(?, ", b.if_true, ", ", b.if_fal
 Base.show(io::IO, t::Timeout) = print(io, "Timeout(", t.node, ", ", t.seconds, "s)")
 Base.show(io::IO, r::Reduce) = print(io, "Reduce(:", r.name, ", ", r.node, ")")
 Base.show(io::IO, f::Force) = print(io, "Force(", f.node, ")")
-Base.show(io::IO, fe::ForEach) = print(io, "ForEach(\"", fe.pattern, "\")")
-Base.show(io::IO, m::Map) = print(io, "Map(", length(m.items), " items)")
+Base.show(io::IO, fe::ForEach{F, String}) where F = print(io, "ForEach(\"", fe.source, "\")")
+Base.show(io::IO, fe::ForEach{F, Vector{T}}) where {F, T} = print(io, "ForEach(", length(fe.source), " items)")
 Base.show(io::IO, p::Pipeline) = print(io, "Pipeline(\"", p.name, "\", ", count_steps(p.root), " steps)")
 
 function Base.show(io::IO, ::MIME"text/plain", p::Pipeline)

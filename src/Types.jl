@@ -4,7 +4,7 @@
 """
     AbstractNode
 
-Abstract supertype of all pipeline nodes (Step, Sequence, Parallel, Retry, Fallback, Branch, Timeout, Force, Reduce, Map, ForEach).
+Abstract supertype of all pipeline nodes (Step, Sequence, Parallel, Retry, Fallback, Branch, Timeout, Force, Reduce, ForEach).
 Constructors only build the struct; execution is via the functor: call `(node)(v, forced)` which dispatches to `run_node(node, v, forced)`.
 """
 abstract type AbstractNode end
@@ -136,16 +136,10 @@ end
 Reduce(f::Function, node::AbstractNode; name::Symbol=:reduce) = Reduce(f, node, name)
 Reduce(node::AbstractNode; name::Symbol=:reduce) = f -> Reduce(f, node; name=name)
 
-"""Lazy node: discovers files and runs the block once per match when the pipeline runs (not at construction)."""
-struct ForEach{F} <: AbstractNode
+"""Lazy node: run block over file matches (pattern string) or over a collection (vector). Dispatches on second argument."""
+struct ForEach{F, P} <: AbstractNode
     f::F
-    pattern::String
-end
-
-"""Lazy node: applies `f` to each item when the pipeline runs (not at construction)."""
-struct Map{F, T} <: AbstractNode
-    f::F
-    items::Vector{T}
+    source::P  # String (file pattern) or Vector{T} (items)
 end
 
 # Composition operators

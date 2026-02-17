@@ -2,7 +2,7 @@
     SimplePipelines
 
 Minimal, type-stable DAG pipelines for Julia with Make-like incremental builds.
-Execution is recursive: `run_node` dispatches on node type and recurses (Sequence in order, Parallel with `@spawn`, ForEach/Map expand then run).
+Execution is recursive: `run_node` dispatches on node type and recurses (Sequence in order, Parallel with `@spawn`, ForEach (pattern or collection) expand then run).
 
 # Quick Start
 ```julia
@@ -25,7 +25,7 @@ run(download >> process)
 ```
 
 # Features
-- **Recursive execution**: Dispatch on node type; Sequence runs in order, Parallel/ForEach/Map run branches with optional parallelism.
+- **Recursive execution**: Dispatch on node type; Sequence runs in order, Parallel/ForEach run branches with optional parallelism.
 - **Make-like freshness**: Steps skip if outputs are newer than inputs.
 - **State persistence**: Tracks completed steps across runs.
 - **Colored output**: Visual tree structure with status indicators.
@@ -38,7 +38,7 @@ module SimplePipelines
 export Step, @step, Sequence, Parallel, Pipeline
 export StepResult, AbstractStepResult
 export Retry, Fallback, Branch, Timeout, Force
-export Map, Reduce, ForEach, fe
+export Reduce, ForEach, fe
 export count_steps, steps, print_dag, is_fresh, clear_state!
 export @sh_str, sh
 

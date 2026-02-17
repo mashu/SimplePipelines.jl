@@ -45,7 +45,6 @@ The package extends these operators for pipeline composition. `Cmd` and `Functio
 ## Functions
 
 ```@docs
-Map
 ForEach
 fe
 ```
@@ -58,7 +57,7 @@ sh
 
 ## Execution
 
-Execution is recursive: `run(pipeline)` calls `run_node(root, ...)` which dispatches on node type and recurses (Sequence in order, Parallel/ForEach/Map with optional `@spawn`).
+Execution is recursive: `run(pipeline)` calls `run_node(root, ...)` which dispatches on node type and recurses (Sequence in order, Parallel/ForEach with optional `@spawn`).
 
 ```@docs
 run

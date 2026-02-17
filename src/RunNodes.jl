@@ -109,16 +109,12 @@ function run_node(r::Reduce, v, forced::Bool)
     vcat(results, [StepResult(reduce_step, true, time() - start, reduce_step.inputs, outcome.value)])
 end
 
-# Cycle check: does node contain needle? (ForEach/Map expansion only)
+# Cycle check: does node contain needle? (ForEach expansion only)
 contains_node(needle::ForEach, x::ForEach) = x === needle
 contains_node(needle::ForEach, s::Step) = step_contains(needle, s)
 contains_node(needle::ForEach, n::AbstractNode) = any(c -> contains_node(needle, c), node_children(n))
-contains_node(::ForEach, ::Map) = false
-contains_node(needle::Map, x::Map) = x === needle
-contains_node(needle::Map, s::Step) = step_contains(needle, s)
-contains_node(needle::Map, n::AbstractNode) = any(c -> contains_node(needle, c), node_children(n))
-step_contains(needle::Union{ForEach,Map}, s::Step{N}) where {N<:AbstractNode} = s.work === needle || contains_node(needle, s.work)
-step_contains(::Union{ForEach,Map}, ::Step) = false
+step_contains(needle::ForEach, s::Step{N}) where {N<:AbstractNode} = s.work === needle || contains_node(needle, s.work)
+step_contains(::ForEach, ::Step) = false
 node_children(n::Sequence) = collect(n.nodes)
 node_children(n::Parallel) = collect(n.nodes)
 node_children(n::Retry) = [n.node]
@@ -127,12 +123,13 @@ node_children(n::Branch) = [n.if_true, n.if_false]
 node_children(n::Timeout) = [n.node]
 node_children(n::Force) = [n.node]
 node_children(n::Reduce) = [n.node]
-node_children(::Union{Step,ForEach,Map}) = AbstractNode[]
+node_children(::Union{Step,ForEach}) = AbstractNode[]
 
-function run_node(fe::ForEach, v, forced::Bool)
-    regex = for_each_regex(fe.pattern)
-    matches = find_matches(fe.pattern, regex)
-    isempty(matches) && error("ForEach: no files match '$(fe.pattern)'")
+function run_node(fe::ForEach{F, String}, v, forced::Bool) where F
+    pattern = fe.source
+    regex = for_each_regex(pattern)
+    matches = find_matches(pattern, regex)
+    isempty(matches) && error("ForEach: no files match '$pattern'")
     nodes = AbstractNode[]
     for c in matches
         r = length(c) == 1 ? fe.f(c[1]) : fe.f(c...)
@@ -157,11 +154,11 @@ function run_node(fe::ForEach, v, forced::Bool)
     end
 end
 
-function run_node(m::Map, v, forced::Bool)
+function run_node(fe::ForEach{F, Vector{T}}, v, forced::Bool) where {F, T}
     nodes = AbstractNode[]
-    for item in m.items
-        node = as_node(m.f(item))
-        contains_node(m, node) && error("Pipeline cycle: Map block returned a node containing this Map.")
+    for item in fe.source
+        node = as_node(fe.f(item))
+        contains_node(fe, node) && error("Pipeline cycle: ForEach block returned a node containing this ForEach.")
         push!(nodes, node)
     end
     n = length(nodes)
@@ -195,7 +192,6 @@ steps(t::Timeout) = steps(t.node)
 steps(r::Reduce) = steps(r.node)
 steps(f::Force) = steps(f.node)
 steps(::ForEach) = Step[]  # lazy: not discovered until run
-steps(::Map) = Step[]     # lazy: nodes built only when run
 
 """
     count_steps(node) -> Int
@@ -212,4 +208,3 @@ count_steps(t::Timeout) = count_steps(t.node)
 count_steps(r::Reduce) = count_steps(r.node) + 1
 count_steps(f::Force) = count_steps(f.node)
 count_steps(::ForEach) = 0  # lazy: not discovered until run
-count_steps(::Map) = 0      # lazy: nodes built only when run

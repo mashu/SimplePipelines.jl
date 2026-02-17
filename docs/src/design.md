@@ -65,8 +65,7 @@ run_node(root, v, force)  ─── dispatch on node type
        ├─► Step:     execute(step) → StepResult
        ├─► Sequence: run_node each in order; break on first failure
        ├─► Parallel: @spawn run_node each; fetch and concat
-       ├─► ForEach:  find matches, get nodes from block (cycle check), then run like Parallel
-       ├─► Map:      get nodes from f(item) (cycle check), then run like Parallel
+       ├─► ForEach:  (String) find file matches, or (Vector) iterate items; get nodes from block (cycle check), then run like Parallel
        └─► Retry/Fallback/Branch/Timeout/Force/Reduce: recurse on inner node(s)
        │
        ▼

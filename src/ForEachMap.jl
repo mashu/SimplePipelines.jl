@@ -1,27 +1,5 @@
-# ForEach/Map constructors, pattern matching, as_node.
-# Required before run_node(ForEach) / run_node(Map).
-
-"""
-    Map(f, items)
-    Map(f)
-
-Lazy parallel node: applies `f` to each item **when you call `run(pipeline)`**, not when the pipeline is built.
-`Map(f)` returns a function `items -> Map(f, items)`.
-
-# Examples
-```julia
-Map([1, 2, 3]) do n
-    @step step_n = `echo n=\$n`
-end
-```
-"""
-function Map(f::Function, items)
-    vec = collect(items)
-    isempty(vec) && error("Map requires at least one item")
-    Map(f, vec)
-end
-Map(f::F, items::Vector{T}) where {F<:Function, T} = (isempty(items) && error("Map requires at least one item"); Map{F, T}(f, items))
-Map(f::Function) = items -> Map(f, items)
+# ForEach constructors (pattern or collection), pattern matching, as_node.
+# Required before run_node(ForEach).
 
 as_node(n::AbstractNode) = n
 as_node(x) = Step(x)
@@ -41,22 +19,46 @@ function for_each_regex(pattern::String)::Regex
 end
 
 """
-    ForEach(pattern) do wildcards...
-        # return a Step or node
-    end
-    fe(pattern) do wildcards... end   # short alias
+    ForEach(pattern) do wildcards... end
+    ForEach(items) do item ... end
+    fe(...)   # short alias
 
-Discover files matching pattern with `{name}` placeholders; create one parallel branch per match.
-The block is run once per match **when you call `run(pipeline)`**, not when the pipeline is built.
-It must return a Step or other node (e.g. `@step name = sh\"cmd\"`).
-Concurrency is set at run time: `run(pipeline; jobs=8)` (default 8; use `jobs=0` for unbounded).
+Single lazy node with two behaviors (multiple dispatch on second argument):
+
+- **String (file pattern)**: Discover files matching pattern with `{name}` placeholders; create one parallel branch per match. The block receives the captured wildcard(s). Pattern must contain `{wildcard}`.
+- **Collection**: Apply the block to each item (one parallel branch per element). Use any vector or iterable (e.g. `eachrow(df)`, `1:10`). The block receives the item and must return a Step or node.
+
+The block is run **when you call `run(pipeline)`**, not when the pipeline is built. Concurrency: `run(pipeline; jobs=8)` (default 8; `jobs=0` for unbounded).
+
+# Examples
+```julia
+# File discovery
+ForEach(\"data/{id}.csv\") do id
+    @step process = sh\"process data/\$id.csv\"
+end
+
+# Over a collection
+ForEach([1, 2, 3]) do n
+    @step step_n = `echo n=\$n`
+end
+ForEach(eachrow(df)) do row
+    @step p = sh\"echo \$(row.id)\"
+end
+```
 """
 function ForEach(f::Function, pattern::String)
     wildcard_rx = r"\{(\w+)\}"
     contains(pattern, wildcard_rx) || error("ForEach pattern must contain {wildcard}: $pattern")
-    ForEach{typeof(f)}(f, pattern)
+    ForEach{typeof(f), String}(f, pattern)
 end
 ForEach(pattern::String) = f -> ForEach(f, pattern)
+
+function ForEach(f::Function, items)
+    vec = collect(items)
+    isempty(vec) && error("ForEach requires at least one item")
+    ForEach{typeof(f), typeof(vec)}(f, vec)
+end
+ForEach(f::Function) = items -> ForEach(f, items)
 
 const fe = ForEach
 @doc "Short alias for [`ForEach`](@ref). Use `fe(\"pattern\") do x ... end`." fe
