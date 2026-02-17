@@ -39,17 +39,52 @@ Track input/output files for validation:
 
 ## Sequential Execution: `>>`
 
-The `>>` operator chains steps—each waits for the previous to complete:
+The `>>` operator chains steps—each waits for the previous to complete. When the next node is a **function step**, it receives the previous step's output (or the current branch context inside `ForEach`):
 
 ```julia
 # Chain commands directly (anonymous steps)
 pipeline = sh"download data.txt" >> sh"process data.txt" >> sh"upload results.txt"
+
+# Data passing: function steps receive previous output
+download(id) = "data_$(id).csv"
+process(path) = read(path, String)  # receives path from download
+pipeline = @step dl = download >> @step proc = process
 
 # Or define named steps, then chain
 step_a = @step step_a = sh"download data.txt"
 step_b = @step step_b = sh"process data.txt"
 step_c = @step step_c = sh"upload results.txt"
 pipeline = step_a >> step_b >> step_c
+```
+
+## Pipe (`|>`), same input (`>>>`), and broadcast (`.>>`)
+
+When the left has **one** output, `>>`, `|>`, and `.>>` all pass that value to the next (function) step. When the left has **multiple** outputs (e.g. ForEach, Parallel), they differ:
+
+| Left side     | `a >> step`         | `a |> step`            | `a .>> step`                 |
+| ------------- | ------------------- | ---------------------- | ---------------------------- |
+| Single output | step(one value)     | step(one value)        | step(one value)              |
+| Multi output  | step(**last** only)  | step(**vector** of all) | step **per branch** (one call each) |
+
+- **`a |> b`** — Run `a`, then run `b` with `a`'s output(s). RHS must be a function step. Multi-branch → one call with a vector.
+- **`a >>> b`** — Run `a` then `b` with the **same** input (e.g. inside ForEach, both get the branch id). Use when the next step should not receive `a`'s output.
+- **`a .>> b`** — Attach `b` to **each branch** of `a`. Each branch runs as `branch >> b`; you don't wait for all of `a` to finish before starting `b` on completed branches.
+
+```julia
+# Pipe: pass download output to process
+fetch = @step fetch = `echo "content"`
+process(x) = uppercase(String(x))
+pipeline = fetch |> @step process = process
+
+# Same input (e.g. in ForEach): both steps get the id
+ForEach([1, 2]) do id
+    @step first = (x -> "a_$(x)") >>> @step second = (x -> "b_$(x)")
+end
+
+# Broadcast: process each branch output immediately
+ForEach(["a", "b"]) do x
+    Step(Symbol("echo_", x), `echo $x`)
+end .>> @step process = (s -> "got_" * strip(String(s)))
 ```
 
 ## Parallel Execution: `&`

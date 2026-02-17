@@ -4,7 +4,7 @@
 """
     AbstractNode
 
-Abstract supertype of all pipeline nodes (Step, Sequence, Parallel, Retry, Fallback, Branch, Timeout, Force, Reduce, ForEach).
+Abstract supertype of all pipeline nodes (Step, Sequence, Parallel, Retry, Fallback, Branch, Timeout, Force, Reduce, ForEach, Pipe, SameInputPipe, BroadcastPipe).
 Constructors only build the struct; execution is via the functor: call `(node)(v, forced)` which dispatches to `run_node(node, v, forced)`.
 """
 abstract type AbstractNode end
@@ -53,8 +53,9 @@ work_label(x) = repr(x)
 
 """
     Sequence{T} <: AbstractNode
+    a >> b
 
-Executes nodes sequentially, stopping on first failure. Created automatically by the `>>` operator.
+Executes nodes sequentially, stopping on first failure. **Data passing:** when the next node is a function step, it receives the previous step's output (or the current context in ForEach). So `download >> process` with `download(id)=path` and `process(path)=...` passes the path to `process`.
 """
 struct Sequence{T<:Tuple} <: AbstractNode
     nodes::T
@@ -186,6 +187,41 @@ end
 (^)(a::AbstractNode, n::Int) = Retry(a, n)
 (^)(a::Cmd, n::Int) = Retry(Step(a), n)
 (^)(a::Function, n::Int) = Retry(Step(a), n)
+
+"""
+    Pipe{A, B} <: AbstractNode
+    a |> b
+
+Run `a`, then run `b` with `a`'s output(s) as `b`'s input. RHS must be a **function step**. Single result → one value; multiple results (ForEach/Parallel) → vector.
+"""
+struct Pipe{A<:AbstractNode, B<:AbstractNode} <: AbstractNode
+    first::A
+    second::B
+end
+|>(a::AbstractNode, b::AbstractNode) = Pipe(a, b)
+
+"""
+    SameInputPipe{A, B} <: AbstractNode
+    a >>> b
+
+Run `a` then `b` with the **same** input (e.g. branch id in ForEach). Both receive the current context input; `b` does not receive `a`'s output. Use when the next step should run on the same input as the previous.
+"""
+struct SameInputPipe{A<:AbstractNode, B<:AbstractNode} <: AbstractNode
+    first::A
+    second::B
+end
+>>>(a::AbstractNode, b::AbstractNode) = SameInputPipe(a, b)
+
+"""
+    BroadcastPipe{A, B} <: AbstractNode
+    a .>> b   (broadcast of >>)
+
+Attach the next step to **each branch** of the left node. For `ForEach` or `Parallel`, each branch runs as `branch >> b` so `b` receives that branch's output; branches run in parallel and you don't wait for all of the first step to finish before starting `b` on completed branches. For a single-output node, equivalent to `a >> b`.
+"""
+struct BroadcastPipe{A<:AbstractNode, B<:AbstractNode} <: AbstractNode
+    first::A
+    second::B
+end
 
 """Supertype of all step results; use for `Vector{AbstractStepResult}` (e.g. return of `run`)."""
 abstract type AbstractStepResult end

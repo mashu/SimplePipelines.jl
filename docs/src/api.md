@@ -22,6 +22,9 @@ Timeout
 Reduce
 Force
 Pipeline
+SimplePipelines.Pipe
+SameInputPipe
+BroadcastPipe
 ```
 
 ## Macros
@@ -35,12 +38,22 @@ Pipeline
 
 The package extends these operators for pipeline composition. `Cmd` and `Function` arguments are auto-wrapped in `Step`.
 
-| Operator | Name     | Description                          |
-| -------- | -------- | ------------------------------------ |
-| `>>`     | Sequence | Run nodes in order                   |
-| `&`      | Parallel | Run nodes concurrently               |
-| `\|`     | Fallback | Run fallback if primary fails        |
-| `^`      | Retry    | Wrap with retries, e.g. `node^3`     |
+| Operator | Name          | Description                                              |
+| -------- | ------------- | -------------------------------------------------------- |
+| `>>`     | Sequence      | Run in order; pass previous output to next (function step)|
+| `&`      | Parallel      | Run nodes concurrently                                   |
+| `\|`     | Fallback      | Run fallback if primary fails                            |
+| `^`      | Retry         | Wrap with retries, e.g. `node^3`                         |
+| `\|>`    | Pipe          | Run right with left's output(s) (single or vector)       |
+| `>>>`    | SameInputPipe | Run both with the same input (e.g. branch id)            |
+| `.>>`    | BroadcastPipe | Attach right to each branch of left (per-branch pipeline)|
+
+When the left has one output, `>>`, `|>`, and `.>>` all pass that value to the next step. When the left has **multiple** outputs (ForEach, Parallel):
+
+| Left side     | `a >> step`         | `a |> step`            | `a .>> step`                 |
+| ------------- | ------------------- | ---------------------- | ---------------------------- |
+| Single output | step(one value)     | step(one value)        | step(one value)              |
+| Multi output  | step(**last** only)  | step(**vector** of all) | step **per branch** (one call each) |
 
 ## Functions
 

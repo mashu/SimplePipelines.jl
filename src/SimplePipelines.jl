@@ -26,6 +26,14 @@ run(download >> process)
 
 # Features
 - **Recursive execution**: Dispatch on node type; Sequence runs in order, Parallel/ForEach run branches with optional parallelism.
+- **Data passing**: When the left has one output, `>>`, `|>`, and `.>>` all pass that value to the next (function) step. When the left has **multiple** outputs (e.g. ForEach, Parallel), they differ:
+
+  | Left side     | `a >> step`        | `a |> step`           | `a .>> step`              |
+  | ------------- | ------------------ | --------------------- | ------------------------- |
+  | Single output | step(one value)     | step(one value)       | step(one value)           |
+  | Multi output  | step(**last** only) | step(**vector** of all) | step **per branch** (one call each) |
+
+  Use `a >>> b` so both run on the **same** input (e.g. branch id). RHS of `|>` must be a function step.
 - **Make-like freshness**: Steps skip if outputs are newer than inputs.
 - **State persistence**: Tracks completed steps across runs.
 - **Colored output**: Visual tree structure with status indicators.
@@ -39,10 +47,11 @@ export Step, @step, Sequence, Parallel, Pipeline
 export StepResult, AbstractStepResult
 export Retry, Fallback, Branch, Timeout, Force
 export Reduce, ForEach, fe
+export SameInputPipe, >>>, BroadcastPipe
 export count_steps, steps, print_dag, is_fresh, clear_state!
 export @sh_str, sh
 
-import Base: >>, &, |, ^
+import Base: >>, &, |, ^, |>, >>>
 
 using Base.Threads: @spawn, fetch
 
@@ -75,7 +84,7 @@ end
 sh(s::String) = Cmd(["sh", "-c", s])
 
 #==============================================================================#
-# Logical includes (order matters: Types → Macro → State → Execute → Logging → ForEachMap → RunNodes → Run → Display)
+# Logical includes (order matters: Types → Macro → State → Execute → Logging → ForEach → RunNodes → Run → Display)
 #==============================================================================#
 
 include("Types.jl")
@@ -83,7 +92,7 @@ include("Macro.jl")
 include("State.jl")
 include("Execute.jl")
 include("Logging.jl")
-include("ForEachMap.jl")
+include("ForEach.jl")
 include("RunNodes.jl")
 include("Run.jl")
 include("Display.jl")

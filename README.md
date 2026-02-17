@@ -35,9 +35,9 @@ run(pipeline)
 
 > **Commands** — `sh"cmd"` · `sh("$(var)")` (interpolation)
 
-> **Operators** — `a >> b` sequence · `a & b` parallel · `a | b` fallback · `a^3` retry
+> **Operators** — `a >> b` sequence (passes output to next) · `a & b` parallel · `a | b` fallback · `a^3` retry · `a |> b` pipe (output → input) · `a >>> b` same input · `a .>> b` attach step to each branch
 
-> **Control** — `Branch(cond,a,b)` · `Timeout(a,t)` · `Map(f, items)` · `Reduce(f,a&b)` · `ForEach(pat) do ...`
+> **Control** — `Branch(cond,a,b)` · `Timeout(a,t)` · `Reduce(f,a&b)` · `ForEach(pat)` / `ForEach(items) do ...`
 
 > **Freshness** — `Force(step)` · `run(p, force=true)` · `is_fresh(step)` · `clear_state!()`
 

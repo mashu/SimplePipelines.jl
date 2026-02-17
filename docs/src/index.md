@@ -19,10 +19,20 @@ using intuitive operators.
 
 | Operator | Description | Example |
 |----------|-------------|---------|
-| `>>` | Sequential | `a >> b >> c` |
+| `>>` | Sequential (pass output to next) | `a >> b >> c` |
 | `&` | Parallel | `a & b & c` |
 | `\|` | Fallback | `a \| b` (b if a fails) |
 | `^n` | Retry | `a^3` (up to 3 times) |
+| `\|>` | Pipe (output → input) | `a \|> b` |
+| `>>>` | Same input (both get same context) | `a >>> b` |
+| `.>>` | Broadcast (attach to each branch) | `fe .>> step` |
+
+When the left has **multiple** outputs (e.g. ForEach), `>>` passes only the **last** to the next step; `|>` passes a **vector** of all; `.>>` runs the next step **per branch**.
+
+| Left side     | `>>`              | `|>`                 | `.>>`                    |
+| ------------- | ------------------ | -------------------- | ------------------------ |
+| Single output | step(one value)    | step(one value)      | step(one value)          |
+| Multi output  | step(**last** only)| step(**vector** of all) | step **per branch** |
 
 ### Control Flow
 

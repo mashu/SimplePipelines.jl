@@ -62,3 +62,17 @@ function execute(step::Step{T}) where T
         "Use @step name(\"path\") = process_file (function without parentheses) so the function receives the input at run time."
     )
 end
+
+"""Run a function step with a single piped input (used by Pipe). Skips file-input checks."""
+function execute(step::Step{F}, input) where {F<:Function}
+    start = time()
+    outcome = run_safely() do; step.work(input); end
+    if !outcome.ok
+        return StepResult(step, false, time() - start, step.inputs, "Error: $(outcome.value)")
+    end
+    for out_path in step.outputs
+        err = output_ready_error(out_path)
+        err !== nothing && return StepResult(step, false, time() - start, step.inputs, err)
+    end
+    StepResult(step, true, time() - start, step.inputs, outcome.value)
+end

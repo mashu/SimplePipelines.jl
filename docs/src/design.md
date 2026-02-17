@@ -11,10 +11,13 @@
 │  @step name = sh"cmd > f"   Shell with redirection/pipes    │
 │  @step name = () -> ...     Julia step                      │
 │                                                             │
-│  a >> b                     Sequential: a then b            │
+│  a >> b                     Sequential; pass output to next (function step) │
 │  a & b                      Parallel: a and b together      │
+│  a |> b                     Pipe: run b with a's output(s)  │
+│  a >>> b                    Same input: both get same context │
+│  a .>> b                    Broadcast: attach b to each branch of a │
 │                                                             │
-│  run(p)                Execute the pipeline            │
+│  run(p)                     Execute the pipeline            │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```

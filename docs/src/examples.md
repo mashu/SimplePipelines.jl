@@ -4,7 +4,7 @@ This page shows pipeline patterns in order of increasing complexity. Each exampl
 
 **Contents**
 
-1. [Basics](#1-basics) — sequential, parallel, Julia + shell
+1. [Basics](#1-basics) — sequential, parallel, Julia + shell, data passing and pipe
 2. [Control flow](#2-control-flow) — retry, fallback, branching
 3. [Complex DAGs](#3-complex-dags) — multi-stage parallel, robust pipeline
 4. [Bioinformatics](#4-bioinformatics) — immune repertoire (single & multi-donor), variant calling
@@ -93,6 +93,43 @@ end
 
 pipeline = generate >> process >> report
 run(pipeline)
+```
+
+---
+
+### 1.4 Data passing and Pipe
+
+**Flow:** Function steps receive the previous step's output. `|>` pipes output to the next step; `.>>` attaches the next step to each branch.
+
+```
+  download(id)  ──►  process(path)     # >> passes path
+  ForEach .>> step                      # each branch: branch >> step
+```
+
+**Goal:** Pass a downloaded path to a processor; use broadcast to process each branch output immediately.
+
+```julia
+using SimplePipelines
+
+# Sequence: first step returns path, second receives it
+download() = "data.csv"
+process(path) = path * "_done"
+pipeline = @step dl = download >> @step proc = process
+run(pipeline)
+# proc receives "data.csv"
+
+# Pipe: left output becomes right input (single or vector for multi-branch)
+fetch = @step fetch = `echo "hello"`
+pipeline = fetch |> @step process = (s -> "got: " * strip(String(s)))
+run(pipeline)
+
+# Broadcast: attach process to each branch (no wait for all)
+fe = ForEach([1, 2]) do x
+    Step(Symbol("gen_", x), `echo $x`)
+end
+pipeline = fe .>> @step process = (s -> "got_" * strip(String(s)))
+run(pipeline, force=true, keep_outputs=:all)
+# 4 results: gen_1, process("1"), gen_2, process("2")
 ```
 
 ---

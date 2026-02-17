@@ -96,6 +96,27 @@ function print_dag(io::IO, fe::ForEach{F, Vector{T}}, pre::String, cont::String,
     println(io, " ($(length(fe.source)) items)")
 end
 
+function print_dag(io::IO, p::Pipe, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    color ? printstyled(io, "▸ Pipe (output → input)\n", color=:cyan) : println(io, "▸ Pipe (output → input)")
+    print_dag(io, p.first,  cont * "  ├─", cont * "  │ ", color)
+    print_dag(io, p.second, cont * "  └─", cont * "    ", color)
+end
+
+function print_dag(io::IO, sip::SameInputPipe, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    color ? printstyled(io, "▸ SameInputPipe (same input)\n", color=:cyan) : println(io, "▸ SameInputPipe (same input)")
+    print_dag(io, sip.first,  cont * "  ├─", cont * "  │ ", color)
+    print_dag(io, sip.second, cont * "  └─", cont * "    ", color)
+end
+
+function print_dag(io::IO, bp::BroadcastPipe, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    color ? printstyled(io, "▸ BroadcastPipe (.>>  each branch → second)\n", color=:cyan) : println(io, "▸ BroadcastPipe (.>>  each branch → second)")
+    print_dag(io, bp.first,  cont * "  ├─", cont * "  │ ", color)
+    print_dag(io, bp.second, cont * "  └─", cont * "    ", color)
+end
+
 # Branch helper with marker
 function print_dag(io::IO, node::AbstractNode, pre::String, cont::String, color::Bool, marker_color::Symbol, marker::String)
     printstyled(io, marker, color=marker_color)
@@ -140,6 +161,9 @@ Base.show(io::IO, r::Reduce) = print(io, "Reduce(:", r.name, ", ", r.node, ")")
 Base.show(io::IO, f::Force) = print(io, "Force(", f.node, ")")
 Base.show(io::IO, fe::ForEach{F, String}) where F = print(io, "ForEach(\"", fe.source, "\")")
 Base.show(io::IO, fe::ForEach{F, Vector{T}}) where {F, T} = print(io, "ForEach(", length(fe.source), " items)")
+Base.show(io::IO, p::Pipe) = print(io, "(", p.first, " |> ", p.second, ")")
+Base.show(io::IO, sip::SameInputPipe) = print(io, "(", sip.first, " >>> ", sip.second, ")")
+Base.show(io::IO, bp::BroadcastPipe) = print(io, "(", bp.first, " .>> ", bp.second, ")")
 Base.show(io::IO, p::Pipeline) = print(io, "Pipeline(\"", p.name, "\", ", count_steps(p.root), " steps)")
 
 function Base.show(io::IO, ::MIME"text/plain", p::Pipeline)

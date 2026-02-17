@@ -846,24 +846,24 @@ clear_state!()
         @test pipeline isa Fallback
     end
     
-    @testset "Map" begin
-        # Map is lazy: block runs only when pipeline runs, not at construction
+    @testset "ForEach over collection" begin
+        # ForEach(items) is lazy: block runs only when pipeline runs, not at construction
         items = ["a", "b", "c"]
-        parallel = Map(items) do x
+        parallel = ForEach(items) do x
             Step(Symbol(x), `echo $x`)
         end
-        @test parallel isa Map
-        @test length(parallel.items) == 3
+        @test parallel isa ForEach
+        @test length(parallel.source) == 3
         @test count_steps(parallel) == 0  # lazy: nodes not expanded until run
-        
-        # Single item still returns Map (one item), runs as one node
-        single = Map(["only"]) do x
+
+        # Single item still returns ForEach (one item), runs as one node
+        single = ForEach(["only"]) do x
             Step(:only, `echo $x`)
         end
-        @test single isa Map
-        @test length(single.items) == 1
-        
-        # Execute map: block runs here, then steps run
+        @test single isa ForEach
+        @test length(single.source) == 1
+
+        # Execute: block runs here, then steps run
         results = run(parallel, verbose=false)
         @test length(results) == 3
         @test all(r -> r.success, results)
@@ -910,6 +910,87 @@ clear_state!()
         # print_dag
         print_dag(r)
         @test true
+    end
+
+    @testset "Pipe (|>)" begin
+        # Single result: left output becomes right input
+        first_step = @step first = `echo "piped"`
+        process_input(x) = (x isa String && contains(x, "piped") ? "ok" : "bad")
+        second_step = @step process = process_input
+        pipe = first_step |> second_step
+        @test pipe isa SimplePipelines.Pipe
+        @test pipe.first === first_step
+        @test pipe.second === second_step
+        results = run(pipe, verbose=false)
+        @test length(results) == 2
+        @test all(r -> r.success, results)
+        @test results[2].output == "ok"
+        @test count_steps(pipe) == 2
+        @test length(steps(pipe)) == 2
+
+        # Multi-result (ForEach): right step receives vector of branch outputs
+        per_file = ForEach(["x", "y", "z"]) do x
+            Step(Symbol("pipe_", x), `echo $x`)
+        end
+        combine_outputs(outputs) = join(sort([strip(String(o)) for o in outputs]), ",")
+        reducer_step = @step combine = combine_outputs
+        pipe2 = per_file |> reducer_step
+        results2 = run(pipe2, verbose=false, force=true)
+        @test length(results2) == 4  # 3 branch results + 1 combine result
+        @test all(r -> r.success, results2)
+        @test results2[end].output == "x,y,z"
+    end
+
+    @testset "Sequence (>>) data passing" begin
+        # First step output is passed as input to the next (function) step
+        gen() = "downloaded_path"
+        process(path) = path * "_processed"
+        s1 = @step gen = gen
+        s2 = @step process = process
+        seq = s1 >> s2
+        results = run(seq, verbose=false)
+        @test length(results) == 2 && all(r -> r.success, results)
+        @test results[2].output == "downloaded_path_processed"
+    end
+
+    @testset "SameInputPipe (>>>)" begin
+        # Both steps receive the same context input (e.g. branch id in ForEach)
+        first_fn(x) = "a_$(x)"
+        second_fn(x) = "b_$(x)"
+        pipeline = ForEach([10, 20]) do id
+            first_step = @step first = first_fn
+            second_step = @step second = second_fn
+            first_step >>> second_step
+        end
+        @test pipeline isa ForEach
+        results = run(pipeline, verbose=false, force=true, keep_outputs=:all)
+        @test length(results) == 4  # 2 branches × 2 steps
+        @test all(r -> r.success, results)
+        out = [r.output for r in results]
+        @test "a_10" in out && "b_10" in out && "a_20" in out && "b_20" in out
+        # Same-input: second step got the id, not first's output
+        @test !("b_a_10" in out) && !("b_a_20" in out)
+    end
+
+    @testset "BroadcastPipe (.>>)" begin
+        # .>> attaches the next step to each branch; each branch runs as branch >> step (no wait for all)
+        fe = ForEach([1, 2]) do x
+            Step(Symbol("echo_", x), `echo $x`)
+        end
+        process(x) = "got_" * strip(String(x))
+        step = @step process = process
+        bp = fe .>> step
+        @test bp isa BroadcastPipe
+        results = run(bp, verbose=false, force=true, keep_outputs=:all)
+        @test length(results) == 4  # 2 branches × (echo + process)
+        @test all(r -> r.success, results)
+        out = [r.output for r in results]
+        @test "got_1" in out && "got_2" in out
+        # Versus |> which runs one process on the vector [out1, out2]
+        pipe = fe |> step
+        results2 = run(pipe, verbose=false, force=true)
+        @test length(results2) == 3  # 2 branch results + 1 combine step
+        @test results2[end].output != "got_1"  # combined, not per-branch
     end
     
     @testset "ForEach" begin
