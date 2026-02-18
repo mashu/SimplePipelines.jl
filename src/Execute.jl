@@ -57,7 +57,7 @@ function execute(step::Step{Cmd}; verbose=nothing)
     end
     StepResult(step, true, time() - start, step.inputs, step.outputs, String(take!(buf)))
 end
-execute(step::Step{ShRun}; verbose=nothing) = execute_shell(step, step.work.f(); verbose)
+execute(step::Step{<:ShRun}; verbose=nothing) = execute_shell(step, step.work.f(); verbose)
 
 function execute(step::Step{Nothing})
     StepResult(step, false, 0.0, step.inputs, step.outputs, "Step has no work (ForEach block returned nothing). The block must return a Step or node, e.g. @step name = sh\"cmd\".")
