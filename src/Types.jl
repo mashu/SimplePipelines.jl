@@ -227,19 +227,25 @@ end
 abstract type AbstractStepResult end
 
 """
-    StepResult(step, success, duration, inputs, output)
+    StepResult(step, success, duration, inputs, outputs, result)
 
-Result of running one step. Type is `StepResult{S, I, V}`. Type-stable: no `Any`.
+Result of running one step. Type is `StepResult{S, I, O, V}`. Type-stable: no `Any`.
+
+# Fields (all real)
+- `inputs` — Input file paths the step declared. Empty for steps that take no input files (e.g. download / start nodes).
+- `outputs` — Output file paths the step declared (files the step produces).
+- `result` — Execution result: stdout for shell steps, return value for function steps, or `nothing` when `keep_outputs != :all`.
 """
-struct StepResult{S<:Step, I, V} <: AbstractStepResult
+struct StepResult{S<:Step, I, O, V} <: AbstractStepResult
     step::S
     success::Bool
     duration::Float64
     inputs::I
-    output::V
-    StepResult{S, I, V}(step::S, success::Bool, duration::Float64, inputs::I, output::V) where {S<:Step, I, V} = new{S, I, V}(step, success, duration, inputs, output)
+    outputs::O
+    result::V
+    StepResult{S, I, O, V}(step::S, success::Bool, duration::Float64, inputs::I, outputs::O, result::V) where {S<:Step, I, O, V} = new{S, I, O, V}(step, success, duration, inputs, outputs, result)
 end
-StepResult(step::S, success::Bool, duration::Float64, inputs::I, output::V) where {S<:Step, I, V} = StepResult{S, I, V}(step, success, duration, inputs, output)
+StepResult(step::S, success::Bool, duration::Float64, inputs::I, outputs::O, result::V) where {S<:Step, I, O, V} = StepResult{S, I, O, V}(step, success, duration, inputs, outputs, result)
 
 """Type-stable outcome of running a thunk: success and value, or failure and error string. Sole exception boundary."""
 struct RunOutcome{T}

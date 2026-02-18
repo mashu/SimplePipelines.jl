@@ -6,11 +6,17 @@
     @step work
 
 Create a named step with optional file dependencies. Steps are **lazy**: if the right-hand side
-is a function call, it is wrapped in a thunk and runs only when the pipeline is run via `run(pipeline)`.
+is a function call (other than `sh(...)`), it is wrapped in a thunk and runs only when the
+pipeline is run via `run(pipeline)`.
+
+Use `sh"..."` for literal commands; use `sh("... \$(var) ...")` or `sh("... " * var * " ...")`
+when you need interpolation. Interpolated `sh(...)` is evaluated at step construction time
+and produces a `Cmd`, so the step runs that command when executed.
 
 # Examples
 ```julia
 @step download = sh"curl -o data.csv http://example.com"
+@step download([] => ["data.csv"]) = sh("curl -L -o " * repr(path) * " " * url)
 @step process(["input.csv"] => ["output.csv"]) = sh"sort input.csv > output.csv"
 @step process("path") = process_file   # function by name, receives path at run time
 @step process(donor, "path/\$(donor).tsv") = process_file   # multiple inputs
@@ -21,7 +27,13 @@ macro step(expr)
     step_expr(expr)
 end
 
-step_work_expr(e::Expr) = (e.head === :call ? :(() -> $(esc(e))) : esc(e))
+"""Treat sh(cmd_expr) as interpolated shell: evaluate at construction time (no thunk)."""
+function step_work_expr(e::Expr)
+    if e.head === :call && !isempty(e.args) && e.args[1] === :sh
+        return esc(e)
+    end
+    e.head === :call ? :(() -> $(esc(e))) : esc(e)
+end
 step_work_expr(rhs) = esc(rhs)
 
 step_expr(expr::Symbol) = :(Step($(esc(expr))))

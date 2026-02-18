@@ -21,7 +21,7 @@ function log_result(::Verbose, r::AbstractStepResult)
         printstyled("  ✗ ", color=:red, bold=true)
         println("Completed in $(round(r.duration, digits=2))s")
         printstyled("  Error: ", color=:red)
-        println(r.output)
+        println(r.result)
     end
 end
 

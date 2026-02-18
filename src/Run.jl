@@ -11,16 +11,16 @@ Execute a pipeline or node, returning results for each step.
 - `dry_run=false`: If true, show DAG structure without executing
 - `force=false`: If true, run all steps regardless of freshness
 - `jobs=8`: Max concurrent branches for Parallel/ForEach. All branches run; when `jobs > 0`, they run in rounds of `jobs` (each round waits for the previous). `jobs=0` = unbounded (all at once).
-- `keep_outputs=:last`: What to retain in each result's `.output`. `:last` (default) keeps only the last result's output (others get `nothing`); `:all` keeps every step's output; `:none` drops all outputs.
+- `keep_outputs=:last`: What to retain in each result's `.result`. `:last` (default) keeps only the last step's result (others get `nothing`); `:all` keeps every step's result; `:none` drops all.
 
-# When output is kept vs dropped
-`keep_outputs` only affects the **returned** results vector: after the run we replace `.output` with `nothing` for non-final steps. **During execution** all step outputs stay in memory until the run finishes.
+# When result is kept vs dropped
+`keep_outputs` only affects the **returned** results vector: after the run we replace `.result` with `nothing` for non-final steps. **During execution** all step outputs stay in memory until the run finishes.
 
 # Memory: path-based I/O and streaming reducers
 To avoid holding large data in memory:
 1. **Steps**: Write large results to files and **return only the path** (or a small summary). Then the runner only holds path strings, not file contents.
 2. **Reduce**: The reducer receives a **vector of all branch outputs**. If those are paths, implement a **streaming reducer**: open one path at a time, read/aggregate, then close. Do not load all files into memory inside the reducer. Example: `reducer(paths) = (acc = init; for p in paths; acc = merge(acc, read_stats(p)); end; acc)`.
-3. Use `keep_outputs=:last` so the returned result vector does not retain every step's output.
+3. Use `keep_outputs=:last` so the returned result vector does not retain every step's result.
 
 If you follow (1) and (2), you only hold paths and small aggregates; full file contents are never all in memory. If a step returns a large object (e.g. a DataFrame of the whole file), that object is held until the run ends.
 
@@ -74,10 +74,10 @@ function run_pipeline(p::Pipeline, verbose::Bool, dry_run::Bool, force::Bool, ke
     run_depth[] -= 1
 
     if keep_outputs === :none && !isempty(results)
-        results = [StepResult(r.step, r.success, r.duration, r.inputs, nothing) for r in results]
+        results = [StepResult(r.step, r.success, r.duration, r.inputs, r.outputs, nothing) for r in results]
     elseif keep_outputs === :last && !isempty(results)
         n = length(results)
-        results = [StepResult(r.step, r.success, r.duration, r.inputs, i == n ? r.output : nothing) for (i, r) in enumerate(results)]
+        results = [StepResult(r.step, r.success, r.duration, r.inputs, r.outputs, i == n ? r.result : nothing) for (i, r) in enumerate(results)]
     end
 
     if verbose

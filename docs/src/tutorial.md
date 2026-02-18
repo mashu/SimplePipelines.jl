@@ -326,7 +326,7 @@ The reducer function receives a vector of outputs from all successful parallel s
 
 ### Low-memory / large data
 
-To avoid holding many large outputs in memory: (1) Have each step write its result to a file and **return the path** (e.g. `String`). (2) The reducer then receives a vector of paths and can open/process one at a time (or stream), write the combined result to a file, and return that path. (3) Use `run(pipeline; keep_outputs=:last)` so the returned `results` vector only retains the final step's `.output`; other steps get `.output === nothing`. You still get success, duration, and inputs per step; only the large values are dropped. Use `keep_outputs=:none` to drop all outputs.
+To avoid holding many large outputs in memory: (1) Have each step write its result to a file and **return the path** (e.g. `String`). (2) The reducer then receives a vector of paths and can open/process one at a time (or stream), write the combined result to a file, and return that path. (3) Use `run(pipeline; keep_outputs=:last)` so the returned `results` vector only retains the final step's `.result`; other steps get `.result === nothing`. You still get success, duration, and inputs/outputs per step; only the large values are dropped. Use `keep_outputs=:none` to drop all result values.
 
 ## Running Pipelines
 
@@ -358,7 +358,7 @@ for r in results
     if r.success
         println("$(r.step.name): completed in $(r.duration)s")
     else
-        println("$(r.step.name): FAILED - $(r.output)")
+        println("$(r.step.name): FAILED - $(r.result)")
     end
 end
 

@@ -4,7 +4,8 @@
     print_dag(node [; color=true])
     print_dag(io, node [, indent])
 
-Print a tree visualization of the pipeline DAG. With `color=true` (default when writing to a terminal), uses colors for node types and status. See also [`run`](@ref) and `display(pipeline)`.
+Print a tree visualization of the pipeline DAG. With `color=true` (default when writing to a terminal), uses colors for node types and status.
+Steps with no inputs (start nodes) are shown with ◆ in light cyan; steps with inputs use ○ in cyan. See also [`run`](@ref) and `display(pipeline)`.
 """
 print_dag(node::AbstractNode; color::Bool=true) = print_dag(stdout, node, "", "", color)
 print_dag(io::IO, node::AbstractNode, ::Int=0) = print_dag(io, node, "", "", false)
@@ -12,7 +13,16 @@ print_dag(io::IO, node::AbstractNode, ::Int=0) = print_dag(io, node, "", "", fal
 # pre = prefix for first line, cont = continuation prefix for subsequent lines
 function print_dag(io::IO, s::Step, pre::String, cont::String, color::Bool)
     print(io, pre)
-    color ? printstyled(io, "○ ", color=:cyan) : print(io, "○ ")
+    is_start = isempty(s.inputs)
+    if color
+        if is_start
+            printstyled(io, "◆ ", color=:light_cyan)  # start node (no inputs)
+        else
+            printstyled(io, "○ ", color=:cyan)
+        end
+    else
+        print(io, is_start ? "◆ " : "○ ")
+    end
     println(io, step_label(s))
     if !isempty(s.inputs)
         print(io, cont, "    ")
@@ -133,21 +143,80 @@ function print_children(io::IO, nodes, cont::String, color::Bool)
     end
 end
 
-# Custom show so StepResult doesn't print the ugly closure type (dispatch on output type)
-function Base.show(io::IO, r::StepResult{S, I, String}) where {S, I}
-    print(io, "StepResult(")
-    show(io, r.step)
-    print(io, ", ", r.success, ", ", round(r.duration; digits=2), ", ")
-    s = r.output
-    show(io, length(s) > 200 ? first(s, 200) * "…" : s)
+# One-line show (e.g. in vectors): named fields, omit empty; use colors when io has :color for readability
+function _show_stepresult_oneline(io::IO, r::StepResult, dur::Float64; result_str::Union{String,Nothing}=nothing)
+    color = get(io, :color, false)::Bool
+    print(io, "StepResult(step=")
+    if color
+        printstyled(io, "Step(:", step_label(r.step), ")", color=:cyan)
+    else
+        show(io, r.step)
+    end
+    print(io, ", success=")
+    if color
+        printstyled(io, string(r.success), color=r.success ? :green : :red)
+    else
+        print(io, r.success)
+    end
+    print(io, ", duration=")
+    if color
+        printstyled(io, string(round(dur; digits=2)), color=:light_black)
+    else
+        print(io, round(dur; digits=2))
+    end
+    !isempty(r.inputs) && print(io, ", inputs=", summary(r.inputs))
+    !isempty(r.outputs) && print(io, ", outputs=", summary(r.outputs))
+    if result_str !== nothing
+        print(io, ", result=")
+        color ? printstyled(io, result_str, color=:light_black) : print(io, result_str)
+    end
     print(io, ")")
 end
-function Base.show(io::IO, r::StepResult{S, I, V}) where {S, I, V}
-    print(io, "StepResult(")
-    show(io, r.step)
-    print(io, ", ", r.success, ", ", round(r.duration; digits=2), ", ")
-    print(io, "<", summary(r.output), ">")
-    print(io, ")")
+function Base.show(io::IO, r::StepResult{S, I, O, String}) where {S, I, O}
+    s = r.result
+    result_str = length(s) > 200 ? repr(first(s, 200) * "…") : repr(s)
+    _show_stepresult_oneline(io, r, r.duration; result_str)
+end
+function Base.show(io::IO, r::StepResult{S, I, O, V}) where {S, I, O, V}
+    result_str = r.result === nothing ? nothing : repr(r.result)
+    _show_stepresult_oneline(io, r, r.duration; result_str)
+end
+
+# Multi-line show for REPL: show only sections that have content (dispatch by presence of inputs/result).
+# Steps with no input files (start nodes): omit input line. No "(none)" or "Nothing"; cleaner and consistent.
+function Base.show(io::IO, ::MIME"text/plain", r::StepResult)
+    color = get(io, :color, false)::Bool
+    if color
+        printstyled(io, r.success ? "✓ " : "✗ ", color = r.success ? :green : :red)
+        print(io, "StepResult: ")
+        printstyled(io, step_label(r.step), color=:cyan)
+        print(io, " (")
+        printstyled(io, string(round(r.duration; digits=2)), color=:light_black)
+        println(io, "s)")
+    else
+        print(io, r.success ? "✓ " : "✗ ")
+        println(io, "StepResult: ", step_label(r.step), " (", round(r.duration; digits=2), "s)")
+    end
+    if !isempty(r.inputs)
+        print(io, "  input files:  ")
+        color && printstyled(io, "← ", color=:green)
+        println(io, join(r.inputs, "\n               "))
+    end
+    if !isempty(r.outputs)
+        print(io, "  output files: ")
+        color && printstyled(io, "→ ", color=:yellow)
+        println(io, join(r.outputs, "\n               "))
+    end
+    if r.result !== nothing
+        print(io, "  result:       ", summary(r.result))
+        s = r.result
+        if s isa String && !isempty(s)
+            trunc = length(s) > 80 ? first(s, 80) * "…" : s
+            println(io, " \"", replace(trunc, '\n' => "\\n"), "\"")
+        else
+            println(io)
+        end
+    end
 end
 
 Base.show(io::IO, s::Step) = print(io, "Step(:", s.name, ")")

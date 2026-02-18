@@ -18,41 +18,41 @@ function execute(step::Step{Cmd})
     start = time()
     for inp in step.inputs
         err = input_ready_error(inp)
-        err !== nothing && return StepResult(step, false, time() - start, step.inputs, err)
+        err !== nothing && return StepResult(step, false, time() - start, step.inputs, step.outputs, err)
     end
     buf = IOBuffer()
     outcome = run_safely() do; Base.run(Base.pipeline(step.work, stdout=buf, stderr=buf)); end
     if !outcome.ok
-        return StepResult(step, false, time() - start, step.inputs, "Error: $(outcome.value)\n$(String(take!(buf)))")
+        return StepResult(step, false, time() - start, step.inputs, step.outputs, "Error: $(outcome.value)\n$(String(take!(buf)))")
     end
     for out_path in step.outputs
         err = output_ready_error(out_path)
-        err !== nothing && return StepResult(step, false, time() - start, step.inputs, err)
+        err !== nothing && return StepResult(step, false, time() - start, step.inputs, step.outputs, err)
     end
-    StepResult(step, true, time() - start, step.inputs, String(take!(buf)))
+    StepResult(step, true, time() - start, step.inputs, step.outputs, String(take!(buf)))
 end
 
 function execute(step::Step{Nothing})
-    StepResult(step, false, 0.0, step.inputs, "Step has no work (ForEach block returned nothing). The block must return a Step or node, e.g. @step name = sh\"cmd\".")
+    StepResult(step, false, 0.0, step.inputs, step.outputs, "Step has no work (ForEach block returned nothing). The block must return a Step or node, e.g. @step name = sh\"cmd\".")
 end
 
 function execute(step::Step{F}) where {F<:Function}
     start = time()
     for inp in step.inputs
         err = input_ready_error(inp)
-        err !== nothing && return StepResult(step, false, time() - start, step.inputs, err)
+        err !== nothing && return StepResult(step, false, time() - start, step.inputs, step.outputs, err)
     end
     outcome = run_safely() do
         isempty(step.inputs) ? step.work() : step.work(step.inputs...)
     end
     if !outcome.ok
-        return StepResult(step, false, time() - start, step.inputs, "Error: $(outcome.value)")
+        return StepResult(step, false, time() - start, step.inputs, step.outputs, "Error: $(outcome.value)")
     end
     for out_path in step.outputs
         err = output_ready_error(out_path)
-        err !== nothing && return StepResult(step, false, time() - start, step.inputs, err)
+        err !== nothing && return StepResult(step, false, time() - start, step.inputs, step.outputs, err)
     end
-    StepResult(step, true, time() - start, step.inputs, outcome.value)
+    StepResult(step, true, time() - start, step.inputs, step.outputs, outcome.value)
 end
 
 function execute(step::Step{T}) where T
@@ -68,11 +68,11 @@ function execute(step::Step{F}, input) where {F<:Function}
     start = time()
     outcome = run_safely() do; step.work(input); end
     if !outcome.ok
-        return StepResult(step, false, time() - start, step.inputs, "Error: $(outcome.value)")
+        return StepResult(step, false, time() - start, step.inputs, step.outputs, "Error: $(outcome.value)")
     end
     for out_path in step.outputs
         err = output_ready_error(out_path)
-        err !== nothing && return StepResult(step, false, time() - start, step.inputs, err)
+        err !== nothing && return StepResult(step, false, time() - start, step.inputs, step.outputs, err)
     end
-    StepResult(step, true, time() - start, step.inputs, outcome.value)
+    StepResult(step, true, time() - start, step.inputs, step.outputs, outcome.value)
 end

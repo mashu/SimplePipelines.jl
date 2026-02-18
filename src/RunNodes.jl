@@ -45,7 +45,7 @@ end
 function run_node(step::Step{F}, v, forced::Bool=false, context_input=nothing) where F
     if !forced && is_fresh(step)
         log_skip(v, step)
-        return [StepResult(step, true, 0.0, step.inputs, "up to date (not re-run)")]
+        return [StepResult(step, true, 0.0, step.inputs, step.outputs, "up to date (not re-run)")]
     end
     log_start(v, step)
     result = if F <: Function && context_input !== nothing
@@ -66,7 +66,7 @@ function run_node(seq::Sequence, v, forced::Bool, context_input=nothing)
         node_results = run_node(node, v, forced, out)
         append!(results, node_results)
         any(r -> !r.success, node_results) && return results
-        out = node_results[end].output
+        out = node_results[end].result
     end
     results
 end
@@ -123,7 +123,7 @@ function run_node(t::Timeout, v, forced::Bool, context_input=nothing)
     end
 
     timeout_step = Step(:timeout, `true`)
-    isready(ch) ? take!(ch) : [StepResult(timeout_step, false, t.seconds, timeout_step.inputs, "Timeout after $(t.seconds)s")]
+    isready(ch) ? take!(ch) : [StepResult(timeout_step, false, t.seconds, timeout_step.inputs, timeout_step.outputs, "Timeout after $(t.seconds)s")]
 end
 
 function run_node(f::Force, v, ::Bool, context_input=nothing)
@@ -134,11 +134,11 @@ end
 function run_node(r::Reduce, v, forced::Bool, context_input=nothing)
     start = time()
     results = run_node(r.node, v, forced, context_input)
-    outputs = [res.output for res in results if res.success]
+    outputs = [res.result for res in results if res.success]
 
     reduce_step = Step(r.name, r.reducer)
     if length(outputs) < length(results)
-        return vcat(results, [StepResult(reduce_step, false, time() - start, reduce_step.inputs, "Reduce aborted: upstream failed")])
+        return vcat(results, [StepResult(reduce_step, false, time() - start, reduce_step.inputs, reduce_step.outputs, "Reduce aborted: upstream failed")])
     end
 
     log_reduce(v, r.name)
@@ -146,9 +146,9 @@ function run_node(r::Reduce, v, forced::Bool, context_input=nothing)
         r.reducer(outputs)
     end
     if !outcome.ok
-        return vcat(results, [StepResult(reduce_step, false, time() - start, reduce_step.inputs, "Reduce error: $(outcome.value)")])
+        return vcat(results, [StepResult(reduce_step, false, time() - start, reduce_step.inputs, reduce_step.outputs, "Reduce error: $(outcome.value)")])
     end
-    vcat(results, [StepResult(reduce_step, true, time() - start, reduce_step.inputs, outcome.value)])
+    vcat(results, [StepResult(reduce_step, true, time() - start, reduce_step.inputs, reduce_step.outputs, outcome.value)])
 end
 
 # Cycle check: does node contain needle? (ForEach expansion only)
@@ -173,7 +173,7 @@ node_children(::Union{Step,ForEach}) = AbstractNode[]
 function run_node(pipe::Pipe, v, forced::Bool, context_input=nothing)
     r1 = run_node(pipe.first, v, forced, context_input)
     any(!r.success for r in r1) && return r1
-    out = length(r1) == 1 ? r1[1].output : [r.output for r in r1 if r.success]
+    out = length(r1) == 1 ? r1[1].result : [r.result for r in r1 if r.success]
     r2 = run_node(pipe.second, v, forced, out)
     vcat(r1, r2)
 end

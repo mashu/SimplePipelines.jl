@@ -54,7 +54,7 @@ When the left has **multiple** outputs (e.g. ForEach), `>>` passes only the **la
 | `run(p, dry_run=true)` | Preview only |
 | `results[i].success` | Did step succeed? |
 | `results[i].duration` | Time in seconds |
-| `results[i].output` | Output or error |
+| `results[i].result` | Execution result (or error string); see also `.inputs` and `.outputs` |
 
 ### Utilities
 

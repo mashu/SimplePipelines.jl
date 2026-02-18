@@ -257,7 +257,7 @@ clear_state!()
         
         @test length(results) == 1
         @test results[1].success == true
-        @test contains(results[1].output, "hello world")
+        @test contains(results[1].result, "hello world")
     end
     
     @testset "Sequence execution" begin
@@ -293,7 +293,7 @@ clear_state!()
         s_nothing = Step(:nothing_func, f_nothing)
         results_nothing = run(s_nothing, verbose=false, force=true)
         @test results_nothing[1].success
-        @test results_nothing[1].output === nothing
+        @test results_nothing[1].result === nothing
     end
     
     @testset "Verbose execution" begin
@@ -623,13 +623,13 @@ clear_state!()
         s_cmd = Step(:cmd_missing, `cat nonexistent.txt`, ["nonexistent_file_12345.txt"], String[])
         results = run(s_cmd, verbose=false)
         @test !results[1].success
-        @test contains(results[1].output, "Missing input")
+        @test contains(results[1].result, "Missing input")
         
         # Function step with missing input file
         s_func = Step(:func_missing, () -> "test", ["nonexistent_file_12345.txt"], String[])
         results_func = run(s_func, verbose=false)
         @test !results_func[1].success
-        @test contains(results_func[1].output, "Missing input")
+        @test contains(results_func[1].result, "Missing input")
     end
     
     @testset "Error handling - command failure" begin
@@ -637,7 +637,7 @@ clear_state!()
         s = @step fail = `false`
         results = run(s, verbose=false)
         @test !results[1].success
-        @test contains(results[1].output, "Error")
+        @test contains(results[1].result, "Error")
     end
     
     @testset "Error handling - function throws" begin
@@ -645,7 +645,7 @@ clear_state!()
         s = Step(:throws, () -> error("intentional error"))
         results = run(s, verbose=false)
         @test !results[1].success
-        @test contains(results[1].output, "intentional error")
+        @test contains(results[1].result, "intentional error")
     end
     
     @testset "Error handling - verbose failure" begin
@@ -723,13 +723,13 @@ clear_state!()
         results1 = run(f1, verbose=false, force=true)
         @test length(results1) == 1
         @test results1[1].success
-        @test contains(results1[1].output, "primary")
+        @test contains(results1[1].result, "primary")
         
         # Primary fails - fallback used
         f2 = fail_step | fallback_step
         results2 = run(f2, verbose=false, force=true)
         @test results2[end].success
-        @test contains(results2[end].output, "fallback")
+        @test contains(results2[end].result, "fallback")
         
         # Chain fallbacks
         f3 = fail_step | fail_step | success_step
@@ -759,13 +759,13 @@ clear_state!()
         flag[] = true
         results1 = run(b, verbose=false, force=true)
         @test results1[1].success
-        @test contains(results1[1].output, "true path")
+        @test contains(results1[1].result, "true path")
         
         # Condition false
         flag[] = false
         results2 = run(b, verbose=false, force=true)
         @test results2[1].success
-        @test contains(results2[1].output, "false path")
+        @test contains(results2[1].result, "false path")
         
         # Utilities
         @test count_steps(b) == 1  # max of branches
@@ -785,7 +785,7 @@ clear_state!()
         
         # Should have run flaky twice, then safe
         @test results[end].success
-        @test contains(results[end].output, "safe")
+        @test contains(results[end].result, "safe")
     end
     
     @testset "print_dag for new types" begin
@@ -881,14 +881,14 @@ clear_state!()
         results = run(r, verbose=false, force=true)
         @test length(results) == 3  # a, b, reduce
         @test all(res -> res.success, results)
-        @test contains(results[end].output, "output_a")
-        @test contains(results[end].output, "output_b")
+        @test contains(results[end].result, "output_a")
+        @test contains(results[end].result, "output_b")
         
         # Reduce with function
         r2 = Reduce(length, a & b)
         results2 = run(r2, verbose=false)
         @test results2[end].success
-        @test results2[end].output == 2  # 2 outputs (reducer return value stored as-is)
+        @test results2[end].result == 2  # 2 outputs (reducer return value stored as-is)
         
         # Reduce in pipeline
         fetch = @step fetch = `echo "data"`
@@ -924,7 +924,7 @@ clear_state!()
         results = run(pipe, verbose=false)
         @test length(results) == 2
         @test all(r -> r.success, results)
-        @test results[2].output == "ok"
+        @test results[2].result == "ok"
         @test count_steps(pipe) == 2
         @test length(steps(pipe)) == 2
 
@@ -938,7 +938,7 @@ clear_state!()
         results2 = run(pipe2, verbose=false, force=true)
         @test length(results2) == 4  # 3 branch results + 1 combine result
         @test all(r -> r.success, results2)
-        @test results2[end].output == "x,y,z"
+        @test results2[end].result == "x,y,z"
     end
 
     @testset "Sequence (>>) data passing" begin
@@ -950,7 +950,7 @@ clear_state!()
         seq = s1 >> s2
         results = run(seq, verbose=false)
         @test length(results) == 2 && all(r -> r.success, results)
-        @test results[2].output == "downloaded_path_processed"
+        @test results[2].result == "downloaded_path_processed"
     end
 
     @testset "SameInputPipe (>>>)" begin
@@ -966,7 +966,7 @@ clear_state!()
         results = run(pipeline, verbose=false, force=true, keep_outputs=:all)
         @test length(results) == 4  # 2 branches × 2 steps
         @test all(r -> r.success, results)
-        out = [r.output for r in results]
+        out = [r.result for r in results]
         @test "a_10" in out && "b_10" in out && "a_20" in out && "b_20" in out
         # Same-input: second step got the id, not first's output
         @test !("b_a_10" in out) && !("b_a_20" in out)
@@ -984,13 +984,13 @@ clear_state!()
         results = run(bp, verbose=false, force=true, keep_outputs=:all)
         @test length(results) == 4  # 2 branches × (echo + process)
         @test all(r -> r.success, results)
-        out = [r.output for r in results]
+        out = [r.result for r in results]
         @test "got_1" in out && "got_2" in out
         # Versus |> which runs one process on the vector [out1, out2]
         pipe = fe |> step
         results2 = run(pipe, verbose=false, force=true)
         @test length(results2) == 3  # 2 branch results + 1 combine step
-        @test results2[end].output != "got_1"  # combined, not per-branch
+        @test results2[end].result != "got_1"  # combined, not per-branch
     end
     
     @testset "ForEach" begin
@@ -1012,7 +1012,7 @@ clear_state!()
             results = run(pipeline, verbose=false, keep_outputs=:all)
             @test length(results) == 3
             @test all(r -> r.success, results)
-            outputs = sort([r.output for r in results])
+            outputs = sort([r.result for r in results])
             @test "donor1\n" in outputs
             @test "donor2\n" in outputs
             @test "donor3\n" in outputs
@@ -1066,7 +1066,7 @@ clear_state!()
             @test pipeline isa ForEach
             results = run(pipeline, verbose=false, force=true, keep_outputs=:all)
             @test all(r -> r.success, results)
-            outputs = sort([r.output for r in results])
+            outputs = sort([r.result for r in results])
             @test "donor1\n" in outputs
             @test "donor2\n" in outputs
         end

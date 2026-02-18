@@ -92,7 +92,7 @@ end
 function SimplePipelines.execute(step::Step{HTTPGet})
     start = time()
     resp = HTTP.get(step.work.url)
-    return StepResult(step, resp.status == 200, time() - start, String(resp.body))
+    return StepResult(step, resp.status == 200, time() - start, step.inputs, step.outputs, String(resp.body))
 end
 
 # Usage: Step(:fetch, HTTPGet("https://api.example.com"))
