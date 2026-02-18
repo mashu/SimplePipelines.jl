@@ -66,7 +66,7 @@ work_label(x) = repr(x)
     Sequence{T} <: AbstractNode
     a >> b
 
-Executes nodes sequentially, stopping on first failure. **Data passing:** when the next node is a function step, it receives the previous step's output (or the current context in ForEach). So `download >> process` with `download(id)=path` and `process(path)=...` passes the path to `process`.
+Executes nodes sequentially, stopping on first failure. **Data passing:** the next node receives one value: the previous step's *output* (declared output paths when applicable, else the step's result). When the previous node produced multiple results (e.g. Parallel/ForEach), the next node receives **only the last** branch's output. Distinct from `|>` (which passes a vector of all) and `.>>` (which runs the next step once per branch).
 """
 struct Sequence{T<:Tuple} <: AbstractNode
     nodes::T
@@ -203,7 +203,7 @@ end
     Pipe{A, B} <: AbstractNode
     a |> b
 
-Run `a`, then run `b` with `a`'s output(s) as `b`'s input. RHS must be a **function step**. Single result → one value; multiple results (ForEach/Parallel) → vector.
+Run `a`, then run `b` with `a`'s output(s) as `b`'s input. RHS must be a **function step**. Same notion of *output* as `>>` (declared output paths when applicable, else result). Single result → one value; multiple results (ForEach/Parallel) → **vector of all** branch outputs. Distinct from `>>` (which passes only the last) and `.>>` (which runs the next step once per branch).
 """
 struct Pipe{A<:AbstractNode, B<:AbstractNode} <: AbstractNode
     first::A
@@ -215,7 +215,7 @@ end
     SameInputPipe{A, B} <: AbstractNode
     a >>> b
 
-Run `a` then `b` with the **same** input (e.g. branch id in ForEach). Both receive the current context input; `b` does not receive `a`'s output. Use when the next step should run on the same input as the previous.
+Run `a` then `b`; both receive the **same** context input. `b` does **not** receive `a`'s output. Distinct from `>>` and `|>` (where `b` receives `a`'s output). Use when the next step should run on the same input (e.g. branch id) as the previous.
 """
 struct SameInputPipe{A<:AbstractNode, B<:AbstractNode} <: AbstractNode
     first::A
@@ -227,7 +227,7 @@ end
     BroadcastPipe{A, B} <: AbstractNode
     a .>> b   (broadcast of >>)
 
-Attach the next step to **each branch** of the left node. For `ForEach` or `Parallel`, each branch runs as `branch >> b` so `b` receives that branch's output; branches run in parallel and you don't wait for all of the first step to finish before starting `b` on completed branches. For a single-output node, equivalent to `a >> b`.
+Run the next step **once per branch** of the left node, each with that branch's output. For `ForEach` or `Parallel`, branches run in parallel. For a single-output node, equivalent to `a >> b`. Distinct from `>>` (one run, last branch only) and `|>` (one run with vector of all outputs).
 """
 struct BroadcastPipe{A<:AbstractNode, B<:AbstractNode} <: AbstractNode
     first::A

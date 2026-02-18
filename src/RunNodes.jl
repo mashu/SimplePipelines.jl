@@ -58,7 +58,18 @@ function run_node(step::Step{F}, v, forced::Bool=false, context_input=nothing) w
     [result]
 end
 
-# Sequence (>>): pass data — first step gets context_input, each next gets previous step's output
+# Sequence (>>): pass data per Types.jl Sequence doc — next step receives "previous step's output".
+# For steps with declared output paths and string result (log), pass the vector of output paths; else pass result.
+function sequence_output_for_next(last_res::StepResult{S,I,O,V}) where {S,I,O,V<:AbstractString}
+    r = last_res.result
+    outs = last_res.outputs
+    if !isempty(outs) && (contains(r, '\n') || !isfile(r))
+        return outs
+    end
+    r
+end
+sequence_output_for_next(last_res::AbstractStepResult) = last_res.result
+
 function run_node(seq::Sequence, v, forced::Bool, context_input=nothing)
     results = AbstractStepResult[]
     out = context_input
@@ -66,7 +77,7 @@ function run_node(seq::Sequence, v, forced::Bool, context_input=nothing)
         node_results = run_node(node, v, forced, out)
         append!(results, node_results)
         any(r -> !r.success, node_results) && return results
-        out = node_results[end].result
+        out = sequence_output_for_next(node_results[end])
     end
     results
 end
@@ -173,7 +184,8 @@ node_children(::Union{Step,ForEach}) = AbstractNode[]
 function run_node(pipe::Pipe, v, forced::Bool, context_input=nothing)
     r1 = run_node(pipe.first, v, forced, context_input)
     any(!r.success for r in r1) && return r1
-    out = length(r1) == 1 ? r1[1].result : [r.result for r in r1 if r.success]
+    # Same "output for next" as Sequence: output paths when step has them and result is log; else result.
+    out = length(r1) == 1 ? sequence_output_for_next(r1[1]) : [sequence_output_for_next(r) for r in r1 if r.success]
     r2 = run_node(pipe.second, v, forced, out)
     vcat(r1, r2)
 end

@@ -26,14 +26,16 @@ run(download >> process)
 
 # Features
 - **Recursive execution**: Dispatch on node type; Sequence runs in order, Parallel/ForEach run branches with optional parallelism.
-- **Data passing**: When the left has one output, `>>`, `|>`, and `.>>` all pass that value to the next (function) step. When the left has **multiple** outputs (e.g. ForEach, Parallel), they differ:
+- **Data passing**: All of `>>`, `|>`, and `.>>` use the same notion of *output*: when a step has declared output paths and its result is log text (e.g. shell stdout/stderr), that value is the vector of output paths; otherwise it is the step's result. The operators differ in *which* value(s) the next step receives and *how many* times it runs:
 
-| Left side     | ``>>``              | Pipe                  | ``.>>``                   |
-|:-------------|:--------------------|:----------------------|:--------------------------|
-| Single output | step(one value)     | step(one value)       | step(one value)           |
-| Multi output  | step(**last** only) | step(**vector** of all)| step **per branch** (one call each) |
+| Operator | Left has one output | Left has multiple outputs (ForEach/Parallel) |
+|:---------|:--------------------|:---------------------------------------------|
+| ``>>``   | next gets that one value | next gets **last** branch's output only |
+| ``\|>``  | next gets that one value | next gets **vector of all** branch outputs (RHS must be function step) |
+| ``.>>``  | next gets that one value | next runs **once per branch**, each with that branch's output |
+| ``>>>``  | (same-input pipe) second step gets **same input as first**, not first's output | — |
 
-Use `a >>> b` so both run on the **same** input (e.g. branch id). RHS of `|>` must be a function step.
+Use `a >>> b` when the second step should run on the same input (e.g. branch id) as the first. RHS of `|>` must be a function step.
 - **Make-like freshness**: Steps skip if outputs are newer than inputs.
 - **State persistence**: Tracks completed steps across runs.
 - **Colored output**: Visual tree structure with status indicators.
