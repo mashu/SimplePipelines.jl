@@ -9,17 +9,18 @@ Create a named step with optional file dependencies. Steps are **lazy**: if the 
 is a function call (other than `sh(...)`), it is wrapped in a thunk and runs only when the
 pipeline is run via `run(pipeline)`.
 
-Use `sh"..."` for literal commands; use `sh("... \$(var) ...")` or `sh("... " * var * " ...")`
-when you need interpolation. Interpolated `sh(...)` is evaluated at step construction time
-and produces a `Cmd`, so the step runs that command when executed.
+Use `sh"..."` for literal commands; use `sh("... " * var * " ...")` when you need interpolation
+at construction time. For commands built at run time, use `sh(cmd_func)` where `cmd_func` is a
+function that returns the command string; with `verbose=true`, the command is printed before execution.
+For shell scripts that use shell variables, use `shell_raw"..."` so Julia does not interpret the dollar sign.
 
 # Examples
 ```julia
 @step download = sh"curl -o data.csv http://example.com"
 @step download([] => ["data.csv"]) = sh("curl -L -o " * repr(path) * " " * url)
 @step process(["input.csv"] => ["output.csv"]) = sh"sort input.csv > output.csv"
+@step call_tool([ref, bams] => [out]) = sh(() -> "bcftools mpileup -f " * repr(ref) * " " * join(repr.(bams), " "))
 @step process("path") = process_file   # function by name, receives path at run time
-@step process(donor, "path/\$(donor).tsv") = process_file   # multiple inputs
 @step sh"echo hello"
 ```
 """
@@ -27,7 +28,7 @@ macro step(expr)
     step_expr(expr)
 end
 
-"""Treat sh(cmd_expr) as interpolated shell: evaluate at construction time (no thunk)."""
+"""Treat sh(...) as shell command (string => Cmd at build time, function => ShRun for run time). Otherwise wrap in thunk."""
 function step_work_expr(e::Expr)
     if e.head === :call && !isempty(e.args) && e.args[1] === :sh
         return esc(e)

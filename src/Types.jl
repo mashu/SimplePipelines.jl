@@ -44,11 +44,22 @@ Step(name::Symbol, work) = Step(name, work, String[], String[])
 Step(work) = Step(gensym(:step), work, String[], String[])
 Step(name::Symbol, work, inputs, outputs) = Step(name, work, collect(String, inputs), collect(String, outputs))
 
+"""
+    ShRun{F}
+
+Internal: runs a shell command string at execution time. Use `sh(cmd_func)` in steps; the pipeline
+prints the command when `verbose=true`.
+"""
+struct ShRun{F}
+    f::F
+end
+
 is_gensym(s::Symbol) = startswith(string(s), "##")
 step_label(s::Step) = is_gensym(s.name) ? work_label(s.work) : string(s.name)
 work_label(c::Cmd) = length(c.exec) ≤ 3 ? join(c.exec, " ") : join(c.exec[1:3], " ") * "…"
 work_label(f::Function) = string(nameof(f))
 work_label(::Nothing) = "(no work)"
+work_label(::ShRun) = "sh(...)"
 work_label(x) = repr(x)
 
 """

@@ -49,9 +49,9 @@ function run_node(step::Step{F}, v, forced::Bool=false, context_input=nothing) w
     end
     log_start(v, step)
     result = if F <: Function && context_input !== nothing
-        execute(step, context_input)
+        execute(step, context_input; verbose=v)
     else
-        execute(step)
+        execute(step; verbose=v)
     end
     log_result(v, result)
     result.success && mark_complete!(step)

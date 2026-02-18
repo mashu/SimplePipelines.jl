@@ -49,7 +49,8 @@ export Retry, Fallback, Branch, Timeout, Force
 export Reduce, ForEach, fe
 export SameInputPipe, >>>, BroadcastPipe
 export count_steps, steps, print_dag, is_fresh, clear_state!
-export @sh_str, sh
+export @sh_str, sh, ShRun
+export @shell_raw_str, shell_raw
 
 import Base: >>, &, |, ^, |>, >>>
 
@@ -80,18 +81,30 @@ macro sh_str(s)
     Cmd(["sh", "-c", s])
 end
 
-"""Shell command with string interpolation. See also [`@sh_str`](@ref)."""
+"""Shell command with string (build-time). For run-time command use `sh(cmd_func)`. See also [`@sh_str`](@ref)."""
 sh(s::String) = Cmd(["sh", "-c", s])
 
+"""
+    shell_raw"command"
+
+String literal for shell commands where the dollar sign is not interpreted by Julia.
+Use for scripts that use shell variables. Concatenate with Julia values for dynamic parts.
+"""
+macro shell_raw_str(s)
+    # Build string from quoted chars so $ in content is not re-escaped by the compiler
+    Expr(:string, (Expr(:quote, c) for c in collect(s))...)
+end
+
 #==============================================================================#
-# Logical includes (order matters: Types → Macro → State → Execute → Logging → ForEach → RunNodes → Run → Display)
+# Logical includes (order matters: Types → Macro → State → Logging → Execute → ForEach → RunNodes → Run → Display)
 #==============================================================================#
 
 include("Types.jl")
+sh(f::Function) = ShRun(f)  # run-time shell command; must be after Types (ShRun)
 include("Macro.jl")
 include("State.jl")
-include("Execute.jl")
 include("Logging.jl")
+include("Execute.jl")
 include("ForEach.jl")
 include("RunNodes.jl")
 include("Run.jl")

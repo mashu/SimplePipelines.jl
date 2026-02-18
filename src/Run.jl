@@ -7,7 +7,7 @@
 Execute a pipeline or node, returning results for each step.
 
 # Keywords
-- `verbose=true`: Show colored progress output
+- `verbose=true`: Show colored progress output; when true, prints each shell command (for steps that run external tools) before running it
 - `dry_run=false`: If true, show DAG structure without executing
 - `force=false`: If true, run all steps regardless of freshness
 - `jobs=8`: Max concurrent branches for Parallel/ForEach. All branches run; when `jobs > 0`, they run in rounds of `jobs` (each round waits for the previous). `jobs=0` = unbounded (all at once).
@@ -25,7 +25,7 @@ To avoid holding large data in memory:
 If you follow (1) and (2), you only hold paths and small aggregates; full file contents are never all in memory. If a step returns a large object (e.g. a DataFrame of the whole file), that object is held until the run ends.
 
 # Output
-With `verbose=true`, shows tree-structured output: `▶` running, `✓` success, `✗` failure, `⊳` up to date (not re-run).
+With `verbose=true`, shows tree-structured output: `▶` running, `✓` success, `✗` failure, `⊳` up to date (not re-run). Shell commands are printed so you see exactly what is run.
 
 # Examples
 ```julia
