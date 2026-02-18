@@ -8,7 +8,12 @@ step = @step sh&quot;samtools sort input.bam&quot;
 step = @step sort = sh&quot;samtools sort input.bam&quot;
 
 # Shell features (&gt;, |, &amp;&amp;) - use sh&quot;...&quot;
-step = @step sort = sh&quot;sort data.txt | uniq &gt; sorted.txt&quot;</code></pre><h3 id="Julia-Functions"><a class="docs-heading-anchor" href="#Julia-Functions">Julia Functions</a><a id="Julia-Functions-1"></a><a class="docs-heading-anchor-permalink" href="#Julia-Functions" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Anonymous function step
+step = @step sort = sh&quot;sort data.txt | uniq &gt; sorted.txt&quot;
+
+# Shell variables (\$VAR, \${var}) - use shell_raw so Julia does not interpolate
+donors = [&quot;A&quot;, &quot;B&quot;]
+step = @step process = sh(() -&gt; shell_raw&quot;for d in &quot; * join(donors, &quot; &quot;) * shell_raw&quot;; do echo \$d; done&quot;)
+# Multiline: use shell_raw\&quot;\&quot;\&quot;...\&quot;\&quot;\&quot; for readability</code></pre><h3 id="Julia-Functions"><a class="docs-heading-anchor" href="#Julia-Functions">Julia Functions</a><a id="Julia-Functions-1"></a><a class="docs-heading-anchor-permalink" href="#Julia-Functions" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Anonymous function step
 step = @step () -&gt; process_data()
 
 # Named function step
@@ -173,7 +178,10 @@ report = @step report = sh&quot;echo done&quot;
 pipeline = fetch &gt;&gt; Reduce(merge_outputs, analyze_a &amp; analyze_b) &gt;&gt; report</code></pre><p>The reducer function receives a vector of outputs from all successful parallel steps (type depends on what the upstream steps return).</p><h3 id="Low-memory-/-large-data"><a class="docs-heading-anchor" href="#Low-memory-/-large-data">Low-memory / large data</a><a id="Low-memory-/-large-data-1"></a><a class="docs-heading-anchor-permalink" href="#Low-memory-/-large-data" title="Permalink"></a></h3><p>To avoid holding many large outputs in memory: (1) Have each step write its result to a file and <strong>return the path</strong> (e.g. <code>String</code>). (2) The reducer then receives a vector of paths and can open/process one at a time (or stream), write the combined result to a file, and return that path. (3) Use <code>run(pipeline; keep_outputs=:last)</code> so the returned <code>results</code> vector only retains the final step&#39;s <code>.result</code>; other steps get <code>.result === nothing</code>. You still get success, duration, and inputs/outputs per step; only the large values are dropped. Use <code>keep_outputs=:none</code> to drop all result values.</p><h2 id="Running-Pipelines"><a class="docs-heading-anchor" href="#Running-Pipelines">Running Pipelines</a><a id="Running-Pipelines-1"></a><a class="docs-heading-anchor-permalink" href="#Running-Pipelines" title="Permalink"></a></h2><p>Use <code>run(pipeline)</code> or <code>pipeline |&gt; run</code>:</p><pre><code class="language-julia hljs"># Basic execution
 results = run(pipeline)
 
-# Silent (no progress output)
+# With verbose=true (default), each shell command is printed before it runs
+results = run(pipeline)
+
+# Silent (no progress or command echo)
 results = run(pipeline, verbose=false)
 
 # Dry run (preview structure)
@@ -219,4 +227,4 @@ n = count_steps(pipeline)
 all_steps = steps(pipeline)
 
 # Print DAG structure
-print_dag(pipeline)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../examples/">Examples »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Wednesday 18 February 2026 08:53">Wednesday 18 February 2026</span>. Using Julia version 1.12.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+print_dag(pipeline)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../examples/">Examples »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Wednesday 18 February 2026 09:33">Wednesday 18 February 2026</span>. Using Julia version 1.12.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
