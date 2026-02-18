@@ -18,7 +18,7 @@ A single unit of work in a pipeline. `F` is the work type (`Cmd` or `Function`).
 
 # Fields
 - `name::Symbol` — Step identifier (auto-generated if not provided)
-- `work::F` — The command or function to execute
+- `work::F` — The command or function to execute (`Cmd`, `Function`, or `ShRun` from `sh(f)`)
 - `inputs::Vector{String}` — Input file dependencies
 - `outputs::Vector{String}` — Output file paths
 

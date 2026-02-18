@@ -10,9 +10,10 @@ is a function call (other than `sh(...)`), it is wrapped in a thunk and runs onl
 pipeline is run via `run(pipeline)`.
 
 Use `sh"..."` for literal commands; use `sh("... " * var * " ...")` when you need interpolation
-at construction time. For commands built at run time, use `sh(cmd_func)` where `cmd_func` is a
-function that returns the command string; with `verbose=true`, the command is printed before execution.
-For shell scripts that use shell variables, use `shell_raw"..."` so Julia does not interpret the dollar sign.
+at construction time. For commands built at run time, use `sh(cmd_func)` where `cmd_func` returns
+the command string; with `verbose=true`, the command is printed before execution.
+For shell scripts that use shell variables, use `shell_raw"..."` (or triple-quoted for multiline)
+so Julia does not interpret the dollar sign.
 
 # Examples
 ```julia
