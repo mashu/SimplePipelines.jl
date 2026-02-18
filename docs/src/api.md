@@ -13,6 +13,7 @@ SimplePipelines.AbstractNode
 SimplePipelines.AbstractStepResult
 StepResult
 Step
+ShRun
 Sequence
 Parallel
 Retry
@@ -32,6 +33,7 @@ BroadcastPipe
 ```@docs
 @step
 @sh_str
+@shell_raw_str
 ```
 
 ## Operators
@@ -67,6 +69,8 @@ fe
 ```@docs
 sh
 ```
+
+The string macro `shell_raw"..."` (and triple-quoted `shell_raw\"\"\"...\"\"\"`) is documented in [`@shell_raw_str`](@ref); use it for scripts where the dollar sign must not be interpreted by Julia.
 
 ## Execution
 

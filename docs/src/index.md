@@ -12,7 +12,9 @@ using intuitive operators.
 | Syntax | Description |
 |--------|-------------|
 | `@step name = sh"cmd"` | Shell command |
-| `@step name = sh"cmd > file"` | Shell with redirection/pipes |
+| `@step name = sh("$(var)")` | Shell with Julia interpolation |
+| `@step name = sh(cmd_func)` | Run-time command (e.g. `sh(() -> "tool " * ref)`) |
+| `shell_raw"..."` / `shell_raw"""..."""` | Literal shell script (e.g. `$VAR` not interpreted by Julia) |
 | `@step name = () -> expr` | Julia function |
 
 ### Operators
@@ -50,7 +52,8 @@ When the left has **multiple** outputs (e.g. ForEach), `>>` passes only the **la
 | Function / Field | Description |
 |------------------|-------------|
 | `run(p)` / `p |> run` | Run, return results |
-| `run(p, verbose=false)` | Run silently |
+| `run(p, verbose=true)` | Default: prints each shell command before running |
+| `run(p, verbose=false)` | Run silently (no command echo) |
 | `run(p, dry_run=true)` | Preview only |
 | `results[i].success` | Did step succeed? |
 | `results[i].duration` | Time in seconds |

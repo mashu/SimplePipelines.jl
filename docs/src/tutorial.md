@@ -17,6 +17,11 @@ step = @step sort = sh"samtools sort input.bam"
 
 # Shell features (>, |, &&) - use sh"..."
 step = @step sort = sh"sort data.txt | uniq > sorted.txt"
+
+# Shell variables (\$VAR, \${var}) - use shell_raw so Julia does not interpolate
+donors = ["A", "B"]
+step = @step process = sh(() -> shell_raw"for d in " * join(donors, " ") * shell_raw"; do echo \$d; done")
+# Multiline: use shell_raw\"\"\"...\"\"\" for readability
 ```
 
 ### Julia Functions
@@ -336,7 +341,10 @@ Use `run(pipeline)` or `pipeline |> run`:
 # Basic execution
 results = run(pipeline)
 
-# Silent (no progress output)
+# With verbose=true (default), each shell command is printed before it runs
+results = run(pipeline)
+
+# Silent (no progress or command echo)
 results = run(pipeline, verbose=false)
 
 # Dry run (preview structure)

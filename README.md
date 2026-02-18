@@ -33,7 +33,7 @@ run(pipeline)
 
 ## Interface
 
-> **Commands** — `sh"cmd"` · `sh("$(var)")` (interpolation)
+> **Commands** — `sh"cmd"` · `sh("$(var)")` (interpolation) · `sh(cmd_func)` (run-time) · `shell_raw"..."` / `shell_raw"""..."""` (shell variables like `$VAR` without Julia interpolation)
 
 > **Operators** — `a >> b` sequence: next (function) step gets previous output; if left has many branches, only the **last** is passed. `a |> b` pipe: next step gets left's output(s); if many branches, **all** as one vector; RHS must be a function step. `a & b` parallel · `a | b` fallback · `a^3` retry · `a >>> b` same input · `a .>> b` per-branch
 
@@ -41,7 +41,7 @@ run(pipeline)
 
 > **Freshness** — `Force(step)` · `run(p, force=true)` · `is_fresh(step)` · `clear_state!()`
 
-> **Run** — `run(pipeline)` · `run(p, verbose=false)` · `run(p, dry_run=true)`
+> **Run** — `run(pipeline)` · `run(p, verbose=false)` (silent) · `run(p, verbose=true)` (default: prints each shell command) · `run(p, dry_run=true)`
 
 ## Make-like Incremental Builds
 
