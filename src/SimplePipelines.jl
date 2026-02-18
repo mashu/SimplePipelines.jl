@@ -86,10 +86,12 @@ sh(s::String) = Cmd(["sh", "-c", s])
 
 """
     shell_raw"command"
+    shell_raw\"\"\"...\"\"\"
 
 String literal for shell commands where the dollar sign is not interpreted by Julia.
-Use for scripts that use shell variables. Triple-quoted form for multiline scripts.
-Concatenate with Julia values: `shell_raw"for d in " * join(donors, " ") * shell_raw"; do ..."`.
+Use for scripts that use shell variables. Triple-quoted form keeps multiline scripts readable;
+shell variables (e.g. `\$VAR`, `` `\${var}` ``) stay intact. Concatenate with Julia values:
+`shell_raw"for d in " * join(donors, " ") * shell_raw"; do ..."`.
 """
 macro shell_raw_str(s)
     # Build string from quoted chars so $ in content is not re-escaped by the compiler

@@ -12,7 +12,7 @@ pipeline is run via `run(pipeline)`.
 Use `sh"..."` for literal commands; use `sh("... " * var * " ...")` when you need interpolation
 at construction time. For commands built at run time, use `sh(cmd_func)` where `cmd_func` returns
 the command string; with `verbose=true`, the command is printed before execution.
-For shell scripts that use shell variables, use `shell_raw"..."` (or triple-quoted for multiline)
+For shell scripts that use shell variables, use `shell_raw"..."` or `shell_raw\"\"\"...\"\"\"` (multiline)
 so Julia does not interpret the dollar sign.
 
 # Examples
