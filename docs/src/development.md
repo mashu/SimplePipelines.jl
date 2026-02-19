@@ -54,16 +54,16 @@ struct Timeout{N<:AbstractNode} <: AbstractNode
     seconds::Float64
 end
 
-# 2. Implement execution
-function run_node(t::Timeout, verbosity)
+# 2. Implement execution (signature: v, forced::Bool, context_input=nothing)
+function run_node(t::Timeout, v, forced::Bool, context_input=nothing)
     # ... timeout logic ...
-    return run_node(t.node, verbosity)
+    return run_node(t.node, v, forced, context_input)
 end
 
-# 3. Implement visualization
-print_dag(t::Timeout, indent::Int) = begin
-    println("  "^indent, "Timeout($(t.seconds)s):")
-    print_dag(t.node, indent + 1)
+# 3. Implement visualization (signature: io, node, pre, cont, color)
+function print_dag(io::IO, t::Timeout, pre::String, cont::String, color::Bool)
+    print(io, pre, "⏱ Timeout ", t.seconds, "s\n")
+    print_dag(io, t.node, cont * "    ", cont * "    ", color)
 end
 
 # 4. Implement utilities

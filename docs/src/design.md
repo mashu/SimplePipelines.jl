@@ -130,8 +130,8 @@ The compiler unrolls this into efficient, specialized code.
 struct Verbose end
 struct Silent end
 
-print_start(::Silent, ::Step) = nothing
-print_start(::Verbose, s::Step) = println("▶ $(s.name)")
+log_start(::Silent, ::Step) = nothing
+log_start(::Verbose, s::Step) = println("▶ ", step_label(s))
 ```
 
 Dead code elimination removes printing when `verbose=false`.

@@ -45,7 +45,7 @@ When the left has **multiple** outputs (e.g. ForEach), `>>` passes only the **la
 | `ForEach(items) do x ... end` | Fan-out over collection |
 | `Reduce(f, a & b)` | Combine parallel outputs |
 | `ForEach(pattern) do ...` | Discover files by pattern |
-| `Retry(a, n, delay=d)` | Retry with delay |
+| `Retry(a, n; delay=d)` | Retry with delay |
 
 ### Execution & Results
 
