@@ -65,7 +65,7 @@ Force(process) >> cleanup    # Force specific step
 
 ## Colored Output
 
-Pipeline execution shows colored, tree-structured output:
+Pipeline execution shows **colored**, tree-structured output in the terminal. Headers are blue, ▶ (running) and step names are cyan, ✓ (success) green, ✗ (failure) red, ⊕ (parallel) magenta, and shell commands in grey.
 
 ```
 ═══ Pipeline: ETL ═══
@@ -78,8 +78,10 @@ Pipeline execution shows colored, tree-structured output:
   ✓ Completed in 0.2s
 ═══ Completed: 3/3 steps in 0.8s ═══
 ```
+*(The above is a plain preview; run `run(pipeline)` in a terminal to see the actual colors.)*
 
-Visualize pipeline structure:
+Visualize pipeline structure (also colored in the terminal: ◆/○ cyan, ▸ blue, ⊕ magenta, ← green, → yellow):
+
 ```julia
 display(pipeline)
 # ▸ Sequence
