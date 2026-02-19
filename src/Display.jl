@@ -144,7 +144,7 @@ function print_children(io::IO, nodes, cont::String, color::Bool)
 end
 
 # One-line show (e.g. in vectors): named fields, omit empty; use colors when io has :color for readability
-function _show_stepresult_oneline(io::IO, r::StepResult, dur::Float64; result_str::Union{String,Nothing}=nothing)
+function show_stepresult_oneline(io::IO, r::StepResult, dur::Float64; result_str::Union{String,Nothing}=nothing)
     color = get(io, :color, false)::Bool
     print(io, "StepResult(step=")
     if color
@@ -175,11 +175,11 @@ end
 function Base.show(io::IO, r::StepResult{S, I, O, String}) where {S, I, O}
     s = r.result
     result_str = length(s) > 200 ? repr(first(s, 200) * "…") : repr(s)
-    _show_stepresult_oneline(io, r, r.duration; result_str)
+    show_stepresult_oneline(io, r, r.duration; result_str)
 end
 function Base.show(io::IO, r::StepResult{S, I, O, V}) where {S, I, O, V}
     result_str = r.result === nothing ? nothing : repr(r.result)
-    _show_stepresult_oneline(io, r, r.duration; result_str)
+    show_stepresult_oneline(io, r, r.duration; result_str)
 end
 
 # Multi-line show for REPL: show only sections that have content (dispatch by presence of inputs/result).

@@ -84,21 +84,8 @@ function run_node(seq::Sequence, v, forced::Bool, context_input=nothing)
 end
 
 function run_node(par::Parallel, v, forced::Bool, context_input=nothing)
-    v = as_verbosity(v)
-    n = length(par.nodes)
-    log_parallel(v, n)
-    max_p = MAX_PARALLEL[]
-    if max_p > 0 && n > 0
-        results = AbstractStepResult[]
-        for i in 1:max_p:n
-            chunk = par.nodes[i:min(i + max_p - 1, end)]
-            append!(results, reduce(vcat, fetch.([@spawn run_node(node, v, forced, nothing) for node in chunk])))
-            log_progress(v, length(results), n)
-        end
-        results
-    else
-        reduce(vcat, fetch.([@spawn run_node(node, v, forced, nothing) for node in par.nodes]))
-    end
+    nodes = collect(par.nodes)
+    run_node(ParallelBranches(nodes, fill(nothing, length(nodes))), v, forced, context_input)
 end
 
 function run_node(r::Retry, v, forced::Bool, context_input=nothing)

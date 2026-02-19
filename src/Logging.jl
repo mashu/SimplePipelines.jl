@@ -84,13 +84,13 @@ end
 
 """When verbose, print the shell command (Cmd or String) so the user sees exactly what is run."""
 log_cmd(::Silent, _) = nothing
-const _cmd_prefix = shell_raw"  $ "
+const cmd_log_prefix = shell_raw"  $ "
 function log_cmd(::Verbose, cmd::Cmd)
     cmdstr = join(cmd.exec, " ")
-    printstyled(_cmd_prefix, color=:light_black)
+    printstyled(cmd_log_prefix, color=:light_black)
     println(cmdstr)
 end
 function log_cmd(::Verbose, cmd::AbstractString)
-    printstyled(_cmd_prefix, color=:light_black)
+    printstyled(cmd_log_prefix, color=:light_black)
     println(cmd)
 end

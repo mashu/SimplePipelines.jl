@@ -12,26 +12,41 @@ path_like(s::String) = occursin(r"[/\\]", s) || occursin('.', s)
 path_ready_error(path::String, is_input::Bool) = path_like(path) && !isfile(path) ? (is_input ? "Missing input: $path" : "Missing output: $path") : nothing
 path_ready_error(_, _) = nothing
 
+function path_check_inputs(step::Step)
+    for inp in step.inputs
+        err = path_ready_error(inp, true)
+        err !== nothing && return err
+    end
+    nothing
+end
+function path_check_outputs(step::Step)
+    for out_path in step.outputs
+        err = path_ready_error(out_path, false)
+        err !== nothing && return err
+    end
+    nothing
+end
+
+step_result(step::Step, success::Bool, elapsed::Float64, result) =
+    StepResult(step, success, elapsed, step.inputs, step.outputs, result)
+
 """Single execution path for shell steps: input checks, optional log, run sh -c, output checks."""
 function execute_shell(step::Step, cmdstr::AbstractString; verbose=nothing)
     start = time()
-    for inp in step.inputs
-        err = path_ready_error(inp, true)
-        err !== nothing && return StepResult(step, false, time() - start, step.inputs, step.outputs, err)
-    end
+    err = path_check_inputs(step)
+    err !== nothing && return step_result(step, false, time() - start, err)
     verbose isa Verbose && log_cmd(verbose, cmdstr)
     buf = IOBuffer()
     outcome = run_safely() do
         Base.run(Base.pipeline(Cmd(["sh", "-c", cmdstr]), stdout=buf, stderr=buf))
     end
+    elapsed = time() - start
     if !outcome.ok
-        return StepResult(step, false, time() - start, step.inputs, step.outputs, "Error: $(outcome.value)\n$(String(take!(buf)))")
+        return step_result(step, false, elapsed, "Error: $(outcome.value)\n$(String(take!(buf)))")
     end
-    for out_path in step.outputs
-        err = path_ready_error(out_path, false)
-        err !== nothing && return StepResult(step, false, time() - start, step.inputs, step.outputs, err)
-    end
-    StepResult(step, true, time() - start, step.inputs, step.outputs, String(take!(buf)))
+    err = path_check_outputs(step)
+    err !== nothing && return step_result(step, false, elapsed, err)
+    step_result(step, true, elapsed, String(take!(buf)))
 end
 
 # Cmd from sh"..." or sh(s) is ["sh", "-c", script]; use shared path. Raw backtick Cmd runs directly.
@@ -41,45 +56,39 @@ function execute(step::Step{Cmd}; verbose=nothing)
         return execute_shell(step, exec[3]; verbose)
     end
     start = time()
-    for inp in step.inputs
-        err = path_ready_error(inp, true)
-        err !== nothing && return StepResult(step, false, time() - start, step.inputs, step.outputs, err)
-    end
+    err = path_check_inputs(step)
+    err !== nothing && return step_result(step, false, time() - start, err)
     verbose isa Verbose && log_cmd(verbose, step.work)
     buf = IOBuffer()
     outcome = run_safely() do; Base.run(Base.pipeline(step.work, stdout=buf, stderr=buf)); end
+    elapsed = time() - start
     if !outcome.ok
-        return StepResult(step, false, time() - start, step.inputs, step.outputs, "Error: $(outcome.value)\n$(String(take!(buf)))")
+        return step_result(step, false, elapsed, "Error: $(outcome.value)\n$(String(take!(buf)))")
     end
-    for out_path in step.outputs
-        err = path_ready_error(out_path, false)
-        err !== nothing && return StepResult(step, false, time() - start, step.inputs, step.outputs, err)
-    end
-    StepResult(step, true, time() - start, step.inputs, step.outputs, String(take!(buf)))
+    err = path_check_outputs(step)
+    err !== nothing && return step_result(step, false, elapsed, err)
+    step_result(step, true, elapsed, String(take!(buf)))
 end
 execute(step::Step{<:ShRun}; verbose=nothing) = execute_shell(step, step.work.f(); verbose)
 
 function execute(step::Step{Nothing})
-    StepResult(step, false, 0.0, step.inputs, step.outputs, "Step has no work (ForEach block returned nothing). The block must return a Step or node, e.g. @step name = sh\"cmd\".")
+    step_result(step, false, 0.0, "Step has no work (ForEach block returned nothing). The block must return a Step or node, e.g. @step name = sh\"cmd\".")
 end
 
 function execute(step::Step{F}; verbose=nothing) where {F<:Function}
     start = time()
-    for inp in step.inputs
-        err = path_ready_error(inp, true)
-        err !== nothing && return StepResult(step, false, time() - start, step.inputs, step.outputs, err)
-    end
+    err = path_check_inputs(step)
+    err !== nothing && return step_result(step, false, time() - start, err)
     outcome = run_safely() do
         isempty(step.inputs) ? step.work() : step.work(step.inputs...)
     end
+    elapsed = time() - start
     if !outcome.ok
-        return StepResult(step, false, time() - start, step.inputs, step.outputs, "Error: $(outcome.value)")
+        return step_result(step, false, elapsed, "Error: $(outcome.value)")
     end
-    for out_path in step.outputs
-        err = path_ready_error(out_path, false)
-        err !== nothing && return StepResult(step, false, time() - start, step.inputs, step.outputs, err)
-    end
-    StepResult(step, true, time() - start, step.inputs, step.outputs, outcome.value)
+    err = path_check_outputs(step)
+    err !== nothing && return step_result(step, false, elapsed, err)
+    step_result(step, true, elapsed, outcome.value)
 end
 
 function execute(step::Step{T}) where T
@@ -94,12 +103,11 @@ end
 function execute(step::Step{F}, input; verbose=nothing) where {F<:Function}
     start = time()
     outcome = run_safely() do; step.work(input); end
+    elapsed = time() - start
     if !outcome.ok
-        return StepResult(step, false, time() - start, step.inputs, step.outputs, "Error: $(outcome.value)")
+        return step_result(step, false, elapsed, "Error: $(outcome.value)")
     end
-    for out_path in step.outputs
-        err = path_ready_error(out_path, false)
-        err !== nothing && return StepResult(step, false, time() - start, step.inputs, step.outputs, err)
-    end
-    StepResult(step, true, time() - start, step.inputs, step.outputs, outcome.value)
+    err = path_check_outputs(step)
+    err !== nothing && return step_result(step, false, elapsed, err)
+    step_result(step, true, elapsed, outcome.value)
 end

@@ -154,50 +154,54 @@ struct ForEach{F, P} <: AbstractNode
     source::P  # String (file pattern) or Vector{T} (items)
 end
 
+# Operands to >>, &, | may be AbstractNode, Cmd, or Function. Conversion via dispatch only (no isa/Any).
+# Explicit (Cmd, Cmd), (Function, Function), etc. avoid ambiguity with Base (e.g. & for process composition)
+# and keep one-line bodies via node_operand.
+node_operand(x::AbstractNode) = x
+node_operand(x::Cmd) = Step(x)
+node_operand(x::Function) = Step(x)
+
 # Composition operators
 >>(a::AbstractNode, b::AbstractNode) = Sequence((a, b))
 >>(a::Sequence, b::AbstractNode) = Sequence((a.nodes..., b))
 >>(a::AbstractNode, b::Sequence) = Sequence((a, b.nodes...))
 >>(a::Sequence, b::Sequence) = Sequence((a.nodes..., b.nodes...))
-
->>(a::Cmd, b::Cmd) = Step(a) >> Step(b)
->>(a::Function, b::Function) = Step(a) >> Step(b)
->>(a::Cmd, b::Function) = Step(a) >> Step(b)
->>(a::Function, b::Cmd) = Step(a) >> Step(b)
->>(a::Cmd, b) = Step(a) >> b
->>(a, b::Cmd) = a >> Step(b)
->>(a::Function, b) = Step(a) >> b
->>(a, b::Function) = a >> Step(b)
+>>(a::Cmd, b::Cmd) = node_operand(a) >> node_operand(b)
+>>(a::Function, b::Function) = node_operand(a) >> node_operand(b)
+>>(a::Cmd, b::Function) = node_operand(a) >> node_operand(b)
+>>(a::Function, b::Cmd) = node_operand(a) >> node_operand(b)
+>>(a::Cmd, b::AbstractNode) = node_operand(a) >> b
+>>(a::AbstractNode, b::Cmd) = a >> node_operand(b)
+>>(a::Function, b::AbstractNode) = node_operand(a) >> b
+>>(a::AbstractNode, b::Function) = a >> node_operand(b)
 
 (&)(a::AbstractNode, b::AbstractNode) = Parallel((a, b))
 (&)(a::Parallel, b::AbstractNode) = Parallel((a.nodes..., b))
 (&)(a::AbstractNode, b::Parallel) = Parallel((a, b.nodes...))
 (&)(a::Parallel, b::Parallel) = Parallel((a.nodes..., b.nodes...))
-
-(&)(a::Cmd, b::Cmd) = Step(a) & Step(b)
-(&)(a::Function, b::Function) = Step(a) & Step(b)
-(&)(a::Cmd, b::Function) = Step(a) & Step(b)
-(&)(a::Function, b::Cmd) = Step(a) & Step(b)
-(&)(a::Cmd, b) = Step(a) & b
-(&)(a, b::Cmd) = a & Step(b)
-(&)(a::Function, b) = Step(a) & b
-(&)(a, b::Function) = a & Step(b)
+(&)(a::Cmd, b::Cmd) = node_operand(a) & node_operand(b)
+(&)(a::Function, b::Function) = node_operand(a) & node_operand(b)
+(&)(a::Cmd, b::Function) = node_operand(a) & node_operand(b)
+(&)(a::Function, b::Cmd) = node_operand(a) & node_operand(b)
+(&)(a::Cmd, b::AbstractNode) = node_operand(a) & b
+(&)(a::AbstractNode, b::Cmd) = a & node_operand(b)
+(&)(a::Function, b::AbstractNode) = node_operand(a) & b
+(&)(a::AbstractNode, b::Function) = a & node_operand(b)
 
 (|)(a::AbstractNode, b::AbstractNode) = Fallback(a, b)
 (|)(a::Fallback, b::AbstractNode) = Fallback(a.primary, Fallback(a.fallback, b))
-
-(|)(a::Cmd, b::Cmd) = Step(a) | Step(b)
-(|)(a::Function, b::Function) = Step(a) | Step(b)
-(|)(a::Cmd, b::Function) = Step(a) | Step(b)
-(|)(a::Function, b::Cmd) = Step(a) | Step(b)
-(|)(a::Cmd, b) = Step(a) | b
-(|)(a, b::Cmd) = a | Step(b)
-(|)(a::Function, b) = Step(a) | b
-(|)(a, b::Function) = a | Step(b)
+(|)(a::Cmd, b::Cmd) = node_operand(a) | node_operand(b)
+(|)(a::Function, b::Function) = node_operand(a) | node_operand(b)
+(|)(a::Cmd, b::Function) = node_operand(a) | node_operand(b)
+(|)(a::Function, b::Cmd) = node_operand(a) | node_operand(b)
+(|)(a::Cmd, b::AbstractNode) = node_operand(a) | b
+(|)(a::AbstractNode, b::Cmd) = a | node_operand(b)
+(|)(a::Function, b::AbstractNode) = node_operand(a) | b
+(|)(a::AbstractNode, b::Function) = a | node_operand(b)
 
 (^)(a::AbstractNode, n::Int) = Retry(a, n)
-(^)(a::Cmd, n::Int) = Retry(Step(a), n)
-(^)(a::Function, n::Int) = Retry(Step(a), n)
+(^)(a::Cmd, n::Int) = node_operand(a) ^ n
+(^)(a::Function, n::Int) = node_operand(a) ^ n
 
 """
     Pipe{A, B} <: AbstractNode
