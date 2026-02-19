@@ -1,4 +1,8 @@
 # Verbosity logging (Verbose/Silent dispatch). Requires Types.jl.
+# Normalize so Parallel/ParallelBranches never pass wrong type (e.g. Cmd from data-passing) to children.
+as_verbosity(::Verbose) = Verbose()
+as_verbosity(::Silent) = Silent()
+as_verbosity(::V) where V = Silent()
 
 log_start(::Silent, ::Step) = nothing
 function log_start(::Verbose, s::Step)
@@ -30,6 +34,8 @@ function log_parallel(::Verbose, n::Int)
     printstyled("⊕ ", color=:magenta)
     println("Running $n branches in parallel...")
 end
+# Fallback when verbosity slot gets wrong type (e.g. from data-passing); avoid MethodError.
+log_parallel(::V, ::Int) where V = nothing
 
 log_progress(::Silent, ::Int, ::Int) = nothing
 function log_progress(::Verbose, done::Int, total::Int)

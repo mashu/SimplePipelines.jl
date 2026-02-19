@@ -14,6 +14,7 @@ struct ParallelBranches{N,C}
 end
 
 function run_node(pb::ParallelBranches, v, forced::Bool, context_input=nothing)
+    v = as_verbosity(v)
     nodes = pb.nodes
     contexts = pb.contexts
     n = length(nodes)
@@ -83,6 +84,7 @@ function run_node(seq::Sequence, v, forced::Bool, context_input=nothing)
 end
 
 function run_node(par::Parallel, v, forced::Bool, context_input=nothing)
+    v = as_verbosity(v)
     n = length(par.nodes)
     log_parallel(v, n)
     max_p = MAX_PARALLEL[]

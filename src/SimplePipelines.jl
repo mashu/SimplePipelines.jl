@@ -1,4 +1,4 @@
-"""
+raw"""
     SimplePipelines
 
 Minimal, type-stable DAG pipelines for Julia with Make-like incremental builds.
