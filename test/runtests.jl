@@ -295,6 +295,28 @@ clear_state!()
         @test results_nothing[1].success
         @test results_nothing[1].result === nothing
     end
+
+    @testset "Execute: path checks and error paths" begin
+        # Missing output path: step declares output but command does not create it
+        dir = mktempdir()
+        cd(dir) do
+            step = @step bad_out(["in.txt"] => ["out.txt"]) = sh"echo x"
+            write("in.txt", "x")
+            results = run(step, verbose=false, force=true)
+            @test !results[1].success
+            @test occursin("Missing output", results[1].result) || occursin("out.txt", results[1].result)
+        end
+        rm(dir; recursive=true)
+
+        # Missing input path
+        step_missing_in = Step(:need_in, `echo x`, ["/nonexistent/in.txt"], [])
+        results_in = run(step_missing_in, verbose=false, force=true)
+        @test !results_in[1].success
+        @test occursin("Missing input", results_in[1].result)
+
+        # Step with invalid work type (not Cmd, Function, ShRun, Nothing) -> no execute(::Step{Int}; verbose) method
+        @test_throws MethodError SimplePipelines.run_node(Step(:bad, 42), SimplePipelines.Silent(), false)
+    end
     
     @testset "Verbose execution" begin
         s = @step test = `echo "verbose test"`
@@ -312,6 +334,19 @@ clear_state!()
         @test all(r -> r.success, results)
     end
 
+    @testset "keep_outputs" begin
+        seq = `echo a` >> `echo b` >> `echo c`
+        # :last (default): only last step keeps result
+        results_last = run(seq, verbose=false, keep_outputs=:last)
+        @test length(results_last) == 3
+        @test results_last[1].result === nothing
+        @test results_last[2].result === nothing
+        @test results_last[3].result !== nothing
+        # :none: all results cleared
+        results_none = run(seq, verbose=false, keep_outputs=:none)
+        @test all(r -> r.result === nothing, results_none)
+    end
+
     @testset "Coverage: verbose log paths and colored DAG" begin
         # Run with verbose=true to hit log_skip (fresh step)
         clear_state!()
@@ -327,6 +362,10 @@ clear_state!()
         # Verbose fallback (log_fallback when primary fails)
         f = `false` | `echo backup`
         run(f, verbose=true)
+
+        # Verbose + sh(fn) to hit log_cmd(Verbose(), ::String)
+        s_sh = @step with_sh = sh(() -> "echo from_sh")
+        run(s_sh, verbose=true, force=true)
 
         # Verbose branch (log_branch)
         b = Branch(() -> true, Step(`echo yes`), Step(`echo no`))
@@ -815,6 +854,15 @@ clear_state!()
         r2 = `echo "cmd"`^2
         @test r2 isa Retry
         @test r2.max_attempts == 2
+
+        # Works with Function (node_operand then ^)
+        f = () -> "ok"
+        r3 = f^2
+        @test r3 isa Retry
+        @test r3.max_attempts == 2
+        results_f = run(r3, verbose=false, force=true)
+        @test results_f[1].success
+        @test results_f[1].result == "ok"
         
         # Composable with fallback
         fallback = @step fb = `echo "fallback"`
@@ -899,6 +947,18 @@ clear_state!()
         pipeline = fetch >> Reduce(outputs -> join(outputs, "+"), analyze_a & analyze_b) >> report
         results3 = run(pipeline, verbose=false)
         @test all(res -> res.success, results3)
+
+        # Reduce when one parallel branch fails: reducer step gets failure result
+        ok = @step ok = `echo ok`
+        fail_step = @step fail = `false`
+        r_fail = Reduce(ok & fail_step, name=:after_fail) do outputs
+            join(outputs, ",")
+        end
+        results_fail = run(r_fail, verbose=false, force=true)
+        @test length(results_fail) == 3  # ok, fail_step, reduce
+        @test !results_fail[2].success
+        @test !results_fail[3].success
+        @test occursin("upstream", results_fail[3].result) || occursin("Reduce", results_fail[3].result)
         
         # Utilities
         @test count_steps(r) == 3  # a, b, reduce
