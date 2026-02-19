@@ -2,8 +2,9 @@
 
 ## Module
 
-```@docs
-SimplePipelines
+```@autodocs
+Modules = [SimplePipelines]
+Order = [:module]
 ```
 
 ## Types
