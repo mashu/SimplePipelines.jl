@@ -127,6 +127,14 @@ function print_dag(io::IO, bp::BroadcastPipe, pre::String, cont::String, color::
     print_dag(io, bp.second, cont * "  └─", cont * "    ", color)
 end
 
+function print_dag(io::IO, r::Resourced, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    label = "▣ Resources(mem=$(r.resources.mem_mb)MB, threads=$(r.resources.threads))"
+    color ? printstyled(io, label, color=:light_yellow) : print(io, label)
+    println(io)
+    print_dag(io, r.node, cont * "    ", cont * "    ", color)
+end
+
 # Branch helper with marker
 function print_dag(io::IO, node::AbstractNode, pre::String, cont::String, color::Bool, marker_color::Symbol, marker::String)
     printstyled(io, marker, color=marker_color)
@@ -233,6 +241,7 @@ Base.show(io::IO, fe::ForEach{F, Vector{T}}) where {F, T} = print(io, "ForEach("
 Base.show(io::IO, p::Pipe) = print(io, "(", p.first, " |> ", p.second, ")")
 Base.show(io::IO, sip::SameInputPipe) = print(io, "(", sip.first, " >>> ", sip.second, ")")
 Base.show(io::IO, bp::BroadcastPipe) = print(io, "(", bp.first, " .>> ", bp.second, ")")
+Base.show(io::IO, r::Resourced) = print(io, "Resourced(", r.node, ", mem=", r.resources.mem_mb, "MB)")
 Base.show(io::IO, p::Pipeline) = print(io, "Pipeline(\"", p.name, "\", ", count_steps(p.root), " steps)")
 
 function Base.show(io::IO, ::MIME"text/plain", p::Pipeline)

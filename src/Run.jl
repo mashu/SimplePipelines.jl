@@ -2,7 +2,8 @@
 # the root node, persists state, and post-processes the kept results.
 
 """
-    run(p::Pipeline; verbose=true, dry_run=false, force=false, jobs=8, keep_outputs=:last) -> Vector{AbstractStepResult}
+    run(p::Pipeline; verbose=true, dry_run=false, force=false, jobs=8,
+        keep_outputs=:last, memory_budget_mb=0) -> Vector{AbstractStepResult}
     run(node::AbstractNode; kwargs...) -> Vector{AbstractStepResult}
 
 Execute a pipeline or node, returning results for each step.
@@ -12,23 +13,33 @@ Execute a pipeline or node, returning results for each step.
 - `dry_run=false`: Show DAG structure without executing.
 - `force=false`: Run all steps regardless of freshness.
 - `jobs=8`: Max concurrent branches for Parallel/ForEach (`jobs=0` = unbounded).
-- `keep_outputs=:last`: Retain only the last step's `result` (`:all` keeps every step's;
-  `:none` drops all).
+- `keep_outputs=:last`: Retain only the terminal step's `result` (`:all` keeps every
+  step's; `:none` drops all).
+- `memory_budget_mb=0`: Soft cap (megabytes) on concurrent memory across nodes wrapped
+  with [`with_resources`](@ref); `0` disables the cap. Branches with declared `mem_mb`
+  block until enough budget is free.
 
 # Memory
-`keep_outputs` only affects the **returned** vector; during execution all step outputs
-stay in memory. Write large data to files and return paths to keep memory bounded.
+`keep_outputs` only affects the **returned** vector; during execution step results
+stay alive in the per-run memo (so DAG sharing works). For pipelines that produce
+large in-memory data per step:
 
-See also: [`is_fresh`](@ref), [`Force`](@ref), [`print_dag`](@ref)
+- Write big values to disk and return [`FilePath`](@ref) instead of the raw value.
+- Tag heavy nodes with [`with_resources`](@ref) and pass `memory_budget_mb` so the
+  parallel scheduler keeps total concurrent memory under control.
+
+See also: [`is_fresh`](@ref), [`Force`](@ref), [`print_dag`](@ref),
+[`with_resources`](@ref), [`FilePath`](@ref).
 """
 function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false,
-                  jobs::Int=8, keep_outputs::Symbol=:last)
+                  jobs::Int=8, keep_outputs::Symbol=:last, memory_budget_mb::Int=0)
     print_pipeline_header(verbose, p)
     if dry_run
         verbose && print_dag(p.root)
         return AbstractStepResult[]
     end
-    ctx = RunContext(verbose=verbose, jobs=jobs, state_path=STATE_FILE[])
+    ctx = RunContext(verbose=verbose, jobs=jobs, state_path=STATE_FILE[],
+                     memory_budget_mb=memory_budget_mb)
     start = time()
     results = run_node(p.root, ctx, force, nothing)
     save_state!(merge_state(ctx), ctx.state_path)
@@ -85,6 +96,7 @@ terminal_steps(r::Reduce) = Step[Step(r.name, r.reducer)]
 terminal_steps(p::Pipe) = terminal_steps(p.second)
 terminal_steps(sip::SameInputPipe) = terminal_steps(sip.second)
 terminal_steps(bp::BroadcastPipe) = terminal_steps(bp.second)
+terminal_steps(r::Resourced) = terminal_steps(r.node)
 terminal_steps(::ForEach) = Step[]
 
 function terminal_only(results::Vector{<:AbstractStepResult}, root::AbstractNode)

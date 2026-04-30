@@ -1278,4 +1278,144 @@ clear_state!()
         results = run(b, verbose=false, force=true)
         @test results[1].success
     end
+
+    @testset "FilePath wrapper" begin
+        fp = FilePath("/tmp/foo.tsv")
+        @test fp isa FilePath
+        @test fp.path == "/tmp/foo.tsv"
+        @test string(fp) == "/tmp/foo.tsv"
+        @test occursin("FilePath", sprint(show, fp))
+        # Default materialize is identity for plain values; reads the file for FilePath.
+        @test materialize(42) == 42
+        dir = mktempdir()
+        try
+            p = joinpath(dir, "x.txt")
+            write(p, "hello")
+            @test materialize(FilePath(p)) == codeunits("hello")
+        finally
+            rm(dir; recursive=true, force=true)
+        end
+    end
+
+    @testset "with_resources / Resourced" begin
+        s = @step compute = `echo done`
+        r = with_resources(s; mem_mb=128, threads=2)
+        @test r isa Resourced
+        @test r.resources.mem_mb == 128
+        @test r.resources.threads == 2
+        # Lifts Cmd operand
+        rc = with_resources(`echo cmd`; mem_mb=10)
+        @test rc isa Resourced
+        @test rc.node isa Step
+        # Runs and produces success
+        results = run(r, verbose=false, force=true)
+        @test results[1].success
+    end
+
+    @testset "Memory budget gates parallel branches" begin
+        # Two heavy branches each requesting half the budget should run, but two
+        # branches requesting the full budget each must serialize.
+        active = Threads.Atomic{Int}(0)
+        peak = Threads.Atomic{Int}(0)
+        watch = (_) -> begin
+            cur = Threads.atomic_add!(active, 1) + 1
+            old = peak[]
+            while cur > old
+                Threads.atomic_cas!(peak, old, cur) == old && break
+                old = peak[]
+            end
+            sleep(0.05)
+            Threads.atomic_sub!(active, 1)
+            "ok"
+        end
+
+        steps_heavy = [with_resources(Step(Symbol("h$i"), () -> watch(i)); mem_mb=600) for i in 1:4]
+        node = reduce(&, steps_heavy)
+        run(node, verbose=false, force=true, memory_budget_mb=1000, jobs=4)
+        # With a 1000 MB budget and four 600 MB branches, at most one runs at a time.
+        @test peak[] == 1
+    end
+
+    @testset "@rule and resolve: build DAG from output targets" begin
+        dir = mktempdir()
+        try
+            cd(dir) do
+                # Three rules forming a chain: source → align → index
+                source = @rule source([] => "raw/{sample}.txt") =
+                    "mkdir -p raw && echo {sample} > {output}"
+                align = @rule align("raw/{sample}.txt" => "out/{sample}.aln") =
+                    "mkdir -p out && cat {input} | tr a-z A-Z > {output}"
+                index = @rule index("out/{sample}.aln" => "out/{sample}.aln.idx") =
+                    "wc -c {input} > {output}"
+
+                plan = resolve([source, align, index],
+                               ["out/A.aln.idx", "out/B.aln.idx"])
+                @test plan isa AbstractNode
+                results = run(plan, verbose=false)
+                @test all(r -> r.success, results)
+                @test isfile("out/A.aln.idx")
+                @test isfile("out/B.aln.idx")
+                @test isfile("out/A.aln")
+                @test isfile("out/B.aln")
+                @test isfile("raw/A.txt")
+                @test isfile("raw/B.txt")
+
+                # Re-running with everything fresh should produce no work.
+                results2 = run(plan, verbose=false)
+                @test all(r -> r.success || (r.result !== nothing && contains(r.result, "up to date")), results2)
+
+                # An existing file should short-circuit resolution; nothing to plan.
+                @test_throws ErrorException resolve([source], ["raw/A.txt"])
+            end
+        finally
+            rm(dir; recursive=true, force=true)
+        end
+    end
+
+    @testset "@rule: missing rule for target raises" begin
+        r = @rule a("in/{x}.txt" => "out/{x}.txt") = "cp {input} {output}"
+        @test_throws ErrorException resolve([r], ["nowhere/Z.bin"])
+    end
+
+    @testset "Rule wildcard substitution" begin
+        # match_pattern + substitute roundtrip
+        rx, names = SimplePipelines.pattern_to_regex("data/{kind}/{id}.fq")
+        @test names == ["kind", "id"]
+        m = SimplePipelines.match_pattern("data/{kind}/{id}.fq", "data/raw/sample01.fq")
+        @test m == Dict("kind" => "raw", "id" => "sample01")
+        @test SimplePipelines.match_pattern("data/{kind}/{id}.fq", "no/match.bam") === nothing
+        s = SimplePipelines.substitute("out/{id}_{kind}.bam", m)
+        @test s == "out/sample01_raw.bam"
+        @test SimplePipelines.fill_special("cmd {input} > {output}",
+                                           ["a", "b"], ["c"]) == "cmd a b > c"
+        @test SimplePipelines.fill_special("cmd {input[1]} {output[1]}",
+                                           ["a", "b"], ["c"]) == "cmd a c"
+    end
+
+    @testset "Rule sharing: shared dep resolved once" begin
+        dir = mktempdir()
+        try
+            cd(dir) do
+                # Two different terminal targets share a single common dep file.
+                shared = @rule shared([] => "shared.txt") = "echo shared > {output}"
+                # Two leaves both depending on shared.txt.
+                use_a = @rule use_a("shared.txt" => "a.out") = "cp {input} {output}"
+                use_b = @rule use_b("shared.txt" => "b.out") = "cp {input} {output}"
+
+                plan = resolve([shared, use_a, use_b], ["a.out", "b.out"])
+                results = run(plan, verbose=false)
+                @test all(r -> r.success, results)
+                @test isfile("a.out") && isfile("b.out") && isfile("shared.txt")
+                # Each visiting branch reports the same StepResult instance for the
+                # shared dep — i.e. the runtime executed it exactly once and shared
+                # the result via the in-flight channel.
+                shared_results = [r for r in results if r.step.name == :shared]
+                @test !isempty(shared_results)
+                ids = [objectid(r) for r in shared_results]
+                @test all(==(ids[1]), ids)
+            end
+        finally
+            rm(dir; recursive=true, force=true)
+        end
+    end
 end

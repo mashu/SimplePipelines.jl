@@ -45,7 +45,7 @@ See also: [`Step`](@ref), [`Pipeline`](@ref), [`run`](@ref), [`is_fresh`](@ref).
 """
 module SimplePipelines
 
-export Step, @step, Sequence, Parallel, Pipeline
+export Step, @step, Sequence, Parallel, Pipeline, AbstractNode
 export StepResult, AbstractStepResult
 export Retry, Fallback, Branch, Timeout, Force
 export Reduce, ForEach, fe
@@ -53,6 +53,9 @@ export SameInputPipe, >>>, BroadcastPipe
 export count_steps, steps, print_dag, is_fresh, clear_state!
 export @sh_str, sh, ShRun
 export @shell_raw_str, shell_raw
+export Resources, Resourced, with_resources
+export FilePath, materialize
+export Rule, @rule, resolve
 
 import Base: >>, &, |, ^, |>, >>>
 
@@ -119,11 +122,14 @@ end
 include("Types.jl")
 sh(f::Function) = ShRun(f)  # run-time shell command; must be after Types (ShRun)
 include("Macro.jl")
+include("FilePath.jl")
+include("Resources.jl")
 include("State.jl")
 include("Logging.jl")
 include("Execute.jl")
 include("ForEach.jl")
 include("RunNodes.jl")
+include("Rules.jl")
 include("Run.jl")
 include("Display.jl")
 

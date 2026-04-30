@@ -17,6 +17,9 @@ struct ParallelBranches{N,C}
     contexts::Vector{C}
 end
 
+# Claim outcome token: caller is responsible for executing the step (see `claim_step!`).
+struct ExecuteClaim end
+
 function run_node(pb::ParallelBranches, ctx::RunContext, forced::Bool=false, context_input=nothing)
     nodes, contexts = pb.nodes, pb.contexts
     n = length(nodes)
@@ -47,6 +50,42 @@ function run_node(step::Step{N}, ctx::RunContext, forced::Bool=false, context_in
     run_node(step.work, ctx, forced, context_input)
 end
 
+# Resourced wrapper: budget is acquired only when the wrapped node is actually going
+# to execute. If the inner is a memoized Step that another task is already running, we
+# do not acquire — otherwise waiting visitors would double-count the budget.
+# `try/finally` is used purely to guarantee release; no exceptions are caught.
+run_node(r::Resourced, ctx::RunContext, forced::Bool=false, context_input=nothing) =
+    run_resourced(r.node, r.resources.mem_mb, ctx, forced, context_input)
+
+# Step with no context_input: claim, and only acquire on ExecuteClaim.
+function run_resourced(step::Step, mem_mb::Int, ctx::RunContext, forced::Bool, ::Nothing)
+    handle_resourced_claim(claim_step!(ctx, step), step, mem_mb, ctx, forced)
+end
+
+# Anything else (or Step with context_input): acquire around the run unconditionally;
+# such nodes are not deduplicated by the runtime, so each visit performs work.
+function run_resourced(node::AbstractNode, mem_mb::Int, ctx::RunContext, forced::Bool, context_input)
+    acquire_memory!(ctx.memory_budget, mem_mb)
+    try
+        run_node(node, ctx, forced, context_input)
+    finally
+        release_memory!(ctx.memory_budget, mem_mb)
+    end
+end
+
+handle_resourced_claim(cached::Vector{AbstractStepResult}, ::Step, ::Int, ::RunContext, ::Bool) = cached
+handle_resourced_claim(ch::Channel{Vector{AbstractStepResult}}, ::Step, ::Int, ::RunContext, ::Bool) = fetch(ch)
+function handle_resourced_claim(::ExecuteClaim, step::Step, mem_mb::Int, ctx::RunContext, forced::Bool)
+    acquire_memory!(ctx.memory_budget, mem_mb)
+    try
+        out = execute_with_freshness(step, ctx, forced, nothing)
+        publish_step!(ctx, step, out)
+        out
+    finally
+        release_memory!(ctx.memory_budget, mem_mb)
+    end
+end
+
 # Leaf step. The first task to encounter `step` in a run executes it; concurrent and
 # subsequent visitors receive the cached result. Identity is by `objectid`, so a Step
 # instance referenced from multiple branches of the DSL runs exactly once per run.
@@ -57,8 +96,6 @@ function run_node(step::Step, ctx::RunContext, forced::Bool=false, context_input
 end
 
 # Claim outcomes — dispatch instead of `isa` branching.
-struct ExecuteClaim end
-
 handle_claim(cached::Vector{AbstractStepResult}, ::Step, ::RunContext, ::Bool) = cached
 handle_claim(ch::Channel{Vector{AbstractStepResult}}, ::Step, ::RunContext, ::Bool) = fetch(ch)
 function handle_claim(::ExecuteClaim, step::Step, ctx::RunContext, forced::Bool)
@@ -215,6 +252,7 @@ node_children(n::Reduce) = [n.node]
 node_children(p::Pipe) = [p.first, p.second]
 node_children(sip::SameInputPipe) = [sip.first, sip.second]
 node_children(bp::BroadcastPipe) = [bp.first, bp.second]
+node_children(r::Resourced) = [r.node]
 node_children(::Union{Step,ForEach}) = AbstractNode[]
 
 function run_node(pipe::Pipe, ctx::RunContext, forced::Bool=false, context_input=nothing)
@@ -297,6 +335,7 @@ steps(f::Force) = steps(f.node)
 steps(p::Pipe) = unique_by_id(vcat(steps(p.first), steps(p.second)))
 steps(sip::SameInputPipe) = unique_by_id(vcat(steps(sip.first), steps(sip.second)))
 steps(bp::BroadcastPipe) = unique_by_id(vcat(steps(bp.first), steps(bp.second)))
+steps(r::Resourced) = steps(r.node)
 steps(::ForEach) = Step[]  # lazy: not discovered until run
 
 function unique_by_id(v::AbstractVector{<:Step})

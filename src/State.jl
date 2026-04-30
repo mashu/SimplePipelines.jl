@@ -36,13 +36,16 @@ mutable struct RunContext
     jobs::Int
     memo::IdDict{Step, Vector{AbstractStepResult}}
     in_flight::IdDict{Step, Channel{Vector{AbstractStepResult}}}
+    memory_budget::MemoryBudget
 end
 
-RunContext(; verbose::Bool=false, jobs::Int=8, state_path::String=STATE_FILE[]) =
+RunContext(; verbose::Bool=false, jobs::Int=8, state_path::String=STATE_FILE[],
+           memory_budget_mb::Int=0) =
     RunContext(verbose, state_path, Set{UInt64}(), state_read(state_path, STATE_LAYOUT),
                ReentrantLock(), ReentrantLock(), jobs,
                IdDict{Step, Vector{AbstractStepResult}}(),
-               IdDict{Step, Channel{Vector{AbstractStepResult}}}())
+               IdDict{Step, Channel{Vector{AbstractStepResult}}}(),
+               MemoryBudget(memory_budget_mb))
 
 """Read persisted step hashes from the state file."""
 load_state()::Set{UInt64} = state_read(STATE_FILE[], STATE_LAYOUT)

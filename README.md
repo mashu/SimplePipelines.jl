@@ -100,3 +100,46 @@ ForEach("data/{sample}_R1.fq.gz") do sample
     sh("pear -f $(sample)_R1.fq.gz -r $(sample)_R2.fq.gz") >> sh("process $(sample)")
 end
 ```
+
+## Output-side Wildcard Inference (Snakemake-style)
+
+Declare reusable rules with `{wildcard}` patterns, then ask the runtime to build a DAG that produces the targets you want:
+
+```julia
+align = @rule align("raw/{sample}.fq" => "out/{sample}.bam") =
+    "bwa mem ref.fa {input} > {output}"
+index = @rule index("out/{sample}.bam" => "out/{sample}.bam.bai") =
+    "samtools index {input}"
+
+# Targets: ask for the .bai files; resolve walks back through rules,
+# instantiates concrete Steps, and dedupes shared deps automatically.
+plan = resolve([align, index], ["out/A.bam.bai", "out/B.bam.bai"])
+run(plan)
+```
+
+`{input}` / `{output}` / `{wildcard_name}` placeholders inside the work template are filled at resolve time. Rule work can also be a function: `(inputs, outputs, wildcards) -> Cmd | String | Function`. Targets that already exist on disk are skipped.
+
+## Memory-aware Parallel Scheduling
+
+For pipelines whose steps each load a multi-GB DataFrame, use `with_resources` + `memory_budget_mb` so the parallel scheduler holds total concurrent memory under a soft cap:
+
+```julia
+heavy = with_resources(@step align = sh"bwa ..."; mem_mb=4_000)
+plan  = ForEach("data/{s}.fq") do s
+    with_resources(@step ali = sh"bwa $s.fq"; mem_mb=4_000)
+end
+run(plan; memory_budget_mb=12_000)   # at most 3 heavy branches at once
+```
+
+For values too big to keep in RAM between steps, return a `FilePath`:
+
+```julia
+@step extract = inputs -> begin
+    df = load_huge_table(inputs[1])
+    p = tempname() * ".jls"
+    serialize(p, summarize(df))
+    FilePath(p)         # tiny path travels downstream; df is freed
+end
+```
+
+A custom `materialize(::FilePath)` lets the consumer load only when needed.
