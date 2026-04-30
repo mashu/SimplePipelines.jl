@@ -20,7 +20,7 @@ clear_state!()
         cd(dir) do
             p = sh("echo test > sh_test_out.txt")
             step = Step(:test, p)
-            result = SimplePipelines.run_node(step, SimplePipelines.Silent())
+            result = SimplePipelines.run_node(step, SimplePipelines.RunContext())
             @test result[1].success
             @test isfile("sh_test_out.txt") && strip(read("sh_test_out.txt", String)) == "test"
         end
@@ -314,8 +314,12 @@ clear_state!()
         @test !results_in[1].success
         @test occursin("Missing input", results_in[1].result)
 
-        # Step with invalid work type (not Cmd, Function, ShRun, Nothing) -> no execute(::Step{Int}; verbose) method
-        @test_throws MethodError SimplePipelines.run_node(Step(:bad, 42), SimplePipelines.Silent(), false)
+        # Step with invalid work type returns a failure StepResult with a clear message,
+        # not a MethodError (the helpful execute fallback handles it).
+        bad_results = SimplePipelines.run_node(Step(:bad, 42), SimplePipelines.RunContext(), false)
+        @test length(bad_results) == 1
+        @test !bad_results[1].success
+        @test occursin("Step work must be", bad_results[1].result)
     end
     
     @testset "Verbose execution" begin
@@ -1192,5 +1196,86 @@ clear_state!()
         # All should execute
         results = run(p1, verbose=false)
         @test !isempty(results)
+    end
+
+    @testset "DAG sharing: shared sub-step runs once across parallel branches" begin
+        # Two parallel branches both start with the same Step instance.
+        # The runtime should execute it once and let the second branch reuse the result.
+        counter = Threads.Atomic{Int}(0)
+        shared = Step(:shared, () -> (Threads.atomic_add!(counter, 1); "shared"))
+        downstream_a = Step(:da, x -> "a:" * x)
+        downstream_b = Step(:db, x -> "b:" * x)
+        pipeline = (shared >> downstream_a) & (shared >> downstream_b)
+        results = run(pipeline, verbose=false, force=true)
+        @test counter[] == 1
+        @test all(r -> r.success, results)
+        # Both downstreams should have received the shared output.
+        outs = [r.result for r in results if r.success]
+        @test "a:shared" in outs && "b:shared" in outs
+    end
+
+    @testset "RunContext is per-run and thread-safe" begin
+        # Each call to run() builds its own context, so two concurrent runs do not share state.
+        s1 = Step(:r1, () -> 1)
+        s2 = Step(:r2, () -> 2)
+        ctx1 = SimplePipelines.RunContext()
+        ctx2 = SimplePipelines.RunContext()
+        @test ctx1 !== ctx2
+        @test ctx1.state !== ctx2.state
+        @test ctx1.memo !== ctx2.memo
+
+        # Concurrent mark_complete! into a single context must not corrupt the set.
+        ctx = SimplePipelines.RunContext()
+        steps_to_mark = [Step(Symbol("conc_$i"), () -> i) for i in 1:200]
+        Threads.@threads for s in steps_to_mark
+            SimplePipelines.mark_complete!(ctx, s)
+        end
+        @test length(ctx.state) == 200
+    end
+
+    @testset "Freshness uses stable identity across sessions" begin
+        # For named steps with declared outputs, freshness should not depend on a per-session
+        # gensym — i.e. constructing the step in a fresh "session" still hits the cache.
+        clear_state!()
+        mktempdir() do dir
+            cd(dir) do
+                make_step() = @step build(["src.txt"] => ["out.txt"]) = sh"cp src.txt out.txt"
+                write("src.txt", "hello")
+                run(make_step(), verbose=false)
+                @test isfile("out.txt")
+                # Rebuild the step (new instance, same name/inputs/outputs) and confirm freshness.
+                @test is_fresh(make_step())
+            end
+        end
+        clear_state!()
+    end
+
+    @testset "Sequence data passing is deterministic" begin
+        # When the upstream step has declared outputs, those paths are passed downstream
+        # — never a heuristic look at the result string.
+        mktempdir() do dir
+            cd(dir) do
+                producer = @step prod([] => ["data.tsv"]) = sh"echo row > data.tsv"
+                consumer_input = Ref{Any}(nothing)
+                consumer = Step(:cons, paths -> (consumer_input[] = paths; "ok"))
+                run(producer >> consumer, verbose=false, force=true)
+                @test consumer_input[] == ["data.tsv"]
+            end
+        end
+
+        # No declared outputs: pass the upstream result.
+        producer2 = Step(:p2, () -> "payload")
+        seen = Ref{Any}(nothing)
+        consumer2 = Step(:c2, x -> (seen[] = x; x))
+        run(producer2 >> consumer2, verbose=false, force=true)
+        @test seen[] == "payload"
+    end
+
+    @testset "Branch lifts Cmd and Function operands" begin
+        b = Branch(() -> true, `echo true`, `echo false`)
+        @test b.if_true isa Step
+        @test b.if_false isa Step
+        results = run(b, verbose=false, force=true)
+        @test results[1].success
     end
 end

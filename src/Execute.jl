@@ -1,4 +1,5 @@
-# Step execution: run_safely, path/input/output readiness, execute(step). Requires Types.jl, State.jl.
+# Step execution: run_safely (sole try-catch boundary), declared-path readiness checks,
+# execute(step, ctx). Declared inputs/outputs are always treated as filesystem paths.
 
 function run_safely(f)::RunOutcome
     try
@@ -8,9 +9,8 @@ function run_safely(f)::RunOutcome
     end
 end
 
-path_like(s::String) = occursin(r"[/\\]", s) || occursin('.', s)
-path_ready_error(path::String, is_input::Bool) = path_like(path) && !isfile(path) ? (is_input ? "Missing input: $path" : "Missing output: $path") : nothing
-path_ready_error(_, _) = nothing
+path_ready_error(path::String, is_input::Bool) =
+    isfile(path) ? nothing : (is_input ? "Missing input: $path" : "Missing output: $path")
 
 function path_check_inputs(step::Step)
     for inp in step.inputs
@@ -30,52 +30,53 @@ end
 step_result(step::Step, success::Bool, elapsed::Float64, result) =
     StepResult(step, success, elapsed, step.inputs, step.outputs, result)
 
-"""Single execution path for shell steps: input checks, optional log, run sh -c, output checks."""
-function execute_shell(step::Step, cmdstr::AbstractString; verbose=nothing)
+"""Execute a shell command string under sh -c with stdout/stderr captured separately."""
+function execute_shell(step::Step, ctx::RunContext, cmdstr::AbstractString)
     start = time()
     err = path_check_inputs(step)
     err !== nothing && return step_result(step, false, time() - start, err)
-    verbose isa Verbose && log_cmd(verbose, cmdstr)
-    buf = IOBuffer()
+    log_cmd(ctx, cmdstr)
+    out_buf = IOBuffer()
+    err_buf = IOBuffer()
     outcome = run_safely() do
-        Base.run(Base.pipeline(Cmd(["sh", "-c", cmdstr]), stdout=buf, stderr=buf))
+        Base.run(Base.pipeline(Cmd(["sh", "-c", cmdstr]), stdout=out_buf, stderr=err_buf))
     end
     elapsed = time() - start
     if !outcome.ok
-        return step_result(step, false, elapsed, "Error: $(outcome.value)\n$(String(take!(buf)))")
+        return step_result(step, false, elapsed, "Error: $(outcome.value)\n$(String(take!(err_buf)))")
     end
-    err = path_check_outputs(step)
-    err !== nothing && return step_result(step, false, elapsed, err)
-    step_result(step, true, elapsed, String(take!(buf)))
+    out_err = path_check_outputs(step)
+    out_err !== nothing && return step_result(step, false, elapsed, out_err)
+    step_result(step, true, elapsed, String(take!(out_buf)))
 end
 
-# Cmd from sh"..." or sh(s) is ["sh", "-c", script]; use shared path. Raw backtick Cmd runs directly.
-function execute(step::Step{Cmd}; verbose=nothing)
+# Cmd from sh"..." or sh(s) is ["sh", "-c", script]; share the shell path.
+function execute(step::Step{Cmd}, ctx::RunContext)
     exec = step.work.exec
     if length(exec) >= 3 && exec[1] == "sh" && exec[2] == "-c"
-        return execute_shell(step, exec[3]; verbose)
+        return execute_shell(step, ctx, exec[3])
     end
     start = time()
     err = path_check_inputs(step)
     err !== nothing && return step_result(step, false, time() - start, err)
-    verbose isa Verbose && log_cmd(verbose, step.work)
-    buf = IOBuffer()
-    outcome = run_safely() do; Base.run(Base.pipeline(step.work, stdout=buf, stderr=buf)); end
+    log_cmd(ctx, step.work)
+    out_buf = IOBuffer()
+    err_buf = IOBuffer()
+    outcome = run_safely() do
+        Base.run(Base.pipeline(step.work, stdout=out_buf, stderr=err_buf))
+    end
     elapsed = time() - start
     if !outcome.ok
-        return step_result(step, false, elapsed, "Error: $(outcome.value)\n$(String(take!(buf)))")
+        return step_result(step, false, elapsed, "Error: $(outcome.value)\n$(String(take!(err_buf)))")
     end
-    err = path_check_outputs(step)
-    err !== nothing && return step_result(step, false, elapsed, err)
-    step_result(step, true, elapsed, String(take!(buf)))
-end
-execute(step::Step{<:ShRun}; verbose=nothing) = execute_shell(step, step.work.f(); verbose)
-
-function execute(step::Step{Nothing})
-    step_result(step, false, 0.0, "Step has no work (ForEach block returned nothing). The block must return a Step or node, e.g. @step name = sh\"cmd\".")
+    out_err = path_check_outputs(step)
+    out_err !== nothing && return step_result(step, false, elapsed, out_err)
+    step_result(step, true, elapsed, String(take!(out_buf)))
 end
 
-function execute(step::Step{F}; verbose=nothing) where {F<:Function}
+execute(step::Step{<:ShRun}, ctx::RunContext) = execute_shell(step, ctx, step.work.f())
+
+function execute(step::Step{F}, ctx::RunContext) where {F<:Function}
     start = time()
     err = path_check_inputs(step)
     err !== nothing && return step_result(step, false, time() - start, err)
@@ -86,28 +87,31 @@ function execute(step::Step{F}; verbose=nothing) where {F<:Function}
     if !outcome.ok
         return step_result(step, false, elapsed, "Error: $(outcome.value)")
     end
-    err = path_check_outputs(step)
-    err !== nothing && return step_result(step, false, elapsed, err)
+    out_err = path_check_outputs(step)
+    out_err !== nothing && return step_result(step, false, elapsed, out_err)
     step_result(step, true, elapsed, outcome.value)
 end
 
-function execute(step::Step{T}) where T
-    error(
-        "Step work must be a command (Cmd), a function, or nothing. Got $(typeof(step.work)). " *
-        "If you used @step name(input) = process_file(...), the call runs at build time. " *
-        "Use @step name(\"path\") = process_file (function without parentheses) so the function receives the input at run time."
-    )
-end
-
-"""Run a function step with a single piped input (used by Pipe). Skips file-input checks."""
-function execute(step::Step{F}, input; verbose=nothing) where {F<:Function}
+"""Run a function step with a single piped input (used by Pipe and Sequence data passing)."""
+function execute(step::Step{F}, ctx::RunContext, input) where {F<:Function}
     start = time()
-    outcome = run_safely() do; step.work(input); end
+    outcome = run_safely() do
+        step.work(input)
+    end
     elapsed = time() - start
     if !outcome.ok
         return step_result(step, false, elapsed, "Error: $(outcome.value)")
     end
-    err = path_check_outputs(step)
-    err !== nothing && return step_result(step, false, elapsed, err)
+    out_err = path_check_outputs(step)
+    out_err !== nothing && return step_result(step, false, elapsed, out_err)
     step_result(step, true, elapsed, outcome.value)
+end
+
+# Fallback for invalid work types: produce a clear failure StepResult, not a MethodError.
+function execute(step::Step, ::RunContext)
+    msg = "Step work must be a Cmd, Function, or ShRun. Got $(typeof(step.work)). " *
+          "If you used `@step name(input) = process_file(...)`, the call runs at build time. " *
+          "Use `@step name(\"path\") = process_file` (function without parentheses) so the " *
+          "function receives the input at run time."
+    step_result(step, false, 0.0, msg)
 end

@@ -1,15 +1,15 @@
-# Core node types, composition operators, StepResult, RunOutcome, Verbose/Silent, Pipeline.
+# Core node types, composition operators, StepResult, RunOutcome, Pipeline.
 # Included first (after StateFormat and shell macro).
 
 """
     AbstractNode
 
-Abstract supertype of all pipeline nodes (Step, Sequence, Parallel, Retry, Fallback, Branch, Timeout, Force, Reduce, ForEach, Pipe, SameInputPipe, BroadcastPipe).
-Constructors only build the struct; execution is via the functor: call `(node)(v, forced)` which dispatches to `run_node(node, v, forced)`.
+Abstract supertype of all pipeline nodes (Step, Sequence, Parallel, Retry, Fallback,
+Branch, Timeout, Force, Reduce, ForEach, Pipe, SameInputPipe, BroadcastPipe).
+Constructors only build the struct; execution is via [`run`](@ref), which builds a
+[`RunContext`](@ref) and dispatches to `run_node(node, ctx, forced, context_input)`.
 """
 abstract type AbstractNode end
-
-(node::AbstractNode)(v, forced::Bool=false) = run_node(node, v, forced)
 
 """
     Step{F} <: AbstractNode
@@ -114,6 +114,11 @@ struct Branch{C<:Function, T<:AbstractNode, F<:AbstractNode} <: AbstractNode
     condition::C
     if_true::T
     if_false::F
+end
+function Branch(cond::Function, t, f)
+    tn = node_operand(t)
+    fn = node_operand(f)
+    Branch{typeof(cond), typeof(tn), typeof(fn)}(cond, tn, fn)
 end
 
 """
@@ -267,9 +272,6 @@ struct RunOutcome{T}
     ok::Bool
     value::T
 end
-
-struct Verbose end
-struct Silent end
 
 """
     Pipeline{N<:AbstractNode}

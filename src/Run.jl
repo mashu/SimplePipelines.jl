@@ -1,4 +1,5 @@
-# run(pipeline) and run_pipeline. Included after run_node and Pipeline.
+# Public run() entry point. Builds a RunContext per call (no mutable globals), runs
+# the root node, persists state, and post-processes the kept results.
 
 """
     run(p::Pipeline; verbose=true, dry_run=false, force=false, jobs=8, keep_outputs=:last) -> Vector{AbstractStepResult}
@@ -7,88 +8,87 @@
 Execute a pipeline or node, returning results for each step.
 
 # Keywords
-- `verbose=true`: Show colored progress output; when true, prints each shell command (for steps that run external tools) before running it
-- `dry_run=false`: If true, show DAG structure without executing
-- `force=false`: If true, run all steps regardless of freshness
-- `jobs=8`: Max concurrent branches for Parallel/ForEach. All branches run; when `jobs > 0`, they run in rounds of `jobs` (each round waits for the previous). `jobs=0` = unbounded (all at once).
-- `keep_outputs=:last`: What to retain in each result's `.result`. `:last` (default) keeps only the last step's result (others get `nothing`); `:all` keeps every step's result; `:none` drops all.
+- `verbose=true`: Show colored progress output.
+- `dry_run=false`: Show DAG structure without executing.
+- `force=false`: Run all steps regardless of freshness.
+- `jobs=8`: Max concurrent branches for Parallel/ForEach (`jobs=0` = unbounded).
+- `keep_outputs=:last`: Retain only the last step's `result` (`:all` keeps every step's;
+  `:none` drops all).
 
-# When result is kept vs dropped
-`keep_outputs` only affects the **returned** results vector: after the run we replace `.result` with `nothing` for non-final steps. **During execution** all step outputs stay in memory until the run finishes.
-
-# Memory: path-based I/O and streaming reducers
-To avoid holding large data in memory:
-1. **Steps**: Write large results to files and **return only the path** (or a small summary). Then the runner only holds path strings, not file contents.
-2. **Reduce**: The reducer receives a **vector of all branch outputs**. If those are paths, implement a **streaming reducer**: open one path at a time, read/aggregate, then close. Do not load all files into memory inside the reducer. Example: `reducer(paths) = (acc = init; for p in paths; acc = merge(acc, read_stats(p)); end; acc)`.
-3. Use `keep_outputs=:last` so the returned result vector does not retain every step's result.
-
-If you follow (1) and (2), you only hold paths and small aggregates; full file contents are never all in memory. If a step returns a large object (e.g. a DataFrame of the whole file), that object is held until the run ends.
-
-# Output
-With `verbose=true`, shows tree-structured output: `▶` running, `✓` success, `✗` failure, `⊳` up to date (not re-run). Shell commands are printed so you see exactly what is run.
-
-# Examples
-```julia
-run(pipeline)
-run(pipeline, jobs=0)
-run(pipeline, keep_outputs=:all)
-run(pipeline, verbose=false)
-run(pipeline, dry_run=true)
-run(pipeline, force=true)
-```
+# Memory
+`keep_outputs` only affects the **returned** vector; during execution all step outputs
+stay in memory. Write large data to files and return paths to keep memory bounded.
 
 See also: [`is_fresh`](@ref), [`Force`](@ref), [`print_dag`](@ref)
 """
-function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false, jobs::Int=8, keep_outputs::Symbol=:last)
-    prev_jobs = MAX_PARALLEL[]
-    MAX_PARALLEL[] = jobs
-    results = run_pipeline(p, verbose, dry_run, force, keep_outputs)
-    MAX_PARALLEL[] = prev_jobs
-    results
-end
-
-function run_pipeline(p::Pipeline, verbose::Bool, dry_run::Bool, force::Bool, keep_outputs::Symbol=:last)
-    if verbose
-        printstyled("═══ Pipeline: ", color=:blue, bold=true)
-        printstyled(p.name, " ═══\n", color=:blue, bold=true)
-    end
-
+function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false,
+                  jobs::Int=8, keep_outputs::Symbol=:last)
+    print_pipeline_header(verbose, p)
     if dry_run
         verbose && print_dag(p.root)
         return AbstractStepResult[]
     end
-
-    run_depth[] += 1
-    if run_depth[] == 1
-        state_loaded[] = state_read(STATE_FILE[], STATE_LAYOUT)
-        pending_completions[] = Set{UInt64}()
-    end
-
-    v = verbose ? Verbose() : Silent()
+    ctx = RunContext(verbose=verbose, jobs=jobs, state_path=STATE_FILE[])
     start = time()
-    results = run_node(p.root, v, force)
-
-    if run_depth[] == 1
-        save_state!(union(state_loaded[], pending_completions[]))
-    end
-    run_depth[] -= 1
-
-    if keep_outputs === :none && !isempty(results)
-        results = [StepResult(r.step, r.success, r.duration, r.inputs, r.outputs, nothing) for r in results]
-    elseif keep_outputs === :last && !isempty(results)
-        n = length(results)
-        results = [StepResult(r.step, r.success, r.duration, r.inputs, r.outputs, i == n ? r.result : nothing) for (i, r) in enumerate(results)]
-    end
-
-    if verbose
-        n = count(r -> r.success, results)
-        total = length(results)
-        success_color = n == total ? :green : :red
-        printstyled("═══ Completed: ", color=:blue, bold=true)
-        printstyled("$n/$total", color=success_color, bold=true)
-        printstyled(" steps in $(round(time() - start, digits=2))s ═══\n", color=:blue, bold=true)
-    end
+    results = run_node(p.root, ctx, force, nothing)
+    save_state!(merge_state(ctx), ctx.state_path)
+    results = post_process_results(results, keep_outputs, p.root)
+    print_pipeline_footer(verbose, results, start)
     results
 end
 
 Base.run(node::AbstractNode; kwargs...) = run(Pipeline(node); kwargs...)
+
+function print_pipeline_header(verbose::Bool, p::Pipeline)
+    verbose || return
+    printstyled("═══ Pipeline: ", color=:blue, bold=true)
+    printstyled(p.name, " ═══\n", color=:blue, bold=true)
+end
+
+function print_pipeline_footer(verbose::Bool, results, start::Float64)
+    verbose || return
+    n = count(r -> r.success, results)
+    total = length(results)
+    color = n == total ? :green : :red
+    printstyled("═══ Completed: ", color=:blue, bold=true)
+    printstyled("$n/$total", color=color, bold=true)
+    printstyled(" steps in $(round(time() - start, digits=2))s ═══\n", color=:blue, bold=true)
+end
+
+function post_process_results(results::Vector{<:AbstractStepResult}, keep::Symbol, root::AbstractNode)
+    isempty(results) && return results
+    keep === :all && return results
+    keep === :none && return [drop_result(r) for r in results]
+    keep === :last && return terminal_only(results, root)
+    throw(ArgumentError("keep_outputs must be :all, :last, or :none; got $(repr(keep))"))
+end
+
+drop_result(r::StepResult) = StepResult(r.step, r.success, r.duration, r.inputs, r.outputs, nothing)
+
+function last_only(results::Vector{<:AbstractStepResult})
+    n = length(results)
+    [i == n ? r : drop_result(r) for (i, r) in enumerate(results)]
+end
+
+merge_state(ctx::RunContext) = union!(copy(ctx.persisted), ctx.state)
+
+terminal_steps(s::Step) = Step[s]
+terminal_steps(s::Step{N}) where {N<:AbstractNode} = terminal_steps(s.work)
+terminal_steps(s::Sequence) = terminal_steps(s.nodes[end])
+terminal_steps(p::Parallel) = unique_by_id(reduce(vcat, terminal_steps.(p.nodes)))
+terminal_steps(r::Retry) = terminal_steps(r.node)
+terminal_steps(f::Fallback) = unique_by_id(vcat(terminal_steps(f.primary), terminal_steps(f.fallback)))
+terminal_steps(b::Branch) = unique_by_id(vcat(terminal_steps(b.if_true), terminal_steps(b.if_false)))
+terminal_steps(t::Timeout) = terminal_steps(t.node)
+terminal_steps(f::Force) = terminal_steps(f.node)
+terminal_steps(r::Reduce) = Step[Step(r.name, r.reducer)]
+terminal_steps(p::Pipe) = terminal_steps(p.second)
+terminal_steps(sip::SameInputPipe) = terminal_steps(sip.second)
+terminal_steps(bp::BroadcastPipe) = terminal_steps(bp.second)
+terminal_steps(::ForEach) = Step[]
+
+function terminal_only(results::Vector{<:AbstractStepResult}, root::AbstractNode)
+    terminals = terminal_steps(root)
+    terminal_hashes = Set(step_hash(s) for s in terminals)
+    [step_hash(r.step) in terminal_hashes ? r : drop_result(r) for r in results]
+end
