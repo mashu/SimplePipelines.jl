@@ -62,8 +62,15 @@ Declare reusable [`Rule`](@ref)s with `{wildcard}` patterns, then call
 a runnable DAG. Rule work supports both shell templates and `(inputs, outputs,
 wildcards) -> Cmd | String | Function`.
 
+[`expand`](@ref) generates concrete target lists from a template by Cartesian
+product, and a [`Workflow`](@ref) bundles rules + default targets behind a single
+`run(::Workflow)` entry point.
+
 ```@docs
 resolve
+expand
+Workflow
+plan
 ```
 
 ## Operators

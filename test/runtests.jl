@@ -1510,6 +1510,101 @@ clear_state!()
         @test occursin("StepResult: n", out)
         @test occursin("result:", out)
     end
+
+    @testset "expand: Cartesian product over wildcards" begin
+        # Single template, single wildcard
+        @test expand("out/{s}.bam"; s=["A", "B", "C"]) ==
+              ["out/A.bam", "out/B.bam", "out/C.bam"]
+
+        # Single template, two wildcards — last wildcard varies fastest
+        @test expand("out/{s}.{ext}"; s=["A", "B"], ext=["bam", "bai"]) ==
+              ["out/A.bam", "out/A.bai", "out/B.bam", "out/B.bai"]
+
+        # Multiple templates with shared wildcards (templates outer, combos inner)
+        @test expand(["raw/{s}.fq", "qc/{s}.html"]; s=["A", "B"]) ==
+              ["raw/A.fq", "raw/B.fq", "qc/A.html", "qc/B.html"]
+
+        # Numeric wildcard values are stringified
+        @test expand("step_{n}.txt"; n=1:3) ==
+              ["step_1.txt", "step_2.txt", "step_3.txt"]
+
+        # No wildcards: the template is returned unchanged (per-template copy)
+        @test expand("static.txt") == ["static.txt"]
+        @test expand(["a.txt", "b.txt"]) == ["a.txt", "b.txt"]
+
+        # NamedTuple form (instead of kwargs) reaches the same path
+        @test expand("{s}_R{r}.fq", (s=["A"], r=[1, 2])) ==
+              ["A_R1.fq", "A_R2.fq"]
+
+        # Missing wildcard substitution errors
+        @test_throws ErrorException expand("{missing}.txt"; other=["x"])
+    end
+
+    @testset "Workflow: registry runs end-to-end" begin
+        dir = mktempdir()
+        try
+            cd(dir) do
+                wf = Workflow(name="rnaseq")
+                # `push!` dispatches on item type:
+                push!(wf,
+                      @rule source([] => "raw/{s}.txt") =
+                          "mkdir -p raw && echo {s} > {output}",
+                      @rule align("raw/{s}.txt" => "out/{s}.aln") =
+                          "mkdir -p out && tr a-z A-Z < {input} > {output}")
+                # Vector of targets gets appended:
+                push!(wf, expand("out/{s}.aln"; s=["A", "B"]))
+
+                @test length(wf.rules) == 2
+                @test wf.targets == ["out/A.aln", "out/B.aln"]
+
+                node = plan(wf)
+                @test node isa AbstractNode
+
+                results = run(wf, verbose=false)
+                @test all(r -> r.success, results)
+                @test isfile("out/A.aln") && isfile("out/B.aln")
+
+                # `targets` kwarg overrides the registry's default targets
+                only_a = run(wf, verbose=false, targets=["out/A.aln"])
+                @test all(r -> r.success, only_a)
+            end
+        finally
+            rm(dir; recursive=true, force=true)
+        end
+    end
+
+    @testset "Workflow: empty registry errors with clear message" begin
+        wf = Workflow(name="empty")
+        @test_throws ErrorException plan(wf)
+        push!(wf, @rule x([] => "out.txt") = "echo x > {output}")
+        # Rules but no targets: also errors
+        @test_throws ErrorException plan(wf)
+        push!(wf, "out.txt")
+        @test plan(wf) isa AbstractNode
+    end
+
+    @testset "Liftable union: cross-type operators still work" begin
+        # The 12-method-per-operator overload set was collapsed to 4 specific
+        # AbstractNode methods + a single Liftable union fallback. All the same
+        # cross-type combinations must still build the right node.
+        f = () -> "func"
+        c = `echo cmd`
+        s = @step a = `echo a`
+        @test (c >> c) isa Sequence
+        @test (f >> f) isa Sequence
+        @test (c >> f) isa Sequence
+        @test (f >> c) isa Sequence
+        @test (c >> s) isa Sequence
+        @test (s >> c) isa Sequence
+        @test (f >> s) isa Sequence
+        @test (s >> f) isa Sequence
+        @test (c & f) isa Parallel
+        @test (s & c) isa Parallel
+        @test (c | f) isa Fallback
+        @test (s | c) isa Fallback
+        @test (c^3) isa Retry
+        @test (f^3) isa Retry
+    end
 end
 
 # Documenter `jldoctest` blocks in `docs/src/` (see `doctests.md`). Spawn a fresh Julia with a

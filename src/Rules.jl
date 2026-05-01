@@ -291,3 +291,124 @@ function find_rule(rules::AbstractVector{<:Rule}, target::String)
     end
     nothing
 end
+
+#==============================================================================#
+# expand — declarative target generation by Cartesian product of wildcard values
+#==============================================================================#
+
+"""
+    expand(template, wildcards) -> Vector{String}
+    expand(template; wildcard1=values1, wildcard2=values2, ...) -> Vector{String}
+    expand(templates::AbstractVector, ...) -> Vector{String}
+
+Generate concrete paths from one or more pattern templates by taking the
+Cartesian product of the wildcard value lists. `wildcards` may be a `NamedTuple`
+or supplied as keyword arguments; values are anything that can be turned into a
+string via `string`.
+
+# Examples
+```julia
+expand("out/{sample}.bam"; sample=["A","B","C"])
+# ["out/A.bam", "out/B.bam", "out/C.bam"]
+
+expand("out/{s}.{ext}"; s=["A","B"], ext=["bam","bai"])
+# ["out/A.bam", "out/A.bai", "out/B.bam", "out/B.bai"]
+
+expand(["raw/{s}.fq", "qc/{s}.html"]; s=["A","B"])
+# ["raw/A.fq", "raw/B.fq", "qc/A.html", "qc/B.html"]
+```
+
+When there are multiple wildcards, `Iterators.product` is used so combinations are
+generated with the *first* keyword varying slowest and the last varying fastest.
+"""
+expand(template::AbstractString; kwargs...) = expand(template, NamedTuple(kwargs))
+expand(templates::AbstractVector{<:AbstractString}; kwargs...) =
+    expand(templates, NamedTuple(kwargs))
+
+expand(template::AbstractString, wildcards::NamedTuple) =
+    expand_each(String[String(template)], wildcards)
+expand(templates::AbstractVector{<:AbstractString}, wildcards::NamedTuple) =
+    expand_each(String[String(t) for t in templates], wildcards)
+
+# Substitute supports NamedTuples too — keys are Symbols, values stringified on demand.
+function substitute(template::String, wildcards::NamedTuple)
+    replace(template, WILDCARD_RE => function(m)
+        key = Symbol(m[2:end-1])
+        haskey(wildcards, key) ||
+            error("Substitution: wildcard `{$key}` has no value (have: $(collect(keys(wildcards))))")
+        string(getfield(wildcards, key))
+    end)
+end
+
+# Inner workhorse: take the Cartesian product over the NamedTuple's fields and
+# substitute into every template once per combination.
+function expand_each(templates::Vector{String}, wildcards::NamedTuple)
+    isempty(wildcards) && return copy(templates)
+    ks = keys(wildcards)
+    vs = values(wildcards)
+    out = String[]
+    sizehint!(out, length(templates) * prod(length, vs; init=1))
+    for tmpl in templates, combo in Iterators.product(vs...)
+        push!(out, substitute(tmpl, NamedTuple{ks}(combo)))
+    end
+    out
+end
+
+#==============================================================================#
+# Workflow — registry of rules + default targets
+#==============================================================================#
+
+"""
+    Workflow(; name="workflow") -> Workflow
+
+A registry of [`Rule`](@ref)s and default targets. Sugar over `resolve(rules, targets)`
+that lets a user describe a pipeline as one object:
+
+```julia
+wf = Workflow(name="rnaseq")
+push!(wf,
+    @rule align("raw/{s}.fq" => "out/{s}.bam") = "bwa mem ref.fa {input} > {output}",
+    @rule index("out/{s}.bam" => "out/{s}.bam.bai") = "samtools index {input}")
+push!(wf, expand("out/{s}.bam.bai"; s=["A","B","C"]))
+run(wf)
+```
+
+Items pushed to a workflow are dispatched by type: `Rule` items go to `wf.rules`,
+strings (or vectors of strings) go to `wf.targets`. You can override targets at run
+time: `run(wf; targets=["out/A.bam.bai"])`.
+"""
+mutable struct Workflow
+    name::String
+    rules::Vector{Rule}
+    targets::Vector{String}
+end
+Workflow(; name::AbstractString="workflow") = Workflow(String(name), Rule[], String[])
+
+# Heterogeneous push: dispatch routes each item to the right sub-vector. This
+# replaces ad-hoc add_rule!/add_target! helpers — Julia's verb-based mutation
+# convention covers the case.
+Base.push!(wf::Workflow, items...) = (foreach(it -> push_item!(wf, it), items); wf)
+
+push_item!(wf::Workflow, r::Rule) = push!(wf.rules, r)
+push_item!(wf::Workflow, t::AbstractString) = push!(wf.targets, String(t))
+push_item!(wf::Workflow, ts::AbstractVector{<:AbstractString}) =
+    append!(wf.targets, (String(t) for t in ts))
+push_item!(wf::Workflow, rs::AbstractVector{<:Rule}) = append!(wf.rules, rs)
+
+"""
+    plan(wf::Workflow; targets=wf.targets) -> AbstractNode
+
+Resolve the workflow's rules against `targets`, returning a node ready to `run`.
+Useful for inspecting the build plan with [`print_dag`](@ref) before execution.
+"""
+function plan(wf::Workflow; targets::AbstractVector{<:AbstractString}=wf.targets)
+    isempty(wf.rules) &&
+        error("Workflow `$(wf.name)` has no rules; push! a Rule onto it first.")
+    isempty(targets) &&
+        error("Workflow `$(wf.name)` has no targets; push! some, or pass targets= to run.")
+    resolve(wf.rules, [String(t) for t in targets])
+end
+
+# A Workflow is runnable directly via Base.run.
+Base.run(wf::Workflow; targets::AbstractVector{<:AbstractString}=wf.targets, kwargs...) =
+    run(Pipeline(plan(wf; targets=targets); name=wf.name); kwargs...)

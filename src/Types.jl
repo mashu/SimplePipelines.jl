@@ -182,55 +182,38 @@ Sentinel node that performs no work and produces no step results. Returned by
 """
 struct NoWork <: AbstractNode end
 
-# Operands to >>, &, | may be AbstractNode, Cmd, or Function. Conversion via dispatch only (no isa/Any).
-# Explicit (Cmd, Cmd), (Function, Function), etc. avoid ambiguity with Base (e.g. & for process composition)
-# and keep one-line bodies via node_operand.
+# Anything we know how to lift into a node — used as the fallback domain for the
+# composition operators below. Restricting to a Union keeps Base's own >>/&/|/^
+# methods (e.g. Int, Bool) untouched.
+const Liftable = Union{AbstractNode, Cmd, Function}
+
+# Lifters: identity for nodes, wrap raw work into a Step.
 node_operand(x::AbstractNode) = x
 node_operand(x::Cmd) = Step(x)
 node_operand(x::Function) = Step(x)
 
-# Composition operators. Sequence/Parallel append/concat in place on a Vector
-# so building wide pipelines does not allocate a new tuple type per node.
+# Composition operators. The four AbstractNode methods carry the actual semantics;
+# a single Liftable fallback covers every Cmd/Function permutation by lifting and
+# re-dispatching to the AbstractNode case. (AbstractNode is itself in Liftable, so
+# the more-specific AbstractNode methods always win for already-lifted operands.)
 >>(a::AbstractNode, b::AbstractNode) = Sequence(AbstractNode[a, b])
 >>(a::Sequence, b::AbstractNode) = Sequence(push!(copy(a.nodes), b))
 >>(a::AbstractNode, b::Sequence) = Sequence(pushfirst!(copy(b.nodes), a))
 >>(a::Sequence, b::Sequence) = Sequence(vcat(a.nodes, b.nodes))
->>(a::Cmd, b::Cmd) = node_operand(a) >> node_operand(b)
->>(a::Function, b::Function) = node_operand(a) >> node_operand(b)
->>(a::Cmd, b::Function) = node_operand(a) >> node_operand(b)
->>(a::Function, b::Cmd) = node_operand(a) >> node_operand(b)
->>(a::Cmd, b::AbstractNode) = node_operand(a) >> b
->>(a::AbstractNode, b::Cmd) = a >> node_operand(b)
->>(a::Function, b::AbstractNode) = node_operand(a) >> b
->>(a::AbstractNode, b::Function) = a >> node_operand(b)
+>>(a::Liftable, b::Liftable) = node_operand(a) >> node_operand(b)
 
 (&)(a::AbstractNode, b::AbstractNode) = Parallel(AbstractNode[a, b])
 (&)(a::Parallel, b::AbstractNode) = Parallel(push!(copy(a.nodes), b))
 (&)(a::AbstractNode, b::Parallel) = Parallel(pushfirst!(copy(b.nodes), a))
 (&)(a::Parallel, b::Parallel) = Parallel(vcat(a.nodes, b.nodes))
-(&)(a::Cmd, b::Cmd) = node_operand(a) & node_operand(b)
-(&)(a::Function, b::Function) = node_operand(a) & node_operand(b)
-(&)(a::Cmd, b::Function) = node_operand(a) & node_operand(b)
-(&)(a::Function, b::Cmd) = node_operand(a) & node_operand(b)
-(&)(a::Cmd, b::AbstractNode) = node_operand(a) & b
-(&)(a::AbstractNode, b::Cmd) = a & node_operand(b)
-(&)(a::Function, b::AbstractNode) = node_operand(a) & b
-(&)(a::AbstractNode, b::Function) = a & node_operand(b)
+(&)(a::Liftable, b::Liftable) = node_operand(a) & node_operand(b)
 
 (|)(a::AbstractNode, b::AbstractNode) = Fallback(a, b)
 (|)(a::Fallback, b::AbstractNode) = Fallback(a.primary, Fallback(a.fallback, b))
-(|)(a::Cmd, b::Cmd) = node_operand(a) | node_operand(b)
-(|)(a::Function, b::Function) = node_operand(a) | node_operand(b)
-(|)(a::Cmd, b::Function) = node_operand(a) | node_operand(b)
-(|)(a::Function, b::Cmd) = node_operand(a) | node_operand(b)
-(|)(a::Cmd, b::AbstractNode) = node_operand(a) | b
-(|)(a::AbstractNode, b::Cmd) = a | node_operand(b)
-(|)(a::Function, b::AbstractNode) = node_operand(a) | b
-(|)(a::AbstractNode, b::Function) = a | node_operand(b)
+(|)(a::Liftable, b::Liftable) = node_operand(a) | node_operand(b)
 
 (^)(a::AbstractNode, n::Int) = Retry(a, n)
-(^)(a::Cmd, n::Int) = node_operand(a) ^ n
-(^)(a::Function, n::Int) = node_operand(a) ^ n
+(^)(a::Liftable, n::Int) = node_operand(a) ^ n
 
 """
     Pipe{A, B} <: AbstractNode

@@ -119,6 +119,29 @@ run(plan)
 
 `{input}` / `{output}` / `{wildcard_name}` placeholders inside the work template are filled at resolve time. Rule work can also be a function: `(inputs, outputs, wildcards) -> Cmd | String | Function`. Targets that already exist on disk are skipped.
 
+`expand` generates a target list from a template by Cartesian product:
+
+```julia
+expand("out/{s}.bam"; s=["A","B","C"])
+# ["out/A.bam", "out/B.bam", "out/C.bam"]
+expand("out/{s}.{ext}"; s=["A","B"], ext=["bam","bai"])
+# ["out/A.bam", "out/A.bai", "out/B.bam", "out/B.bai"]
+```
+
+A `Workflow` is the top-level object that bundles rules and default targets:
+
+```julia
+wf = Workflow(name="rnaseq")
+push!(wf,
+    @rule align("raw/{s}.fq" => "out/{s}.bam") = "bwa mem ref.fa {input} > {output}",
+    @rule index("out/{s}.bam" => "out/{s}.bam.bai") = "samtools index {input}")
+push!(wf, expand("out/{s}.bam.bai"; s=["A","B","C"]))
+run(wf)                              # uses default targets
+run(wf, targets=["out/A.bam.bai"])   # override
+```
+
+`push!(wf, x)` dispatches on type: `Rule` items go to `wf.rules`, strings (or vectors of strings) go to `wf.targets`.
+
 ## Memory-aware Parallel Scheduling
 
 For pipelines whose steps each load a multi-GB DataFrame, use `with_resources` + `memory_budget_mb` so the parallel scheduler holds total concurrent memory under a soft cap:

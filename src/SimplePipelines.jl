@@ -55,7 +55,7 @@ export @sh_str, sh, ShRun
 export @shell_raw_str, shell_raw
 export Resources, Resourced, with_resources
 export FilePath, materialize
-export Rule, @rule, resolve, NoWork
+export Rule, @rule, resolve, NoWork, expand, Workflow, plan
 
 import Base: >>, &, |, ^, |>, >>>
 
@@ -140,6 +140,10 @@ include("Display.jl")
 using PrecompileTools: @setup_workload, @compile_workload
 
 @setup_workload begin
+    # Redirect the state file to a tempfile during precompile so we do not litter
+    # the package source tree (or current directory) with a `.pipeline_state`.
+    _saved_state_path = STATE_FILE[]
+    STATE_FILE[] = tempname()
     @compile_workload begin
         # Single Cmd step
         run(Pipeline(@step nop = `true`); verbose=false, force=true)
@@ -154,7 +158,11 @@ using PrecompileTools: @setup_workload, @compile_workload
         SimplePipelines.match_pattern("data/{x}.fq", "data/A.fq")
         SimplePipelines.substitute("out/{x}.bam", Dict("x" => "A"))
         SimplePipelines.fill_special("cp {input} {output}", ["a"], ["b"])
+        # expand: lock in NamedTuple kwargs path
+        expand("out/{s}.bam"; s=["A", "B"])
     end
+    isfile(STATE_FILE[]) && rm(STATE_FILE[])
+    STATE_FILE[] = _saved_state_path
 end
 
 end # module
