@@ -23,15 +23,32 @@ makedocs(
         prettyurls = get(ENV, "CI", nothing) == "true",
         canonical = "https://mashu.github.io/SimplePipelines.jl",
         edit_link = "main",  # avoid git remote lookup when building locally
+        assets = ["assets/custom.css"],
     ),
     pages = [
         "Home" => "index.md",
-        "Tutorial" => "tutorial.md",
-        "Examples" => "examples.md",
-        "Doctests" => "doctests.md",
-        "API Reference" => "api.md",
-        "Design" => "design.md",
-        "Development" => "development.md",
+        "User guide" => [
+            "Steps and shell" => "guide/steps-and-shell.md",
+            "Composing pipelines" => "guide/composition.md",
+            "Control flow" => "guide/control-flow.md",
+            "Fan-out and reduce" => "guide/foreach-reduce.md",
+            "Running and inspecting" => "guide/running-and-results.md",
+        ],
+        "Examples" => [
+            "Basics" => "examples/basics.md",
+            "Control flow" => "examples/control-flow.md",
+            "Complex DAGs" => "examples/complex-dags.md",
+            "Bioinformatics" => "examples/bioinformatics.md",
+        ],
+        "Reference" => [
+            "Quick reference" => "reference/quickref.md",
+            "API" => "api.md",
+        ],
+        "Internals" => "design.md",
+        "Contributing" => [
+            "Extending & dev workflow" => "development.md",
+            "Doctest blocks" => "doctests.md",
+        ],
     ],
     checkdocs = CHECKDOCS,
     doctest = DOCTEST,
