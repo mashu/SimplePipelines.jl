@@ -142,7 +142,10 @@ end
 
 function publish_step!(ctx::RunContext, step::Step, results::Vector{AbstractStepResult})
     ch = lock(ctx.state_lock) do
-        ctx.memo[step] = results
+        # Only memoize successes so Retry can re-run the same Step after a failure.
+        if all(r -> r.success, results)
+            ctx.memo[step] = results
+        end
         pop!(ctx.in_flight, step)
     end
     put!(ch, results)

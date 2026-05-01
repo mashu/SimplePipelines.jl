@@ -7,7 +7,7 @@
 Abstract supertype of all pipeline nodes (Step, Sequence, Parallel, Retry, Fallback,
 Branch, Timeout, Force, Reduce, ForEach, Pipe, SameInputPipe, BroadcastPipe).
 Constructors only build the struct; execution is via [`run`](@ref), which builds a
-[`RunContext`](@ref) and dispatches to `run_node(node, ctx, forced, context_input)`.
+`RunContext` and dispatches to `run_node(node, ctx, forced, context_input)`.
 """
 abstract type AbstractNode end
 

@@ -29,7 +29,7 @@ const NO_RESOURCES = Resources(0, 0)
     Resourced{N} <: AbstractNode
 
 Wraps a node with `Resources`. The runtime acquires the matching budget slots on
-the [`RunContext`](@ref) before executing the wrapped node, releasing them on
+the `RunContext` before executing the wrapped node, releasing them on
 completion.
 """
 struct Resourced{N<:AbstractNode} <: AbstractNode

@@ -11,7 +11,7 @@ println("═══ Immune Repertoire Pipeline ═══\n")
 pear       = @step pear       = sh"echo '[PEAR] Merging paired-end R1.fastq R2.fastq'"
 to_fasta   = @step to_fasta   = sh"echo '[seqtk] Converting merged.assembled.fastq to FASTA'"
 igblast    = @step igblast    = sh"echo '[IgBLAST] V/D/J assignment with V.fasta D.fasta J.fasta'"
-filter_id  = @step filter_id  = () -> "Filtered by v_identity and j_identity > 90.0"
+filter_id  = @step filter_id  = (_msg) -> "Filtered by v_identity and j_identity > 90.0"
 
 immune = pear >> to_fasta >> igblast >> filter_id
 println("Pipeline structure:")
