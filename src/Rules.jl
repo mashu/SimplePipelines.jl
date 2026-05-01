@@ -1,4 +1,4 @@
-# Snakemake-style output-pattern rules.
+# Output-pattern rules: `{wildcard}` placeholders in paths; `resolve` walks targets backward.
 #
 # A `Rule` declares input and output *patterns* (with `{wildcard}` placeholders) and
 # a work template. Calling `resolve(rules, targets)` walks each requested target
@@ -56,8 +56,8 @@ function pattern_wildcards(patterns::Vector{String})
     names
 end
 
-# Snakemake contract: every wildcard referenced in inputs must come from outputs (or the
-# concrete target). Catch typos like `{smaple}` in inputs vs `{sample}` in outputs.
+# Every wildcard used in input patterns must appear in output patterns (or the concrete
+# target). Catches typos like `{smaple}` in inputs vs `{sample}` in outputs.
 function validate_rule_wildcards(name::Symbol, inputs::Vector{String}, outputs::Vector{String})
     out_wc = Set(pattern_wildcards(outputs))
     in_wc = pattern_wildcards(inputs)
