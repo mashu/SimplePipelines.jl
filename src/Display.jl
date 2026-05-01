@@ -135,6 +135,12 @@ function print_dag(io::IO, r::Resourced, pre::String, cont::String, color::Bool)
     print_dag(io, r.node, cont * "    ", cont * "    ", color)
 end
 
+function print_dag(io::IO, ::NoWork, pre::String, cont::String, color::Bool)
+    print(io, pre)
+    color ? printstyled(io, "∅ NoWork", color=:light_black) : print(io, "∅ NoWork")
+    println(io)
+end
+
 # Branch helper with marker
 function print_dag(io::IO, node::AbstractNode, pre::String, cont::String, color::Bool, marker_color::Symbol, marker::String)
     printstyled(io, marker, color=marker_color)
@@ -217,15 +223,18 @@ function Base.show(io::IO, ::MIME"text/plain", r::StepResult)
     end
     if r.result !== nothing
         print(io, "  result:       ", summary(r.result))
-        s = r.result
-        if s isa String && !isempty(s)
-            trunc = length(s) > 80 ? first(s, 80) * "…" : s
-            println(io, " \"", replace(trunc, '\n' => "\\n"), "\"")
-        else
-            println(io)
-        end
+        show_result_inline(io, r.result)
     end
 end
+
+# Inline preview of a step's result value: short string (truncated, newlines escaped),
+# or nothing for arbitrary types (the `summary` already named the type).
+function show_result_inline(io::IO, s::String)
+    isempty(s) && return println(io)
+    trunc = length(s) > 80 ? first(s, 80) * "…" : s
+    println(io, " \"", replace(trunc, '\n' => "\\n"), "\"")
+end
+show_result_inline(io::IO, _) = println(io)
 
 Base.show(io::IO, s::Step) = print(io, "Step(:", s.name, ")")
 Base.show(io::IO, s::Sequence) = print(io, "Sequence(", join(s.nodes, " >> "), ")")
@@ -242,6 +251,7 @@ Base.show(io::IO, p::Pipe) = print(io, "(", p.first, " |> ", p.second, ")")
 Base.show(io::IO, sip::SameInputPipe) = print(io, "(", sip.first, " >>> ", sip.second, ")")
 Base.show(io::IO, bp::BroadcastPipe) = print(io, "(", bp.first, " .>> ", bp.second, ")")
 Base.show(io::IO, r::Resourced) = print(io, "Resourced(", r.node, ", mem=", r.resources.mem_mb, "MB)")
+Base.show(io::IO, ::NoWork) = print(io, "NoWork()")
 Base.show(io::IO, p::Pipeline) = print(io, "Pipeline(\"", p.name, "\", ", count_steps(p.root), " steps)")
 
 function Base.show(io::IO, ::MIME"text/plain", p::Pipeline)

@@ -1,21 +1,21 @@
-# Per-step resource declarations and per-run memory budgets. Lets a parallel
-# scheduler hold a soft cap on concurrent memory usage so that, e.g., 100 parallel
-# branches each loading a 4 GB DataFrame do not OOM the machine.
+# Per-step resource declarations and per-run resource budgets. Lets a parallel
+# scheduler hold soft caps on concurrent memory and threads so that, e.g.,
+# 100 parallel branches each loading a 4 GB DataFrame do not OOM the machine.
 #
 # Usage:
 #     heavy = with_resources(my_step; mem_mb=4_000, threads=4)
-#     run(Pipeline(heavy & heavy_b); memory_budget_mb=8_000)
+#     run(Pipeline(heavy & heavy_b); memory_budget_mb=8_000, thread_budget=8)
 #
-# Branches with `mem_mb > 0` block (cooperatively, on a Condition) until the
-# RunContext has enough free budget to admit them. `mem_mb=0` is unconstrained
-# (default) so existing pipelines keep their semantics.
+# Branches with declared resources block (cooperatively, on a Condition) until
+# the RunContext has enough free budget to admit them. Zero means "no cap" so
+# existing pipelines keep their semantics.
 
 """
     Resources(; mem_mb=0, threads=1)
 
-Resource hint for a node. `mem_mb` is the peak in-memory footprint expected while
-the node runs (megabytes); `threads` is informational. A `mem_mb` of `0` means
-"no declared budget" — the node is treated as cheap.
+Resource hint for a node. `mem_mb` is the peak in-memory footprint (megabytes)
+expected while the node runs; `threads` is the number of CPU threads it intends
+to use. A `0` field means "do not charge against the corresponding budget".
 """
 struct Resources
     mem_mb::Int
@@ -23,13 +23,14 @@ struct Resources
 end
 Resources(; mem_mb::Int=0, threads::Int=1) = Resources(mem_mb, threads)
 
-const NO_RESOURCES = Resources(0, 1)
+const NO_RESOURCES = Resources(0, 0)
 
 """
     Resourced{N} <: AbstractNode
 
-Wraps a node with `Resources`. The parallel scheduler reads `node_resources` and
-enforces the memory budget before starting the wrapped node.
+Wraps a node with `Resources`. The runtime acquires the matching budget slots on
+the [`RunContext`](@ref) before executing the wrapped node, releasing them on
+completion.
 """
 struct Resourced{N<:AbstractNode} <: AbstractNode
     node::N
@@ -50,44 +51,53 @@ with_resources(x; kwargs...) = with_resources(node_operand(x); kwargs...)
 """
     node_resources(node) -> Resources
 
-Total declared memory budget for executing `node` (sum across nested `Resourced`
-wrappers; the scheduler holds the highest peak across one branch).
+Declared resource hints for `node`; defaults to no charge for un-annotated nodes.
 """
 node_resources(::AbstractNode) = NO_RESOURCES
 node_resources(r::Resourced) = r.resources
 
-"""Budget primitive owned by RunContext. Threads block on `cond` until enough mem_mb is free."""
-mutable struct MemoryBudget
-    capacity_mb::Int       # 0 = unlimited
-    used_mb::Int
-    cond::Threads.Condition
+"""Generic counting semaphore guarded by a `Condition`. `capacity == 0` disables the cap."""
+mutable struct ResourceBudget
+    capacity::Int
+    used::Int
+    cond::Condition
 end
-MemoryBudget(capacity_mb::Int) = MemoryBudget(capacity_mb, 0, Threads.Condition())
+ResourceBudget(capacity::Int) = ResourceBudget(capacity, 0, Condition())
 
-"""Acquire `mem_mb` from the budget; blocks until available. No-op when capacity_mb == 0 or mem_mb == 0."""
-function acquire_memory!(b::MemoryBudget, mem_mb::Int)
-    (b.capacity_mb == 0 || mem_mb <= 0) && return
+"""
+    acquire!(b::ResourceBudget, n::Int)
+
+Acquire `n` units; blocks until available. No-op when the budget is uncapped or
+`n <= 0`. An oversized request (`n > capacity`) is admitted alone rather than
+deadlocking. Returns the actual amount admitted (so the caller releases the
+same number).
+"""
+function acquire!(b::ResourceBudget, n::Int)
+    (b.capacity == 0 || n <= 0) && return 0
+    admit = min(n, b.capacity)
     lock(b.cond)
     try
-        # An over-large request is admitted alone (rather than deadlocking) when
-        # nothing else is holding the budget.
-        admit_mb = min(mem_mb, b.capacity_mb)
-        while b.used_mb + admit_mb > b.capacity_mb
+        while b.used + admit > b.capacity
             wait(b.cond)
         end
-        b.used_mb += admit_mb
+        b.used += admit
     finally
         unlock(b.cond)
     end
-    nothing
+    admit
 end
 
-function release_memory!(b::MemoryBudget, mem_mb::Int)
-    (b.capacity_mb == 0 || mem_mb <= 0) && return
+"""
+    release!(b::ResourceBudget, n::Int)
+
+Release `n` previously-acquired units and wake any waiters. No-op when uncapped
+or `n <= 0`. `n` should be the value returned by the matching `acquire!`.
+"""
+function release!(b::ResourceBudget, n::Int)
+    (b.capacity == 0 || n <= 0) && return
     lock(b.cond)
     try
-        admit_mb = min(mem_mb, b.capacity_mb)
-        b.used_mb = max(0, b.used_mb - admit_mb)
+        b.used = max(0, b.used - n)
         notify(b.cond; all=true)
     finally
         unlock(b.cond)

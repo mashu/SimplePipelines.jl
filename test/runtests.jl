@@ -1418,4 +1418,94 @@ clear_state!()
             rm(dir; recursive=true, force=true)
         end
     end
+
+    @testset "Reduce: synthetic step is stable across calls" begin
+        # The reducer step should be cached on the Reduce node so terminal_steps,
+        # state hashing, and DAG dedup all see the same Step instance.
+        a = @step a = `echo a`
+        b = @step b = `echo b`
+        red = Reduce(xs -> length(xs), a & b; name=:counter)
+        @test red.reduce_step.name == :counter
+        @test red.reduce_step === SimplePipelines.terminal_steps(red)[1]
+
+        results = run(red, verbose=false, force=true)
+        @test results[end].success
+        @test results[end].step === red.reduce_step
+    end
+
+    @testset "resolve: returns NoWork when all targets exist" begin
+        dir = mktempdir()
+        try
+            cd(dir) do
+                rule_a = @rule a([] => "a.txt") = "echo a > {output}"
+                # Pre-create the target so resolve has nothing to do.
+                write("a.txt", "already there")
+                plan = resolve([rule_a], ["a.txt"])
+                @test plan isa NoWork
+                results = run(plan, verbose=false)
+                @test isempty(results)
+                @test count_steps(plan) == 0
+            end
+        finally
+            rm(dir; recursive=true, force=true)
+        end
+    end
+
+    @testset "@rule: rejects unbalanced wildcards" begin
+        # `{smaple}` typo on the input must not silently produce empty substitutions.
+        @test_throws ErrorException begin
+            @rule bad("in/{smaple}.fq" => "out/{sample}.bam") = "cp {input} {output}"
+        end
+    end
+
+    @testset "thread_budget gates parallel branches" begin
+        # Four branches each requesting 2 threads under a 2-thread budget should
+        # serialize: peak concurrency stays at 1.
+        active = Threads.Atomic{Int}(0)
+        peak = Threads.Atomic{Int}(0)
+        bump_peak! = () -> begin
+            cur = Threads.atomic_add!(active, 1) + 1
+            old = peak[]
+            while cur > old
+                Threads.atomic_cas!(peak, old, cur) == old && break
+                old = peak[]
+            end
+            sleep(0.04)
+            Threads.atomic_sub!(active, 1)
+            "ok"
+        end
+        nodes = AbstractNode[
+            with_resources(Step(Symbol("t$i"), bump_peak!); threads=2)
+            for i in 1:4
+        ]
+        run(reduce(&, nodes), verbose=false, force=true, thread_budget=2, jobs=4)
+        @test peak[] == 1
+    end
+
+    @testset "Vector-backed Sequence/Parallel scales" begin
+        # 100 children must build without tuple-type blow-up.
+        many = [@step Symbol("step_$i") = `true` for i in 1:100]
+        seq = reduce(>>, many)
+        par = reduce(&, many)
+        @test seq isa Sequence
+        @test par isa Parallel
+        @test length(seq.nodes) == 100
+        @test length(par.nodes) == 100
+        # Build a wider DAG and run a small slice to make sure dispatch still works.
+        small_par = reduce(&, many[1:5])
+        results = run(small_par, verbose=false, force=true)
+        @test length(results) == 5 && all(r -> r.success, results)
+    end
+
+    @testset "show_result_inline dispatches on result type" begin
+        # Display path for non-String results no longer hits `isa String` branching;
+        # multi-line show works for Int/Vector/etc.
+        s_int = Step(:n, () -> 42)
+        results = run(s_int, verbose=false, force=true, keep_outputs=:all)
+        io = IOBuffer()
+        show(io, MIME("text/plain"), results[1])
+        out = String(take!(io))
+        @test occursin("StepResult: n", out)
+        @test occursin("result:", out)
+    end
 end

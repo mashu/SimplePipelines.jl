@@ -55,11 +55,11 @@ export @sh_str, sh, ShRun
 export @shell_raw_str, shell_raw
 export Resources, Resourced, with_resources
 export FilePath, materialize
-export Rule, @rule, resolve
+export Rule, @rule, resolve, NoWork
 
 import Base: >>, &, |, ^, |>, >>>
 
-using Base.Threads: @spawn, fetch
+using Base.Threads: @spawn, fetch, Condition
 
 include("StateFormat.jl")
 using .StateFormat: StateFileLayout, STATE_LAYOUT,
@@ -132,5 +132,29 @@ include("RunNodes.jl")
 include("Rules.jl")
 include("Run.jl")
 include("Display.jl")
+
+#==============================================================================#
+# Precompile workload — locks in inference for the hot dispatch paths so first
+# `run(pipeline)` is sub-100 ms instead of multi-second.
+#==============================================================================#
+using PrecompileTools: @setup_workload, @compile_workload
+
+@setup_workload begin
+    @compile_workload begin
+        # Single Cmd step
+        run(Pipeline(@step nop = `true`); verbose=false, force=true)
+        # Sequence + Parallel + Function step
+        f = () -> 1
+        run(Pipeline((@step a = `true`) >> (@step b = f) & (@step c = `true`)); verbose=false, force=true)
+        # ForEach over a small collection
+        run(Pipeline(ForEach([1, 2]) do x; Step(Symbol("e", x), `true`); end); verbose=false, force=true)
+        # Resource budget
+        run(Pipeline(with_resources(`true`; mem_mb=1)); verbose=false, force=true, memory_budget_mb=8)
+        # Rule resolution helpers (avoid hitting the filesystem)
+        SimplePipelines.match_pattern("data/{x}.fq", "data/A.fq")
+        SimplePipelines.substitute("out/{x}.bam", Dict("x" => "A"))
+        SimplePipelines.fill_special("cp {input} {output}", ["a"], ["b"])
+    end
+end
 
 end # module

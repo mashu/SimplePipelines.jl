@@ -37,7 +37,34 @@ end
 
 # `@rule name([] => "out")` expands to `[]` which infers as `Vector{Any}`; normalize to `String`.
 function Rule(name::Symbol, inputs::AbstractVector, outputs::AbstractVector, work::W) where {W}
-    Rule{W}(name, String[String(s) for s in inputs], String[String(s) for s in outputs], work)
+    inputs_s = String[String(s) for s in inputs]
+    outputs_s = String[String(s) for s in outputs]
+    validate_rule_wildcards(name, inputs_s, outputs_s)
+    Rule{W}(name, inputs_s, outputs_s, work)
+end
+
+"""Collect distinct wildcard names that appear in any of the patterns, in order of first appearance."""
+function pattern_wildcards(patterns::Vector{String})
+    seen = Set{String}()
+    names = String[]
+    for p in patterns, m in eachmatch(WILDCARD_RE, p)
+        n = String(m.captures[1])
+        n in seen && continue
+        push!(seen, n)
+        push!(names, n)
+    end
+    names
+end
+
+# Snakemake contract: every wildcard referenced in inputs must come from outputs (or the
+# concrete target). Catch typos like `{smaple}` in inputs vs `{sample}` in outputs.
+function validate_rule_wildcards(name::Symbol, inputs::Vector{String}, outputs::Vector{String})
+    out_wc = Set(pattern_wildcards(outputs))
+    in_wc = pattern_wildcards(inputs)
+    extras = String[w for w in in_wc if !(w in out_wc)]
+    isempty(extras) ||
+        error("Rule `$name`: input pattern uses wildcard(s) $(extras) not present in any output pattern $(outputs).")
+    nothing
 end
 
 """
@@ -183,8 +210,8 @@ end
 
 function compose_with_deps(node::AbstractNode, deps::Vector{<:AbstractNode})
     isempty(deps) && return node
-    length(deps) == 1 && return Sequence((deps[1], node))
-    Sequence((Parallel((deps...,)), node))
+    length(deps) == 1 && return Sequence(AbstractNode[deps[1], node])
+    Sequence(AbstractNode[Parallel(AbstractNode[deps...]), node])
 end
 
 build_step_from_work(name::Symbol, w::Cmd, inputs, outputs) = Step(name, w, inputs, outputs)
@@ -203,6 +230,10 @@ Build a DAG that produces every path in `targets`, working backward through
 emitted for it). Multiple targets sharing a dependency reuse the same `Step`
 instance, so the runtime DAG protocol executes that dependency exactly once.
 
+If every requested target already exists on disk, returns a no-op node
+([`NoWork`](@ref)) that produces no step results when run — making "rerun the
+pipeline; everything's fresh" friendly instead of an error.
+
 Throws if a non-existent target has no producing rule, or if rule resolution
 forms a cycle.
 """
@@ -217,8 +248,9 @@ function resolve(rules::AbstractVector{<:Rule}, targets::AbstractVector{<:Abstra
         n === nothing && continue
         push!(nodes, n)
     end
-    isempty(nodes) && error("All targets exist on disk; nothing to do.")
-    length(nodes) == 1 ? nodes[1] : Parallel((nodes...,))
+    isempty(nodes) && return NoWork()
+    length(nodes) == 1 && return nodes[1]
+    Parallel(nodes)   # Vector{AbstractNode}
 end
 
 # Returns AbstractNode (the node producing target) or nothing (target already on disk).

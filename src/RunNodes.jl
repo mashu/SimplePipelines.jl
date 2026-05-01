@@ -55,34 +55,41 @@ end
 # do not acquire — otherwise waiting visitors would double-count the budget.
 # `try/finally` is used purely to guarantee release; no exceptions are caught.
 run_node(r::Resourced, ctx::RunContext, forced::Bool=false, context_input=nothing) =
-    run_resourced(r.node, r.resources.mem_mb, ctx, forced, context_input)
+    run_resourced(r.node, r.resources, ctx, forced, context_input)
 
 # Step with no context_input: claim, and only acquire on ExecuteClaim.
-function run_resourced(step::Step, mem_mb::Int, ctx::RunContext, forced::Bool, ::Nothing)
-    handle_resourced_claim(claim_step!(ctx, step), step, mem_mb, ctx, forced)
+function run_resourced(step::Step, res::Resources, ctx::RunContext, forced::Bool, ::Nothing)
+    handle_resourced_claim(claim_step!(ctx, step), step, res, ctx, forced)
 end
 
 # Anything else (or Step with context_input): acquire around the run unconditionally;
 # such nodes are not deduplicated by the runtime, so each visit performs work.
-function run_resourced(node::AbstractNode, mem_mb::Int, ctx::RunContext, forced::Bool, context_input)
-    acquire_memory!(ctx.memory_budget, mem_mb)
-    try
+function run_resourced(node::AbstractNode, res::Resources, ctx::RunContext, forced::Bool, context_input)
+    with_acquired_resources(res, ctx) do
         run_node(node, ctx, forced, context_input)
-    finally
-        release_memory!(ctx.memory_budget, mem_mb)
     end
 end
 
-handle_resourced_claim(cached::Vector{AbstractStepResult}, ::Step, ::Int, ::RunContext, ::Bool) = cached
-handle_resourced_claim(ch::Channel{Vector{AbstractStepResult}}, ::Step, ::Int, ::RunContext, ::Bool) = fetch(ch)
-function handle_resourced_claim(::ExecuteClaim, step::Step, mem_mb::Int, ctx::RunContext, forced::Bool)
-    acquire_memory!(ctx.memory_budget, mem_mb)
-    try
+handle_resourced_claim(cached::Vector{AbstractStepResult}, ::Step, ::Resources, ::RunContext, ::Bool) = cached
+handle_resourced_claim(ch::Channel{Vector{AbstractStepResult}}, ::Step, ::Resources, ::RunContext, ::Bool) = fetch(ch)
+function handle_resourced_claim(::ExecuteClaim, step::Step, res::Resources, ctx::RunContext, forced::Bool)
+    with_acquired_resources(res, ctx) do
         out = execute_with_freshness(step, ctx, forced, nothing)
         publish_step!(ctx, step, out)
         out
+    end
+end
+
+# Acquire matching slots in both budgets, run, release in reverse order.
+# `try/finally` here is purely cleanup, not exception handling.
+function with_acquired_resources(f, res::Resources, ctx::RunContext)
+    mem_taken = acquire!(ctx.memory_budget, res.mem_mb)
+    threads_taken = acquire!(ctx.thread_budget, res.threads)
+    try
+        f()
     finally
-        release_memory!(ctx.memory_budget, mem_mb)
+        release!(ctx.thread_budget, threads_taken)
+        release!(ctx.memory_budget, mem_taken)
     end
 end
 
@@ -218,21 +225,22 @@ function run_node(r::Reduce, ctx::RunContext, forced::Bool=false, context_input=
     start = time()
     results = run_node(r.node, ctx, forced, context_input)
     outputs = [res.result for res in results if res.success]
-    reduce_step = Step(r.name, r.reducer)
+    rs = r.reduce_step
     if length(outputs) < length(results)
-        return vcat(results, [StepResult(reduce_step, false, time() - start, reduce_step.inputs,
-                                         reduce_step.outputs, "Reduce aborted: upstream failed")])
+        return vcat(results, [StepResult(rs, false, time() - start, rs.inputs,
+                                         rs.outputs, "Reduce aborted: upstream failed")])
     end
     log_reduce(ctx, r.name)
     outcome = run_safely() do
         r.reducer(outputs)
     end
     if !outcome.ok
-        return vcat(results, [StepResult(reduce_step, false, time() - start, reduce_step.inputs,
-                                         reduce_step.outputs, "Reduce error: $(outcome.value)")])
+        return vcat(results, [StepResult(rs, false, time() - start, rs.inputs,
+                                         rs.outputs, "Reduce error: $(outcome.value)")])
     end
-    vcat(results, [StepResult(reduce_step, true, time() - start, reduce_step.inputs,
-                              reduce_step.outputs, outcome.value)])
+    result = StepResult(rs, true, time() - start, rs.inputs, rs.outputs, outcome.value)
+    mark_complete!(ctx, rs)
+    vcat(results, [result])
 end
 
 # Cycle check for ForEach expansion.
@@ -253,7 +261,7 @@ node_children(p::Pipe) = [p.first, p.second]
 node_children(sip::SameInputPipe) = [sip.first, sip.second]
 node_children(bp::BroadcastPipe) = [bp.first, bp.second]
 node_children(r::Resourced) = [r.node]
-node_children(::Union{Step,ForEach}) = AbstractNode[]
+node_children(::Union{Step,ForEach,NoWork}) = AbstractNode[]
 
 function run_node(pipe::Pipe, ctx::RunContext, forced::Bool=false, context_input=nothing)
     r1 = run_node(pipe.first, ctx, forced, context_input)
@@ -277,7 +285,7 @@ function run_node(bp::BroadcastPipe{<:ForEach, <:AbstractNode}, ctx::RunContext,
     run_node(ParallelBranches(paired, contexts), ctx, forced, nothing)
 end
 function run_node(bp::BroadcastPipe{<:Parallel, <:AbstractNode}, ctx::RunContext, forced::Bool=false, context_input=nothing)
-    run_node(Parallel([n >> bp.second for n in bp.first.nodes]...), ctx, forced, context_input)
+    run_node(Parallel(AbstractNode[n >> bp.second for n in bp.first.nodes]), ctx, forced, context_input)
 end
 function run_node(bp::BroadcastPipe, ctx::RunContext, forced::Bool=false, context_input=nothing)
     run_node(bp.first >> bp.second, ctx, forced, context_input)
@@ -318,6 +326,9 @@ function run_node(fe::ForEach, ctx::RunContext, forced::Bool=false, context_inpu
     run_node(ParallelBranches(nodes, contexts), ctx, forced, nothing)
 end
 
+# No-op node — produces no step results.
+run_node(::NoWork, ::RunContext, ::Bool=false, _=nothing) = AbstractStepResult[]
+
 """
     steps(node) -> Vector{Step}
 
@@ -337,6 +348,7 @@ steps(sip::SameInputPipe) = unique_by_id(vcat(steps(sip.first), steps(sip.second
 steps(bp::BroadcastPipe) = unique_by_id(vcat(steps(bp.first), steps(bp.second)))
 steps(r::Resourced) = steps(r.node)
 steps(::ForEach) = Step[]  # lazy: not discovered until run
+steps(::NoWork) = Step[]
 
 function unique_by_id(v::AbstractVector{<:Step})
     seen = Set{UInt}()
@@ -362,3 +374,4 @@ count_steps(n::AbstractNode) = length(steps(n))
 count_steps(b::Branch) = max(length(steps(b.if_true)), length(steps(b.if_false)))
 count_steps(r::Reduce) = length(steps(r.node)) + 1
 count_steps(::ForEach) = 0
+count_steps(::NoWork) = 0
