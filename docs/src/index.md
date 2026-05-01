@@ -154,6 +154,6 @@ pipeline = (branch1 & branch2 & branch3) >> merge
 ## Contents
 
 ```@contents
-Pages = ["tutorial.md", "examples.md", "api.md", "design.md", "development.md"]
+Pages = ["tutorial.md", "examples.md", "doctests.md", "api.md", "design.md", "development.md"]
 Depth = 2
 ```

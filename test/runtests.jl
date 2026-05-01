@@ -1511,3 +1511,24 @@ clear_state!()
         @test occursin("result:", out)
     end
 end
+
+# Documenter `jldoctest` blocks in `docs/src/` (see `doctests.md`). Spawn a fresh Julia with a
+# normal `JULIA_LOAD_PATH` (the `Pkg.test` sandbox hides `Pkg` from the parent process).
+@testset "Documentation (Documenter doctest :only)" begin
+    root = dirname(@__DIR__)
+    docs = joinpath(root, "docs")
+    make_jl = joinpath(docs, "make.jl")
+    code = string(
+        "import Pkg; ",
+        "Pkg.activate(", repr(docs), "); ",
+        "Pkg.develop(path=", repr(root), "); ",
+        "Pkg.instantiate(); ",
+        "ENV[\"DOCUMENTER_DOCTEST\"]=\"only\"; ",
+        "include(", repr(make_jl), ")",
+    )
+    cmd = `$(Base.julia_cmd()) -e $(code)`
+    ok = withenv("JULIA_LOAD_PATH" => "@:@stdlib") do
+        success(run(cmd))
+    end
+    @test ok
+end
