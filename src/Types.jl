@@ -1,15 +1,15 @@
-# Core node types, composition operators, StepResult, RunOutcome, Verbose/Silent, Pipeline.
+# Core node types, composition operators, StepResult, RunOutcome, Pipeline.
 # Included first (after StateFormat and shell macro).
 
 """
     AbstractNode
 
-Abstract supertype of all pipeline nodes (Step, Sequence, Parallel, Retry, Fallback, Branch, Timeout, Force, Reduce, ForEach, Pipe, SameInputPipe, BroadcastPipe).
-Constructors only build the struct; execution is via the functor: call `(node)(v, forced)` which dispatches to `run_node(node, v, forced)`.
+Abstract supertype of all pipeline nodes (Step, Sequence, Parallel, Retry, Fallback,
+Branch, Timeout, Force, Reduce, ForEach, Pipe, SameInputPipe, BroadcastPipe).
+Constructors only build the struct; execution is via [`run`](@ref), which builds a
+`RunContext` and dispatches to `run_node(node, ctx, forced, context_input)`.
 """
 abstract type AbstractNode end
-
-(node::AbstractNode)(v, forced::Bool=false) = run_node(node, v, forced)
 
 """
     Step{F} <: AbstractNode
@@ -63,25 +63,37 @@ work_label(::ShRun) = "sh(...)"
 work_label(x) = repr(x)
 
 """
-    Sequence{T} <: AbstractNode
+    Sequence <: AbstractNode
     a >> b
 
-Executes nodes sequentially, stopping on first failure. **Data passing:** the next node receives one value: the previous step's *output* (declared output paths when applicable, else the step's result). When the previous node produced multiple results (e.g. Parallel/ForEach), the next node receives **only the last** branch's output. Distinct from `|>` (which passes a vector of all) and `.>>` (which runs the next step once per branch).
+Executes nodes sequentially, stopping on first failure. **Data passing:** the next node
+receives one value: the previous step's *output* (declared output paths when applicable,
+else the step's result). When the previous node produced multiple results (e.g.
+Parallel/ForEach), the next node receives **only the last** branch's output. Distinct
+from `|>` (which passes a vector of all) and `.>>` (which runs the next step once per
+branch).
+
+Children are stored in a `Vector{AbstractNode}` so `Sequence` scales to thousands of
+children without compile-time tuple-type blow-up.
 """
-struct Sequence{T<:Tuple} <: AbstractNode
-    nodes::T
+struct Sequence <: AbstractNode
+    nodes::Vector{AbstractNode}
 end
-Sequence(nodes::Vararg{AbstractNode}) = Sequence(nodes)
+Sequence(nodes::Vararg{AbstractNode}) = Sequence(collect(AbstractNode, nodes))
+Sequence(nodes::Tuple{Vararg{AbstractNode}}) = Sequence(collect(AbstractNode, nodes))
 
 """
-    Parallel{T} <: AbstractNode
+    Parallel <: AbstractNode
 
 Executes nodes concurrently using threads. Created automatically by the `&` operator.
+Children are stored in a `Vector{AbstractNode}` so wide fan-outs (hundreds of samples)
+do not blow up compile time.
 """
-struct Parallel{T<:Tuple} <: AbstractNode
-    nodes::T
+struct Parallel <: AbstractNode
+    nodes::Vector{AbstractNode}
 end
-Parallel(nodes::Vararg{AbstractNode}) = Parallel(nodes)
+Parallel(nodes::Vararg{AbstractNode}) = Parallel(collect(AbstractNode, nodes))
+Parallel(nodes::Tuple{Vararg{AbstractNode}}) = Parallel(collect(AbstractNode, nodes))
 
 """
     Retry{N} <: AbstractNode
@@ -115,6 +127,11 @@ struct Branch{C<:Function, T<:AbstractNode, F<:AbstractNode} <: AbstractNode
     if_true::T
     if_false::F
 end
+function Branch(cond::Function, t, f)
+    tn = node_operand(t)
+    fn = node_operand(f)
+    Branch{typeof(cond), typeof(tn), typeof(fn)}(cond, tn, fn)
+end
 
 """
     Timeout{N} <: AbstractNode
@@ -144,8 +161,11 @@ struct Reduce{F<:Function, N<:AbstractNode} <: AbstractNode
     reducer::F
     node::N
     name::Symbol
+    reduce_step::Step{F}
 end
-Reduce(f::Function, node::AbstractNode; name::Symbol=:reduce) = Reduce(f, node, name)
+function Reduce(f::Function, node::AbstractNode; name::Symbol=:reduce)
+    Reduce{typeof(f), typeof(node)}(f, node, name, Step(name, f))
+end
 Reduce(node::AbstractNode; name::Symbol=:reduce) = f -> Reduce(f, node; name=name)
 
 """Lazy node: run block over file matches (pattern string) or over a collection (vector). Dispatches on second argument."""
@@ -154,6 +174,14 @@ struct ForEach{F, P} <: AbstractNode
     source::P  # String (file pattern) or Vector{T} (items)
 end
 
+"""
+    NoWork() <: AbstractNode
+
+Sentinel node that performs no work and produces no step results. Returned by
+`resolve` when every target is already on disk.
+"""
+struct NoWork <: AbstractNode end
+
 # Operands to >>, &, | may be AbstractNode, Cmd, or Function. Conversion via dispatch only (no isa/Any).
 # Explicit (Cmd, Cmd), (Function, Function), etc. avoid ambiguity with Base (e.g. & for process composition)
 # and keep one-line bodies via node_operand.
@@ -161,11 +189,12 @@ node_operand(x::AbstractNode) = x
 node_operand(x::Cmd) = Step(x)
 node_operand(x::Function) = Step(x)
 
-# Composition operators
->>(a::AbstractNode, b::AbstractNode) = Sequence((a, b))
->>(a::Sequence, b::AbstractNode) = Sequence((a.nodes..., b))
->>(a::AbstractNode, b::Sequence) = Sequence((a, b.nodes...))
->>(a::Sequence, b::Sequence) = Sequence((a.nodes..., b.nodes...))
+# Composition operators. Sequence/Parallel append/concat in place on a Vector
+# so building wide pipelines does not allocate a new tuple type per node.
+>>(a::AbstractNode, b::AbstractNode) = Sequence(AbstractNode[a, b])
+>>(a::Sequence, b::AbstractNode) = Sequence(push!(copy(a.nodes), b))
+>>(a::AbstractNode, b::Sequence) = Sequence(pushfirst!(copy(b.nodes), a))
+>>(a::Sequence, b::Sequence) = Sequence(vcat(a.nodes, b.nodes))
 >>(a::Cmd, b::Cmd) = node_operand(a) >> node_operand(b)
 >>(a::Function, b::Function) = node_operand(a) >> node_operand(b)
 >>(a::Cmd, b::Function) = node_operand(a) >> node_operand(b)
@@ -175,10 +204,10 @@ node_operand(x::Function) = Step(x)
 >>(a::Function, b::AbstractNode) = node_operand(a) >> b
 >>(a::AbstractNode, b::Function) = a >> node_operand(b)
 
-(&)(a::AbstractNode, b::AbstractNode) = Parallel((a, b))
-(&)(a::Parallel, b::AbstractNode) = Parallel((a.nodes..., b))
-(&)(a::AbstractNode, b::Parallel) = Parallel((a, b.nodes...))
-(&)(a::Parallel, b::Parallel) = Parallel((a.nodes..., b.nodes...))
+(&)(a::AbstractNode, b::AbstractNode) = Parallel(AbstractNode[a, b])
+(&)(a::Parallel, b::AbstractNode) = Parallel(push!(copy(a.nodes), b))
+(&)(a::AbstractNode, b::Parallel) = Parallel(pushfirst!(copy(b.nodes), a))
+(&)(a::Parallel, b::Parallel) = Parallel(vcat(a.nodes, b.nodes))
 (&)(a::Cmd, b::Cmd) = node_operand(a) & node_operand(b)
 (&)(a::Function, b::Function) = node_operand(a) & node_operand(b)
 (&)(a::Cmd, b::Function) = node_operand(a) & node_operand(b)
@@ -267,9 +296,6 @@ struct RunOutcome{T}
     ok::Bool
     value::T
 end
-
-struct Verbose end
-struct Silent end
 
 """
     Pipeline{N<:AbstractNode}

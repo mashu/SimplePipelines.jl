@@ -10,7 +10,7 @@ Order = [:module]
 ## Types
 
 ```@docs
-SimplePipelines.AbstractNode
+AbstractNode
 SimplePipelines.AbstractStepResult
 StepResult
 Step
@@ -27,14 +27,43 @@ Pipeline
 SimplePipelines.Pipe
 SameInputPipe
 BroadcastPipe
+Resources
+Resourced
+FilePath
+Rule
+NoWork
 ```
 
 ## Macros
 
 ```@docs
 @step
+@rule
 @sh_str
 @shell_raw_str
+```
+
+## Resource-aware execution
+
+Annotate heavy nodes with [`with_resources`](@ref) and pass `memory_budget_mb` /
+`thread_budget` to `run` so the parallel scheduler keeps total concurrent
+resource use under a soft cap. Wrap heavy values in [`FilePath`](@ref) and use
+[`materialize`](@ref) at the consumer to keep memory bounded between steps.
+
+```@docs
+with_resources
+materialize
+```
+
+## Output-side wildcard inference
+
+Declare reusable [`Rule`](@ref)s with `{wildcard}` patterns, then call
+[`resolve`](@ref) to walk a target list backward through the rule set and build
+a runnable DAG. Rule work supports both shell templates and `(inputs, outputs,
+wildcards) -> Cmd | String | Function`.
+
+```@docs
+resolve
 ```
 
 ## Operators

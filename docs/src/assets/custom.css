@@ -1,0 +1,37 @@
+/* SimplePipelines docs — readability and clearer hierarchy */
+
+/* Comfortable measure for prose */
+.docs-main article.content {
+  max-width: 52rem;
+}
+
+.docs-main article.content > p,
+.docs-main article.content > ul,
+.docs-main article.content > ol {
+  line-height: 1.65;
+}
+
+/* Section headings: clearer separation */
+.docs-main article.content h2 {
+  margin-top: 2rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border-color, rgba(127, 127, 127, 0.25));
+}
+
+.docs-main article.content h3 {
+  margin-top: 1.35rem;
+}
+
+.docs-main article.content table {
+  margin: 1rem 0;
+}
+
+.docs-main article.content td,
+.docs-main article.content th {
+  padding: 0.4rem 0.65rem;
+  vertical-align: top;
+}
+
+.docs-main article.content pre {
+  border-radius: 6px;
+}

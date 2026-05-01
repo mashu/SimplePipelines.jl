@@ -1,14 +1,14 @@
 name = "SimplePipelines"
 uuid = "01cec563-5001-4a35-82a7-0a4ff79c2cf4"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Mateusz Kaduk <mateusz.kaduk@gmail.com>"]
 
 [deps]
-Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
+PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 
 [compat]
-Documenter = "1.16.1"
+PrecompileTools = "1"
 julia = "1.9"
 
 [extras]

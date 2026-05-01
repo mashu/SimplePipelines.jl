@@ -12,13 +12,21 @@ julia --project=. -e 'using Pkg; Pkg.test()'
 
 ## Building the docs
 
-From the repo root, install Documenter (if needed) and run the doc build. **Note:** `Pkg.activate` does not accept an `extras` argument; use `Pkg.add("Documenter")` to pull in the docs dependency.
+The docs project lives in `docs/` (`docs/Project.toml`). `docs/make.jl` sets `root = dirname(@__FILE__)`, so you can run it from any working directory.
 
 ```bash
-julia --project=. -e 'using Pkg; Pkg.add("Documenter"); using Documenter; using SimplePipelines; cd("docs"); include("make.jl")'
+julia --project=docs -e 'using Pkg; Pkg.develop(path=".."); Pkg.instantiate(); include("make.jl")'
 ```
 
-Or in the Julia REPL (start with `julia --project=.`): run `using Pkg; Pkg.add("Documenter"); cd("docs"); include("make.jl")`.
+Run from the **repository root** (so `path=".."` resolves to the package), or use an absolute path to the package instead of `".."`.
+
+### Doctests
+
+Runnable examples live in `docs/src/doctests.md` as Documenter `jldoctest` fenced code blocks. They run whenever `makedocs` runs (see the `doctest` keyword in `docs/make.jl`).
+
+- Full HTML build plus doctests: default `DOCUMENTER_DOCTEST` unset or `true`.
+- **Doctests only** (no HTML; fast): set `DOCUMENTER_DOCTEST=only` before `include("make.jl")`. This is what `Pkg.test()` runs in a subprocess so CI exercises the same checks as the doc build.
+- To skip doctests temporarily: `DOCUMENTER_DOCTEST=false`.
 
 Run tests with code coverage (for local profiling or CI):
 

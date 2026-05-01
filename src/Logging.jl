@@ -1,96 +1,107 @@
-# Verbosity logging (Verbose/Silent dispatch). Requires Types.jl.
-# Normalize so Parallel/ParallelBranches never pass wrong type (e.g. Cmd from data-passing) to children.
-as_verbosity(::Verbose) = Verbose()
-as_verbosity(::Silent) = Silent()
-as_verbosity(::V) where V = Silent()
+# Verbosity logging routed through RunContext. All printing is serialized via
+# ctx.log_lock so concurrent Parallel/ForEach branches do not interleave output.
 
-log_start(::Silent, ::Step) = nothing
-function log_start(::Verbose, s::Step)
-    printstyled("▶ Running: ", color=:cyan)
-    println(step_label(s))
-end
+with_log(f, ctx::RunContext) = ctx.verbose ? lock(f, ctx.log_lock) : nothing
 
-log_skip(::Silent, ::Step) = nothing
-function log_skip(::Verbose, s::Step)
-    printstyled("⊳ Up to date: ", color=:light_black)
-    printstyled(step_label(s), "\n", color=:light_black)
-end
-
-log_result(::Silent, ::AbstractStepResult) = nothing
-function log_result(::Verbose, r::AbstractStepResult)
-    if r.success
-        printstyled("  ✓ ", color=:green)
-        println("Completed in $(round(r.duration, digits=2))s")
-    else
-        printstyled("  ✗ ", color=:red, bold=true)
-        println("Completed in $(round(r.duration, digits=2))s")
-        printstyled("  Error: ", color=:red)
-        println(r.result)
+function log_start(ctx::RunContext, s::Step)
+    with_log(ctx) do
+        printstyled("▶ Running: ", color=:cyan)
+        println(step_label(s))
     end
 end
 
-log_parallel(::Silent, ::Int) = nothing
-function log_parallel(::Verbose, n::Int)
-    printstyled("⊕ ", color=:magenta)
-    println("Running $n branches in parallel...")
-end
-# Fallback when verbosity slot gets wrong type (e.g. from data-passing); avoid MethodError.
-log_parallel(::V, ::Int) where V = nothing
-
-log_progress(::Silent, ::Int, ::Int) = nothing
-function log_progress(::Verbose, done::Int, total::Int)
-    left = total - done
-    printstyled("  → ", color=:light_black)
-    printstyled("$done/$total", color=:cyan)
-    printstyled(" done", color=:light_black)
-    println(left > 0 ? " ($left left)" : "")
+function log_skip(ctx::RunContext, s::Step)
+    with_log(ctx) do
+        printstyled("⊳ Up to date: ", color=:light_black)
+        printstyled(step_label(s), "\n", color=:light_black)
+    end
 end
 
-log_retry(::Silent, ::Int, ::Int) = nothing
-function log_retry(::Verbose, n::Int, max::Int)
-    printstyled("↻ ", color=:yellow)
-    println("Attempt $n/$max")
+function log_result(ctx::RunContext, r::AbstractStepResult)
+    with_log(ctx) do
+        if r.success
+            printstyled("  ✓ ", color=:green)
+            println("Completed in $(round(r.duration, digits=2))s")
+        else
+            printstyled("  ✗ ", color=:red, bold=true)
+            println("Completed in $(round(r.duration, digits=2))s")
+            printstyled("  Error: ", color=:red)
+            println(r.result)
+        end
+    end
 end
 
-log_fallback(::Silent) = nothing
-function log_fallback(::Verbose)
-    printstyled("↯ ", color=:yellow)
-    println("Primary failed, trying fallback...")
+function log_parallel(ctx::RunContext, n::Int)
+    with_log(ctx) do
+        printstyled("⊕ ", color=:magenta)
+        println("Running $n branches in parallel...")
+    end
 end
 
-log_branch(::Silent, ::Bool) = nothing
-function log_branch(::Verbose, c::Bool)
-    printstyled("? ", color=:blue)
-    println("Condition: $(c ? "true → if_true" : "false → if_false")")
+function log_progress(ctx::RunContext, done::Int, total::Int)
+    with_log(ctx) do
+        left = total - done
+        printstyled("  → ", color=:light_black)
+        printstyled("$done/$total", color=:cyan)
+        printstyled(" done", color=:light_black)
+        println(left > 0 ? " ($left left)" : "")
+    end
 end
 
-log_timeout(::Silent, ::Float64) = nothing
-function log_timeout(::Verbose, s::Float64)
-    printstyled("⏱ ", color=:cyan)
-    println("Timeout: $(s)s")
+function log_retry(ctx::RunContext, n::Int, max::Int)
+    with_log(ctx) do
+        printstyled("↻ ", color=:yellow)
+        println("Attempt $n/$max")
+    end
 end
 
-log_force(::Silent) = nothing
-function log_force(::Verbose)
-    printstyled("⚡ ", color=:yellow, bold=true)
-    println("Forcing execution...")
+function log_fallback(ctx::RunContext)
+    with_log(ctx) do
+        printstyled("↯ ", color=:yellow)
+        println("Primary failed, trying fallback...")
+    end
 end
 
-log_reduce(::Silent, ::Symbol) = nothing
-function log_reduce(::Verbose, n::Symbol)
-    printstyled("⊛ ", color=:magenta)
-    println("Reducing: $n")
+function log_branch(ctx::RunContext, c::Bool)
+    with_log(ctx) do
+        printstyled("? ", color=:blue)
+        println("Condition: $(c ? "true → if_true" : "false → if_false")")
+    end
 end
 
-"""When verbose, print the shell command (Cmd or String) so the user sees exactly what is run."""
-log_cmd(::Silent, _) = nothing
+function log_timeout(ctx::RunContext, s::Float64)
+    with_log(ctx) do
+        printstyled("⏱ ", color=:cyan)
+        println("Timeout: $(s)s")
+    end
+end
+
+function log_force(ctx::RunContext)
+    with_log(ctx) do
+        printstyled("⚡ ", color=:yellow, bold=true)
+        println("Forcing execution...")
+    end
+end
+
+function log_reduce(ctx::RunContext, n::Symbol)
+    with_log(ctx) do
+        printstyled("⊛ ", color=:magenta)
+        println("Reducing: $n")
+    end
+end
+
 const cmd_log_prefix = shell_raw"  $ "
-function log_cmd(::Verbose, cmd::Cmd)
-    cmdstr = join(cmd.exec, " ")
-    printstyled(cmd_log_prefix, color=:light_black)
-    println(cmdstr)
+
+function log_cmd(ctx::RunContext, cmd::Cmd)
+    with_log(ctx) do
+        printstyled(cmd_log_prefix, color=:light_black)
+        println(join(cmd.exec, " "))
+    end
 end
-function log_cmd(::Verbose, cmd::AbstractString)
-    printstyled(cmd_log_prefix, color=:light_black)
-    println(cmd)
+
+function log_cmd(ctx::RunContext, cmd::AbstractString)
+    with_log(ctx) do
+        printstyled(cmd_log_prefix, color=:light_black)
+        println(cmd)
+    end
 end

@@ -48,7 +48,7 @@ generate = @step generate = () -> begin
     return "Generated $(length(data[])) values"
 end
 
-analyze = @step analyze = () -> begin
+analyze = @step analyze = (_msg) -> begin
     println("  Analyzing data...")
     println("    Mean: $(sum(data[]) / length(data[]))")
     println("    Max:  $(maximum(data[]))")

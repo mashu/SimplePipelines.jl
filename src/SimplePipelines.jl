@@ -45,7 +45,7 @@ See also: [`Step`](@ref), [`Pipeline`](@ref), [`run`](@ref), [`is_fresh`](@ref).
 """
 module SimplePipelines
 
-export Step, @step, Sequence, Parallel, Pipeline
+export Step, @step, Sequence, Parallel, Pipeline, AbstractNode
 export StepResult, AbstractStepResult
 export Retry, Fallback, Branch, Timeout, Force
 export Reduce, ForEach, fe
@@ -53,10 +53,13 @@ export SameInputPipe, >>>, BroadcastPipe
 export count_steps, steps, print_dag, is_fresh, clear_state!
 export @sh_str, sh, ShRun
 export @shell_raw_str, shell_raw
+export Resources, Resourced, with_resources
+export FilePath, materialize
+export Rule, @rule, resolve, NoWork
 
 import Base: >>, &, |, ^, |>, >>>
 
-using Base.Threads: @spawn, fetch
+using Base.Threads: @spawn, fetch, Condition
 
 include("StateFormat.jl")
 using .StateFormat: StateFileLayout, STATE_LAYOUT,
@@ -119,12 +122,39 @@ end
 include("Types.jl")
 sh(f::Function) = ShRun(f)  # run-time shell command; must be after Types (ShRun)
 include("Macro.jl")
+include("FilePath.jl")
+include("Resources.jl")
 include("State.jl")
 include("Logging.jl")
 include("Execute.jl")
 include("ForEach.jl")
 include("RunNodes.jl")
+include("Rules.jl")
 include("Run.jl")
 include("Display.jl")
+
+#==============================================================================#
+# Precompile workload — locks in inference for the hot dispatch paths so first
+# `run(pipeline)` is sub-100 ms instead of multi-second.
+#==============================================================================#
+using PrecompileTools: @setup_workload, @compile_workload
+
+@setup_workload begin
+    @compile_workload begin
+        # Single Cmd step
+        run(Pipeline(@step nop = `true`); verbose=false, force=true)
+        # Sequence + Parallel + Function step
+        f = () -> 1
+        run(Pipeline((@step a = `true`) >> (@step b = f) & (@step c = `true`)); verbose=false, force=true)
+        # ForEach over a small collection
+        run(Pipeline(ForEach([1, 2]) do x; Step(Symbol("e", x), `true`); end); verbose=false, force=true)
+        # Resource budget
+        run(Pipeline(with_resources(`true`; mem_mb=1)); verbose=false, force=true, memory_budget_mb=8)
+        # Rule resolution helpers (avoid hitting the filesystem)
+        SimplePipelines.match_pattern("data/{x}.fq", "data/A.fq")
+        SimplePipelines.substitute("out/{x}.bam", Dict("x" => "A"))
+        SimplePipelines.fill_special("cp {input} {output}", ["a"], ["b"])
+    end
+end
 
 end # module
