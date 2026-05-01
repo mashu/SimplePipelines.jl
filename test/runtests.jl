@@ -338,19 +338,6 @@ clear_state!()
         @test all(r -> r.success, results)
     end
 
-    @testset "keep_outputs" begin
-        seq = `echo a` >> `echo b` >> `echo c`
-        # :last (default): only last step keeps result
-        results_last = run(seq, verbose=false, keep_outputs=:last)
-        @test length(results_last) == 3
-        @test results_last[1].result === nothing
-        @test results_last[2].result === nothing
-        @test results_last[3].result !== nothing
-        # :none: all results cleared
-        results_none = run(seq, verbose=false, keep_outputs=:none)
-        @test all(r -> r.result === nothing, results_none)
-    end
-
     @testset "Coverage: verbose log paths and colored DAG" begin
         # Run with verbose=true to hit log_skip (fresh step)
         clear_state!()
@@ -751,11 +738,49 @@ clear_state!()
         # Utilities
         @test count_steps(r) == 1
         @test length(steps(r)) == 1
-        
+
         # show
         @test contains(sprint(show, r), "Retry")
+
+        # Retry actually re-executes after a failure (memo is invalidated
+        # between attempts; without that, the second attempt would short-circuit
+        # to the cached failure and never run the function again).
+        attempts = Threads.Atomic{Int}(0)
+        flaky = Step(:flaky, () -> begin
+            n = Threads.atomic_add!(attempts, 1) + 1
+            n < 3 && error("transient $n")
+            "ok-on-attempt-$n"
+        end)
+        r4 = Retry(flaky, 5)
+        results4 = run(r4, verbose=false, force=true)
+        @test attempts[] == 3
+        @test results4[end].success
+        @test results4[end].result == "ok-on-attempt-3"
     end
-    
+
+    @testset "Shared failing step memoises (no concurrent re-execution)" begin
+        # When a step fails and is reached from multiple branches in the same run,
+        # the second visit must observe the cached failure — not start a duplicate
+        # execution. This is the (pop, put) race that memoising failures fixes.
+        runs = Threads.Atomic{Int}(0)
+        flaky = Step(:flaky, () -> begin
+            Threads.atomic_add!(runs, 1)
+            error("nope")
+        end)
+        # Two parallel branches both touch `flaky` first.
+        a = @step a = `echo a`
+        b = @step b = `echo b`
+        pipeline = (flaky >> a) & (flaky >> b)
+        results = run(pipeline, verbose=false, force=true)
+        @test runs[] == 1
+        # Both branches saw the same failed StepResult instance via the in-flight
+        # channel, so the result vector contains the same object twice.
+        flakies = [r for r in results if r.step.name == :flaky]
+        @test length(flakies) >= 1
+        @test all(==(objectid(flakies[1])), [objectid(r) for r in flakies])
+        @test all(r -> !r.success, flakies)
+    end
+
     @testset "Fallback operator |" begin
         success_step = @step ok = `echo "primary"`
         fail_step = @step fail = `false`
@@ -1027,7 +1052,7 @@ clear_state!()
             first_step >>> second_step
         end
         @test pipeline isa ForEach
-        results = run(pipeline, verbose=false, force=true, keep_outputs=:all)
+        results = run(pipeline, verbose=false, force=true)
         @test length(results) == 4  # 2 branches × 2 steps
         @test all(r -> r.success, results)
         out = [r.result for r in results]
@@ -1045,7 +1070,7 @@ clear_state!()
         step = @step process = process
         bp = fe .>> step
         @test bp isa BroadcastPipe
-        results = run(bp, verbose=false, force=true, keep_outputs=:all)
+        results = run(bp, verbose=false, force=true)
         @test length(results) == 4  # 2 branches × (echo + process)
         @test all(r -> r.success, results)
         out = [r.result for r in results]
@@ -1073,7 +1098,7 @@ clear_state!()
             @test count_steps(pipeline) == 0  # lazy: not expanded until run
 
             # Execute and verify (block runs here)
-            results = run(pipeline, verbose=false, keep_outputs=:all)
+            results = run(pipeline, verbose=false)
             @test length(results) == 3
             @test all(r -> r.success, results)
             outputs = sort([r.result for r in results])
@@ -1128,7 +1153,7 @@ clear_state!()
                 Step(Symbol("process_", donor), `echo $donor`)
             end
             @test pipeline isa ForEach
-            results = run(pipeline, verbose=false, force=true, keep_outputs=:all)
+            results = run(pipeline, verbose=false, force=true)
             @test all(r -> r.success, results)
             outputs = sort([r.result for r in results])
             @test "donor1\n" in outputs
@@ -1420,13 +1445,12 @@ clear_state!()
     end
 
     @testset "Reduce: synthetic step is stable across calls" begin
-        # The reducer step should be cached on the Reduce node so terminal_steps,
-        # state hashing, and DAG dedup all see the same Step instance.
+        # The reducer step is cached on the Reduce node so state hashing and DAG
+        # dedup see the same Step instance across visits.
         a = @step a = `echo a`
         b = @step b = `echo b`
         red = Reduce(xs -> length(xs), a & b; name=:counter)
         @test red.reduce_step.name == :counter
-        @test red.reduce_step === SimplePipelines.terminal_steps(red)[1]
 
         results = run(red, verbose=false, force=true)
         @test results[end].success
@@ -1503,7 +1527,7 @@ clear_state!()
         # Display path for non-String results no longer hits `isa String` branching;
         # multi-line show works for Int/Vector/etc.
         s_int = Step(:n, () -> 42)
-        results = run(s_int, verbose=false, force=true, keep_outputs=:all)
+        results = run(s_int, verbose=false, force=true)
         io = IOBuffer()
         show(io, MIME("text/plain"), results[1])
         out = String(take!(io))

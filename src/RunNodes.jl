@@ -140,15 +140,30 @@ function claim_step!(ctx::RunContext, step::Step)
     end
 end
 
+# Publish a step's results: memoise (success or failure), pop in_flight, and put
+# on the channel so any waiters see the result. The memo write, in_flight pop, and
+# put! all happen under the same lock so a late visitor either sees the cached
+# result OR is in the channel's wait set — never racing into a fresh execution.
+# Memoising failures means a `Retry` must explicitly invalidate the memo before
+# re-attempting; see `invalidate_memo!` and `run_node(::Retry, ...)`.
 function publish_step!(ctx::RunContext, step::Step, results::Vector{AbstractStepResult})
-    ch = lock(ctx.state_lock) do
-        # Only memoize successes so Retry can re-run the same Step after a failure.
-        if all(r -> r.success, results)
-            ctx.memo[step] = results
-        end
-        pop!(ctx.in_flight, step)
+    lock(ctx.state_lock) do
+        ctx.memo[step] = results
+        ch = pop!(ctx.in_flight, step)
+        put!(ch, results)            # capacity-1, never blocks on an empty buffer
     end
-    put!(ch, results)
+    nothing
+end
+
+# Drop memo entries (and any stale in_flight markers) for every Step reachable
+# from `node`. Used by `Retry` between attempts so a re-attempt actually re-runs.
+function invalidate_memo!(ctx::RunContext, node::AbstractNode)
+    lock(ctx.state_lock) do
+        for s in steps(node)
+            delete!(ctx.memo, s)
+            delete!(ctx.in_flight, s)
+        end
+    end
     nothing
 end
 
@@ -177,6 +192,10 @@ function run_node(r::Retry, ctx::RunContext, forced::Bool=false, context_input=n
     local results::Vector{AbstractStepResult}
     for attempt in 1:r.max_attempts
         log_retry(ctx, attempt, r.max_attempts)
+        # Drop the previous attempt's cached results for the inner node so the
+        # next call actually re-executes (without this, the success+failure-aware
+        # publish would short-circuit to the cached failure).
+        attempt > 1 && invalidate_memo!(ctx, r.node)
         results = run_node(r.node, ctx, forced, context_input)
         all(r -> r.success, results) && return results
         attempt < r.max_attempts && r.delay > 0 && sleep(r.delay)

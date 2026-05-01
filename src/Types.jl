@@ -261,7 +261,7 @@ Result of running one step. Type is `StepResult{S, I, O, V}`. Type-stable: no `A
 # Fields (all real)
 - `inputs` — Input file paths the step declared. Empty for steps that take no input files (e.g. download / start nodes).
 - `outputs` — Output file paths the step declared (files the step produces).
-- `result` — Execution result: stdout for shell steps, return value for function steps, or `nothing` when `keep_outputs != :all`.
+- `result` — Execution result: stdout for shell steps, return value for function steps. Wrap large values in [`FilePath`](@ref) so the in-memory result stays small.
 """
 struct StepResult{S<:Step, I, O, V} <: AbstractStepResult
     step::S
