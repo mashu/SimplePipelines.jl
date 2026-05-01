@@ -1364,8 +1364,8 @@ clear_state!()
                 results2 = run(plan, verbose=false)
                 @test all(r -> r.success || (r.result !== nothing && contains(r.result, "up to date")), results2)
 
-                # An existing file should short-circuit resolution; nothing to plan.
-                @test_throws ErrorException resolve([source], ["raw/A.txt"])
+                # An existing file short-circuits resolution; nothing to plan (see `resolve` docstring).
+                @test resolve([source], ["raw/A.txt"]) isa NoWork
             end
         finally
             rm(dir; recursive=true, force=true)
@@ -1484,7 +1484,9 @@ clear_state!()
 
     @testset "Vector-backed Sequence/Parallel scales" begin
         # 100 children must build without tuple-type blow-up.
-        many = [@step Symbol("step_$i") = `true` for i in 1:100]
+        # Use `Step(...)` here: `@step Symbol("step_i") = ...` parses as a call, so the macro
+        # would treat `Symbol` as the step name and the string as an input path.
+        many = [Step(Symbol("step_$i"), `true`) for i in 1:100]
         seq = reduce(>>, many)
         par = reduce(&, many)
         @test seq isa Sequence

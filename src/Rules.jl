@@ -33,14 +33,14 @@ struct Rule{W}
     inputs::Vector{String}
     outputs::Vector{String}
     work::W
-end
-
-# `@rule name([] => "out")` expands to `[]` which infers as `Vector{Any}`; normalize to `String`.
-function Rule(name::Symbol, inputs::AbstractVector, outputs::AbstractVector, work::W) where {W}
-    inputs_s = String[String(s) for s in inputs]
-    outputs_s = String[String(s) for s in outputs]
-    validate_rule_wildcards(name, inputs_s, outputs_s)
-    Rule{W}(name, inputs_s, outputs_s, work)
+    # Inner constructor only: the default `Rule{W}(::Vector{String}, ...)` would bypass
+    # `validate_rule_wildcards` when argument types match the struct fields exactly.
+    function Rule(name::Symbol, inputs::AbstractVector, outputs::AbstractVector, work::W) where {W}
+        inputs_s = String[String(s) for s in inputs]
+        outputs_s = String[String(s) for s in outputs]
+        validate_rule_wildcards(name, inputs_s, outputs_s)
+        new{W}(name, inputs_s, outputs_s, work)
+    end
 end
 
 """Collect distinct wildcard names that appear in any of the patterns, in order of first appearance."""
