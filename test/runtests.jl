@@ -26,7 +26,48 @@ clear_state!()
         end
         rm(dir; recursive=true)
     end
-    
+
+    @testset "sh_pipe: OS-pipe folding" begin
+        # sh_pipe folds adjacent shell commands into one OS-level pipeline; only
+        # the final stage's stdout is captured.
+        p = sh_pipe(sh"echo hello world", sh"tr a-z A-Z")
+        @test p isa Base.AbstractCmd
+        @test !(p isa Cmd)               # OrCmds, not a flat Cmd
+
+        # Step{<:AbstractCmd} runs the pipeline and captures the tail.
+        step = Step(:upper, p)
+        results = SimplePipelines.run_node(step, SimplePipelines.RunContext())
+        @test results[1].success
+        @test strip(results[1].result) == "HELLO WORLD"
+
+        # @step recognises sh_pipe (no thunking) and produces a Step{<:AbstractCmd}.
+        s = @step pipe_inline = sh_pipe(sh"printf 'x\ny\nz\n'", sh"sort -r")
+        @test s.work isa Base.AbstractCmd
+        results2 = run(s, verbose=false, force=true)
+        @test results2[1].success
+        @test strip(results2[1].result) == "z\ny\nx"
+
+        # With declared inputs/outputs the path checks still apply at the Step
+        # boundary (not between pipeline stages).
+        dir = mktempdir()
+        try
+            cd(dir) do
+                write("in.txt", "b\na\nc\n")
+                stp = @step sorter(["in.txt"] => ["out.txt"]) =
+                    sh_pipe(sh"cat in.txt", sh"sort > out.txt")
+                results3 = run(stp, verbose=false, force=true)
+                @test results3[1].success
+                @test isfile("out.txt")
+                @test read("out.txt", String) == "a\nb\nc\n"
+            end
+        finally
+            rm(dir; recursive=true, force=true)
+        end
+
+        # The synthetic Step{<:AbstractCmd} also slots into >> / & via node_operand.
+        @test (sh_pipe(sh"echo a", sh"cat") >> sh"echo done") isa Sequence
+    end
+
     @testset "Step creation" begin
         # From Cmd
         s1 = Step(`echo hello`)

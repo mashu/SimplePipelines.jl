@@ -105,9 +105,12 @@ fe
 
 ```@docs
 sh
+sh_pipe
 ```
 
 The string macro `shell_raw"..."` (and triple-quoted `shell_raw\"\"\"...\"\"\"`) is documented in [`@shell_raw_str`](@ref); use it for scripts where the dollar sign must not be interpreted by Julia.
+
+`sh_pipe(cmd1, cmd2, ...)` folds several `Cmd`s into one OS-level pipeline, so stdout flows through OS pipes without Julia-side buffering between stages. The `@step` macro recognises `sh_pipe` and evaluates it eagerly, so the resulting `Step`'s work field is a `Base.AbstractCmd` rather than a thunk.
 
 ## Execution
 

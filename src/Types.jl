@@ -57,6 +57,7 @@ end
 is_gensym(s::Symbol) = startswith(string(s), "##")
 step_label(s::Step) = is_gensym(s.name) ? work_label(s.work) : string(s.name)
 work_label(c::Cmd) = length(c.exec) ≤ 3 ? join(c.exec, " ") : join(c.exec[1:3], " ") * "…"
+work_label(c::Base.AbstractCmd) = string(c)   # OrCmds/AndCmds/CmdRedirect render as shell pipes
 work_label(f::Function) = string(nameof(f))
 work_label(::Nothing) = "(no work)"
 work_label(::ShRun) = "sh(...)"
@@ -184,12 +185,13 @@ struct NoWork <: AbstractNode end
 
 # Anything we know how to lift into a node — used as the fallback domain for the
 # composition operators below. Restricting to a Union keeps Base's own >>/&/|/^
-# methods (e.g. Int, Bool) untouched.
-const Liftable = Union{AbstractNode, Cmd, Function}
+# methods (e.g. Int, Bool) untouched. AbstractCmd covers Cmd plus the OrCmds /
+# AndCmds / CmdRedirect produced by `Base.pipeline` (and by `sh_pipe`).
+const Liftable = Union{AbstractNode, Base.AbstractCmd, Function}
 
 # Lifters: identity for nodes, wrap raw work into a Step.
 node_operand(x::AbstractNode) = x
-node_operand(x::Cmd) = Step(x)
+node_operand(x::Base.AbstractCmd) = Step(x)
 node_operand(x::Function) = Step(x)
 
 # Composition operators. The four AbstractNode methods carry the actual semantics;
@@ -206,10 +208,18 @@ node_operand(x::Function) = Step(x)
 (&)(a::Parallel, b::AbstractNode) = Parallel(push!(copy(a.nodes), b))
 (&)(a::AbstractNode, b::Parallel) = Parallel(pushfirst!(copy(b.nodes), a))
 (&)(a::Parallel, b::Parallel) = Parallel(vcat(a.nodes, b.nodes))
+# Base defines `&(::AbstractCmd, ::AbstractCmd) = AndCmds(...)`; override for Cmd
+# specifically so `cmd1 & cmd2` builds a Parallel in our DSL (more-specific method
+# wins). For OrCmds/AndCmds operands, Base's behaviour is preserved — use
+# `Step(...) & Step(...)` if you want Parallel of pipelines.
+(&)(a::Cmd, b::Cmd) = node_operand(a) & node_operand(b)
 (&)(a::Liftable, b::Liftable) = node_operand(a) & node_operand(b)
 
 (|)(a::AbstractNode, b::AbstractNode) = Fallback(a, b)
 (|)(a::Fallback, b::AbstractNode) = Fallback(a.primary, Fallback(a.fallback, b))
+# Same situation as `&`: Base defines `|(::AbstractCmd, ::AbstractCmd) = OrCmds`,
+# so we narrow to Cmd to keep `cmd1 | cmd2` as Fallback in our DSL.
+(|)(a::Cmd, b::Cmd) = node_operand(a) | node_operand(b)
 (|)(a::Liftable, b::Liftable) = node_operand(a) | node_operand(b)
 
 (^)(a::AbstractNode, n::Int) = Retry(a, n)

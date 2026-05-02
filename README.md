@@ -92,6 +92,24 @@ display(pipeline)
 #   └─○ save
 ```
 
+## Streaming shell pipelines
+
+Use `sh_pipe(cmd1, cmd2, …)` to fold several commands into one OS-level pipeline. Stdout flows through OS pipes between stages — nothing is buffered in Julia between steps. Only the final stage's stdout is captured. This is the right pattern for `samtools view huge.bam | awk … | sort` where the intermediate streams would otherwise OOM.
+
+```julia
+@step align(["foo.bam"] => ["filtered.txt"]) =
+    sh_pipe(sh"samtools view foo.bam", sh"awk -F'\t' '\$5>30'", sh"sort > filtered.txt")
+```
+
+`sh_pipe` is recognised by `@step` so the call is evaluated eagerly (the `Step`'s `work` is an `AbstractCmd`, not a thunk). For Julia value interpolation, `sh"…"` and `sh(...)` interpolate via `Cmd` (no shell injection):
+
+```julia
+threshold = 30
+sh_pipe(sh"samtools view foo.bam", sh("awk -F'\t' '\$5>$threshold'"))
+```
+
+Compare with `sh"a" >> sh"b"`, which materialises each step's stdout in a Julia `IOBuffer` before running the next — fine for small outputs, OOM for big ones.
+
 ## Multi-file Processing
 
 ```julia

@@ -29,9 +29,17 @@ macro step(expr)
     step_expr(expr)
 end
 
-"""Treat sh(...) as shell command (string => Cmd at build time, function => ShRun for run time). Otherwise wrap in thunk."""
+"""
+Treat known shell builders as eager commands (the call evaluates at @step
+construction; its result becomes the Step's `work`). Other calls are wrapped in
+a thunk so functions like `process_file(args...)` defer to run time.
+
+Recognised builders:
+- `sh(...)`         — String → `Cmd` (`sh -c ...`); Function → `ShRun`.
+- `sh_pipe(...)`    — multiple `Cmd`s folded into one OS-level pipeline.
+"""
 function step_work_expr(e::Expr)
-    if e.head === :call && !isempty(e.args) && e.args[1] === :sh
+    if e.head === :call && !isempty(e.args) && e.args[1] in (:sh, :sh_pipe)
         return esc(e)
     end
     e.head === :call ? :(() -> $(esc(e))) : esc(e)

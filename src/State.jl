@@ -12,6 +12,7 @@ shell `Cmd` work; for anonymous functions it falls back to the step name.
 step_id(step::Step) = (string(step.name), step_work_id(step.work), step.inputs, step.outputs)
 
 step_work_id(c::Cmd) = ("Cmd", c.exec)
+step_work_id(c::Base.AbstractCmd) = ("AbstractCmd", string(c))   # OrCmds / AndCmds / CmdRedirect
 step_work_id(s::ShRun) = ("ShRun", string(nameof(s.f)))
 step_work_id(f::Function) = ("Function", string(nameof(f)))
 step_work_id(n::AbstractNode) = ("Node", objectid(n))
