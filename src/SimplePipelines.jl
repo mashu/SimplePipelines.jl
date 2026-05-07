@@ -53,7 +53,7 @@ export SameInputPipe, >>>, BroadcastPipe
 export count_steps, steps, print_dag, is_fresh, clear_state!
 export @sh_str, sh, sh_pipe, ShRun
 export @shell_raw_str, shell_raw
-export Resources, Resourced, with_resources
+export Resources, Resourced, with_resources, default_jobs, default_memory_budget_mb
 export FilePath, materialize
 export Rule, @rule, resolve, NoWork, expand, Workflow, plan
 

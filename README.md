@@ -162,14 +162,22 @@ run(wf, targets=["out/A.bam.bai"])   # override
 
 ## Memory-aware Parallel Scheduling
 
-For pipelines whose steps each load a multi-GB DataFrame, use `with_resources` + `memory_budget_mb` so the parallel scheduler holds total concurrent memory under a soft cap:
+The package treats **disk as effectively infinite, RAM as finite**, and `run` is memory-safe by default:
+
+| Default | Value | Why |
+|---|---|---|
+| `jobs` | `min(Threads.nthreads(), 8)` | Concurrent fan-out can't exceed the number of OS threads, so the host can't be oversubscribed. |
+| `memory_budget_mb` | 50% of total RAM | Steps wrapped in `with_resources(...; mem_mb=N)` charge the budget; nothing can collectively exceed half RAM. |
+
+You can disable either cap (`jobs=0` / `memory_budget_mb=0`) but the defaults are tuned so a fresh user calling `run(plan)` won't freeze their box. For pipelines whose steps each load a multi-GB DataFrame, annotate with `with_resources` so the scheduler can serialise them:
 
 ```julia
 heavy = with_resources(@step align = sh"bwa ..."; mem_mb=4_000)
 plan  = ForEach("data/{s}.fq") do s
     with_resources(@step ali = sh"bwa $s.fq"; mem_mb=4_000)
 end
-run(plan; memory_budget_mb=12_000)   # at most 3 heavy branches at once
+run(plan)                              # uses 50%-of-RAM budget by default
+run(plan; memory_budget_mb=12_000)     # explicit cap: at most 3 × 4 GB
 ```
 
 For values too big to keep in RAM between steps, return a `FilePath`:

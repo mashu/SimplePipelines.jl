@@ -1363,6 +1363,26 @@ clear_state!()
         end
     end
 
+    @testset "Memory-safe defaults" begin
+        # Auto-detected defaults must be > 0 and bounded by host capacity.
+        @test default_jobs() >= 1
+        @test default_jobs() <= max(1, Threads.nthreads())
+        @test default_jobs() <= 8
+        # 50% of total RAM as MB. Should be at least a few MB on any real box.
+        @test default_memory_budget_mb() > 0
+        @test default_memory_budget_mb() <= floor(Int, Sys.total_memory() / 1_000_000)
+
+        # A default-construction RunContext picks up the safe defaults.
+        ctx = SimplePipelines.RunContext()
+        @test ctx.jobs == default_jobs()
+        @test ctx.memory_budget.capacity == default_memory_budget_mb()
+
+        # User can still pass 0 to disable either cap.
+        ctx0 = SimplePipelines.RunContext(jobs=0, memory_budget_mb=0)
+        @test ctx0.jobs == 0
+        @test ctx0.memory_budget.capacity == 0
+    end
+
     @testset "with_resources / Resourced" begin
         s = @step compute = `echo done`
         r = with_resources(s; mem_mb=128, threads=2)
