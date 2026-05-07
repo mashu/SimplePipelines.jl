@@ -47,12 +47,14 @@ Step(name::Symbol, work, inputs, outputs) = Step(name, work, collect(String, inp
 """
     ShRun{F}
 
-Internal: runs a shell command string at execution time. Use `sh(cmd_func)` in steps; the pipeline
-prints the command when `verbose=true`.
+Internal callable wrapper around a thunk that returns a shell command string at
+execution time. Use `sh(cmd_func)` in steps; calling `sr()` invokes `sr.f()` and
+returns the command string. The pipeline prints the command when `verbose=true`.
 """
 struct ShRun{F}
     f::F
 end
+(s::ShRun)() = s.f()
 
 is_gensym(s::Symbol) = startswith(string(s), "##")
 step_label(s::Step) = is_gensym(s.name) ? work_label(s.work) : string(s.name)
@@ -81,7 +83,6 @@ struct Sequence <: AbstractNode
     nodes::Vector{AbstractNode}
 end
 Sequence(nodes::Vararg{AbstractNode}) = Sequence(collect(AbstractNode, nodes))
-Sequence(nodes::Tuple{Vararg{AbstractNode}}) = Sequence(collect(AbstractNode, nodes))
 
 """
     Parallel <: AbstractNode
@@ -94,7 +95,6 @@ struct Parallel <: AbstractNode
     nodes::Vector{AbstractNode}
 end
 Parallel(nodes::Vararg{AbstractNode}) = Parallel(collect(AbstractNode, nodes))
-Parallel(nodes::Tuple{Vararg{AbstractNode}}) = Parallel(collect(AbstractNode, nodes))
 
 """
     Retry{N} <: AbstractNode

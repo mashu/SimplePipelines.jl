@@ -27,6 +27,21 @@ clear_state!()
         rm(dir; recursive=true)
     end
 
+    @testset "ShRun is a callable functor" begin
+        # `sh(::Function)` returns a ShRun; calling the ShRun returns the
+        # wrapped function's result. This is the functor pattern (a struct
+        # with a method on its own type), idiomatic Julia for callable wrappers.
+        sr = sh(() -> "echo functor")
+        @test sr isa SimplePipelines.ShRun
+        @test sr() == "echo functor"
+        # The execution path now calls `step.work()` rather than reaching into
+        # `step.work.f()`, exercising the functor.
+        s = Step(:fn_step, sr)
+        results = SimplePipelines.run_node(s, SimplePipelines.RunContext())
+        @test results[1].success
+        @test strip(results[1].result) == "functor"
+    end
+
     @testset "sh_pipe: OS-pipe folding" begin
         # sh_pipe folds adjacent shell commands into one OS-level pipeline; only
         # the final stage's stdout is captured.

@@ -84,7 +84,7 @@ function execute_cmd(step::Step, work::Base.AbstractCmd, ctx::RunContext)
     step_result(step, true, elapsed, String(take!(out_buf)))
 end
 
-execute(step::Step{<:ShRun}, ctx::RunContext) = execute_shell(step, ctx, step.work.f())
+execute(step::Step{<:ShRun}, ctx::RunContext) = execute_shell(step, ctx, step.work())
 
 function execute(step::Step{F}, ctx::RunContext) where {F<:Function}
     start = time()
@@ -119,9 +119,9 @@ end
 
 # Fallback for invalid work types: produce a clear failure StepResult, not a MethodError.
 function execute(step::Step, ::RunContext)
-    msg = "Step work must be a Cmd, Function, or ShRun. Got $(typeof(step.work)). " *
-          "If you used `@step name(input) = process_file(...)`, the call runs at build time. " *
-          "Use `@step name(\"path\") = process_file` (function without parentheses) so the " *
-          "function receives the input at run time."
+    msg = "Step work must be an AbstractCmd (Cmd / OrCmds / …), Function, or ShRun. " *
+          "Got $(typeof(step.work)). If you used `@step name(input) = process_file(...)`, " *
+          "the call runs at build time. Use `@step name(\"path\") = process_file` (function " *
+          "without parentheses) so the function receives the input at run time."
     step_result(step, false, 0.0, msg)
 end

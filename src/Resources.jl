@@ -23,8 +23,6 @@ struct Resources
 end
 Resources(; mem_mb::Int=0, threads::Int=1) = Resources(mem_mb, threads)
 
-const NO_RESOURCES = Resources(0, 0)
-
 """
     Resourced{N} <: AbstractNode
 
@@ -47,14 +45,6 @@ Annotate a node with resource hints used by the parallel scheduler.
 with_resources(node::AbstractNode; mem_mb::Int=0, threads::Int=1) =
     Resourced(node, Resources(mem_mb, threads))
 with_resources(x; kwargs...) = with_resources(node_operand(x); kwargs...)
-
-"""
-    node_resources(node) -> Resources
-
-Declared resource hints for `node`; defaults to no charge for un-annotated nodes.
-"""
-node_resources(::AbstractNode) = NO_RESOURCES
-node_resources(r::Resourced) = r.resources
 
 """Generic counting semaphore guarded by a `Condition`. `capacity == 0` disables the cap."""
 mutable struct ResourceBudget
