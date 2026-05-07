@@ -51,11 +51,11 @@ export Retry, Fallback, Branch, Timeout, Force
 export Reduce, ForEach, fe
 export SameInputPipe, >>>, BroadcastPipe
 export count_steps, steps, print_dag, is_fresh, clear_state!
-export @sh_str, sh, ShRun
+export @sh_str, sh, sh_pipe, ShRun
 export @shell_raw_str, shell_raw
-export Resources, Resourced, with_resources
+export Resources, Resourced, with_resources, default_jobs, default_memory_budget_mb
 export FilePath, materialize
-export Rule, @rule, resolve, NoWork
+export Rule, @rule, resolve, NoWork, expand, Workflow, plan
 
 import Base: >>, &, |, ^, |>, >>>
 
@@ -88,6 +88,30 @@ end
 
 """Shell command with string (build-time). For run-time command use `sh(cmd_func)`. See also [`@sh_str`](@ref)."""
 sh(s::String) = Cmd(["sh", "-c", s])
+
+"""
+    sh_pipe(cmds::Base.AbstractCmd...) -> Base.AbstractCmd
+
+Compose two or more shell commands into one OS-level pipeline. The resulting
+`AbstractCmd` runs all stages as a single `Base.run`, with stdout flowing
+through OS pipes between stages — no Julia-side buffering between commands.
+Only the final stage's stdout is captured by the runtime.
+
+This is an alias for `Base.pipeline`; the package recognises it inside `@step`
+so the call is *not* thunked.
+
+# Example
+```julia
+@step align(["foo.bam"] => ["filtered.txt"]) =
+    sh_pipe(sh"samtools view foo.bam", sh"awk -F'\\t' '\$5>30'", sh"sort > filtered.txt")
+```
+
+Compare with the materialising `>>` form, where each step captures its full
+stdout into Julia memory before the next step runs.
+
+See also: [`@step`](@ref), [`@sh_str`](@ref).
+"""
+sh_pipe(cmds::Base.AbstractCmd...) = Base.pipeline(cmds...)
 
 """
     shell_raw"command"
@@ -140,6 +164,10 @@ include("Display.jl")
 using PrecompileTools: @setup_workload, @compile_workload
 
 @setup_workload begin
+    # Redirect the state file to a tempfile during precompile so we do not litter
+    # the package source tree (or current directory) with a `.pipeline_state`.
+    _saved_state_path = STATE_FILE[]
+    STATE_FILE[] = tempname()
     @compile_workload begin
         # Single Cmd step
         run(Pipeline(@step nop = `true`); verbose=false, force=true)
@@ -150,11 +178,17 @@ using PrecompileTools: @setup_workload, @compile_workload
         run(Pipeline(ForEach([1, 2]) do x; Step(Symbol("e", x), `true`); end); verbose=false, force=true)
         # Resource budget
         run(Pipeline(with_resources(`true`; mem_mb=1)); verbose=false, force=true, memory_budget_mb=8)
+        # OS-level shell pipeline (Step{<:AbstractCmd} path)
+        run(Pipeline(@step _piped = sh_pipe(sh"echo a", sh"cat")); verbose=false, force=true)
         # Rule resolution helpers (avoid hitting the filesystem)
         SimplePipelines.match_pattern("data/{x}.fq", "data/A.fq")
         SimplePipelines.substitute("out/{x}.bam", Dict("x" => "A"))
         SimplePipelines.fill_special("cp {input} {output}", ["a"], ["b"])
+        # expand: lock in NamedTuple kwargs path
+        expand("out/{s}.bam"; s=["A", "B"])
     end
+    isfile(STATE_FILE[]) && rm(STATE_FILE[])
+    STATE_FILE[] = _saved_state_path
 end
 
 end # module

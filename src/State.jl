@@ -12,6 +12,7 @@ shell `Cmd` work; for anonymous functions it falls back to the step name.
 step_id(step::Step) = (string(step.name), step_work_id(step.work), step.inputs, step.outputs)
 
 step_work_id(c::Cmd) = ("Cmd", c.exec)
+step_work_id(c::Base.AbstractCmd) = ("AbstractCmd", string(c))   # OrCmds / AndCmds / CmdRedirect
 step_work_id(s::ShRun) = ("ShRun", string(nameof(s.f)))
 step_work_id(f::Function) = ("Function", string(nameof(f)))
 step_work_id(n::AbstractNode) = ("Node", objectid(n))
@@ -40,8 +41,29 @@ mutable struct RunContext
     thread_budget::ResourceBudget   # capacity in threads
 end
 
-RunContext(; verbose::Bool=false, jobs::Int=8, state_path::String=STATE_FILE[],
-           memory_budget_mb::Int=0, thread_budget::Int=0) =
+"""
+    default_jobs() -> Int
+
+Safe default for the number of concurrent parallel/foreach branches: at most as
+many as `Threads.nthreads()`, capped at 8. Spawning more branches than threads
+just queues work without speeding it up, but it *does* multiply memory pressure.
+"""
+default_jobs() = min(Threads.nthreads(), 8)
+
+"""
+    default_memory_budget_mb() -> Int
+
+Safe default soft cap for the per-run memory budget: 50% of total system RAM,
+in MB. Steps wrapped with [`with_resources`](@ref) charge the budget; un-annotated
+steps don't, so this is only an upper bound on *declared* concurrent memory. To
+disable the cap entirely, pass `memory_budget_mb=0` to `run`.
+
+Override at the user level by passing `memory_budget_mb=N` to `run(...)`.
+"""
+default_memory_budget_mb() = max(0, floor(Int, Sys.total_memory() / 1_000_000 / 2))
+
+RunContext(; verbose::Bool=false, jobs::Int=default_jobs(), state_path::String=STATE_FILE[],
+           memory_budget_mb::Int=default_memory_budget_mb(), thread_budget::Int=0) =
     RunContext(verbose, state_path, Set{UInt64}(), state_read(state_path, STATE_LAYOUT),
                ReentrantLock(), ReentrantLock(), jobs,
                IdDict{Step, Vector{AbstractStepResult}}(),

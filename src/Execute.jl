@@ -53,17 +53,27 @@ end
 # Cmd from sh"..." or sh(s) is ["sh", "-c", script]; share the shell path.
 function execute(step::Step{Cmd}, ctx::RunContext)
     exec = step.work.exec
-    if length(exec) >= 3 && exec[1] == "sh" && exec[2] == "-c"
+    length(exec) >= 3 && exec[1] == "sh" && exec[2] == "-c" &&
         return execute_shell(step, ctx, exec[3])
-    end
+    execute_cmd(step, step.work, ctx)
+end
+
+# Any other AbstractCmd — including the OrCmds returned by `Base.pipeline(c1, c2, …)`
+# (which is what `sh_pipe` builds). Stdout flows through OS pipes between the
+# component commands; only the final stage's stdout is captured.
+execute(step::Step{T}, ctx::RunContext) where {T<:Base.AbstractCmd} =
+    execute_cmd(step, step.work, ctx)
+
+# Internal: run an AbstractCmd, capturing final stdout / stderr.
+function execute_cmd(step::Step, work::Base.AbstractCmd, ctx::RunContext)
     start = time()
     err = path_check_inputs(step)
     err !== nothing && return step_result(step, false, time() - start, err)
-    log_cmd(ctx, step.work)
+    log_cmd(ctx, work)
     out_buf = IOBuffer()
     err_buf = IOBuffer()
     outcome = run_safely() do
-        Base.run(Base.pipeline(step.work, stdout=out_buf, stderr=err_buf))
+        Base.run(Base.pipeline(work, stdout=out_buf, stderr=err_buf))
     end
     elapsed = time() - start
     if !outcome.ok

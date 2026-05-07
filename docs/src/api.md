@@ -62,8 +62,15 @@ Declare reusable [`Rule`](@ref)s with `{wildcard}` patterns, then call
 a runnable DAG. Rule work supports both shell templates and `(inputs, outputs,
 wildcards) -> Cmd | String | Function`.
 
+[`expand`](@ref) generates concrete target lists from a template by Cartesian
+product, and a [`Workflow`](@ref) bundles rules + default targets behind a single
+`run(::Workflow)` entry point.
+
 ```@docs
 resolve
+expand
+Workflow
+plan
 ```
 
 ## Operators
@@ -98,9 +105,12 @@ fe
 
 ```@docs
 sh
+sh_pipe
 ```
 
 The string macro `shell_raw"..."` (and triple-quoted `shell_raw\"\"\"...\"\"\"`) is documented in [`@shell_raw_str`](@ref); use it for scripts where the dollar sign must not be interpreted by Julia.
+
+`sh_pipe(cmd1, cmd2, ...)` folds several `Cmd`s into one OS-level pipeline, so stdout flows through OS pipes without Julia-side buffering between stages. The `@step` macro recognises `sh_pipe` and evaluates it eagerly, so the resulting `Step`'s work field is a `Base.AbstractCmd` rather than a thunk.
 
 ## Execution
 

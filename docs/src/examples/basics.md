@@ -109,5 +109,5 @@ fe = ForEach([1, 2]) do x
     Step(Symbol("gen_", x), `echo $x`)
 end
 pipeline = fe .>> @step process = (s -> "got_" * strip(String(s)))
-run(pipeline, force=true, keep_outputs=:all)
+run(pipeline, force=true)
 ```

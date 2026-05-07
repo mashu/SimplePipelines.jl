@@ -26,7 +26,48 @@ clear_state!()
         end
         rm(dir; recursive=true)
     end
-    
+
+    @testset "sh_pipe: OS-pipe folding" begin
+        # sh_pipe folds adjacent shell commands into one OS-level pipeline; only
+        # the final stage's stdout is captured.
+        p = sh_pipe(sh"echo hello world", sh"tr a-z A-Z")
+        @test p isa Base.AbstractCmd
+        @test !(p isa Cmd)               # OrCmds, not a flat Cmd
+
+        # Step{<:AbstractCmd} runs the pipeline and captures the tail.
+        step = Step(:upper, p)
+        results = SimplePipelines.run_node(step, SimplePipelines.RunContext())
+        @test results[1].success
+        @test strip(results[1].result) == "HELLO WORLD"
+
+        # @step recognises sh_pipe (no thunking) and produces a Step{<:AbstractCmd}.
+        s = @step pipe_inline = sh_pipe(sh"printf 'x\ny\nz\n'", sh"sort -r")
+        @test s.work isa Base.AbstractCmd
+        results2 = run(s, verbose=false, force=true)
+        @test results2[1].success
+        @test strip(results2[1].result) == "z\ny\nx"
+
+        # With declared inputs/outputs the path checks still apply at the Step
+        # boundary (not between pipeline stages).
+        dir = mktempdir()
+        try
+            cd(dir) do
+                write("in.txt", "b\na\nc\n")
+                stp = @step sorter(["in.txt"] => ["out.txt"]) =
+                    sh_pipe(sh"cat in.txt", sh"sort > out.txt")
+                results3 = run(stp, verbose=false, force=true)
+                @test results3[1].success
+                @test isfile("out.txt")
+                @test read("out.txt", String) == "a\nb\nc\n"
+            end
+        finally
+            rm(dir; recursive=true, force=true)
+        end
+
+        # The synthetic Step{<:AbstractCmd} also slots into >> / & via node_operand.
+        @test (sh_pipe(sh"echo a", sh"cat") >> sh"echo done") isa Sequence
+    end
+
     @testset "Step creation" begin
         # From Cmd
         s1 = Step(`echo hello`)
@@ -336,19 +377,6 @@ clear_state!()
         # Just run with verbose=true to exercise the code path
         results = run(par, verbose=true)
         @test all(r -> r.success, results)
-    end
-
-    @testset "keep_outputs" begin
-        seq = `echo a` >> `echo b` >> `echo c`
-        # :last (default): only last step keeps result
-        results_last = run(seq, verbose=false, keep_outputs=:last)
-        @test length(results_last) == 3
-        @test results_last[1].result === nothing
-        @test results_last[2].result === nothing
-        @test results_last[3].result !== nothing
-        # :none: all results cleared
-        results_none = run(seq, verbose=false, keep_outputs=:none)
-        @test all(r -> r.result === nothing, results_none)
     end
 
     @testset "Coverage: verbose log paths and colored DAG" begin
@@ -751,11 +779,49 @@ clear_state!()
         # Utilities
         @test count_steps(r) == 1
         @test length(steps(r)) == 1
-        
+
         # show
         @test contains(sprint(show, r), "Retry")
+
+        # Retry actually re-executes after a failure (memo is invalidated
+        # between attempts; without that, the second attempt would short-circuit
+        # to the cached failure and never run the function again).
+        attempts = Threads.Atomic{Int}(0)
+        flaky = Step(:flaky, () -> begin
+            n = Threads.atomic_add!(attempts, 1) + 1
+            n < 3 && error("transient $n")
+            "ok-on-attempt-$n"
+        end)
+        r4 = Retry(flaky, 5)
+        results4 = run(r4, verbose=false, force=true)
+        @test attempts[] == 3
+        @test results4[end].success
+        @test results4[end].result == "ok-on-attempt-3"
     end
-    
+
+    @testset "Shared failing step memoises (no concurrent re-execution)" begin
+        # When a step fails and is reached from multiple branches in the same run,
+        # the second visit must observe the cached failure — not start a duplicate
+        # execution. This is the (pop, put) race that memoising failures fixes.
+        runs = Threads.Atomic{Int}(0)
+        flaky = Step(:flaky, () -> begin
+            Threads.atomic_add!(runs, 1)
+            error("nope")
+        end)
+        # Two parallel branches both touch `flaky` first.
+        a = @step a = `echo a`
+        b = @step b = `echo b`
+        pipeline = (flaky >> a) & (flaky >> b)
+        results = run(pipeline, verbose=false, force=true)
+        @test runs[] == 1
+        # Both branches saw the same failed StepResult instance via the in-flight
+        # channel, so the result vector contains the same object twice.
+        flakies = [r for r in results if r.step.name == :flaky]
+        @test length(flakies) >= 1
+        @test all(==(objectid(flakies[1])), [objectid(r) for r in flakies])
+        @test all(r -> !r.success, flakies)
+    end
+
     @testset "Fallback operator |" begin
         success_step = @step ok = `echo "primary"`
         fail_step = @step fail = `false`
@@ -1027,7 +1093,7 @@ clear_state!()
             first_step >>> second_step
         end
         @test pipeline isa ForEach
-        results = run(pipeline, verbose=false, force=true, keep_outputs=:all)
+        results = run(pipeline, verbose=false, force=true)
         @test length(results) == 4  # 2 branches × 2 steps
         @test all(r -> r.success, results)
         out = [r.result for r in results]
@@ -1045,7 +1111,7 @@ clear_state!()
         step = @step process = process
         bp = fe .>> step
         @test bp isa BroadcastPipe
-        results = run(bp, verbose=false, force=true, keep_outputs=:all)
+        results = run(bp, verbose=false, force=true)
         @test length(results) == 4  # 2 branches × (echo + process)
         @test all(r -> r.success, results)
         out = [r.result for r in results]
@@ -1073,7 +1139,7 @@ clear_state!()
             @test count_steps(pipeline) == 0  # lazy: not expanded until run
 
             # Execute and verify (block runs here)
-            results = run(pipeline, verbose=false, keep_outputs=:all)
+            results = run(pipeline, verbose=false)
             @test length(results) == 3
             @test all(r -> r.success, results)
             outputs = sort([r.result for r in results])
@@ -1128,7 +1194,7 @@ clear_state!()
                 Step(Symbol("process_", donor), `echo $donor`)
             end
             @test pipeline isa ForEach
-            results = run(pipeline, verbose=false, force=true, keep_outputs=:all)
+            results = run(pipeline, verbose=false, force=true)
             @test all(r -> r.success, results)
             outputs = sort([r.result for r in results])
             @test "donor1\n" in outputs
@@ -1297,6 +1363,26 @@ clear_state!()
         end
     end
 
+    @testset "Memory-safe defaults" begin
+        # Auto-detected defaults must be > 0 and bounded by host capacity.
+        @test default_jobs() >= 1
+        @test default_jobs() <= max(1, Threads.nthreads())
+        @test default_jobs() <= 8
+        # 50% of total RAM as MB. Should be at least a few MB on any real box.
+        @test default_memory_budget_mb() > 0
+        @test default_memory_budget_mb() <= floor(Int, Sys.total_memory() / 1_000_000)
+
+        # A default-construction RunContext picks up the safe defaults.
+        ctx = SimplePipelines.RunContext()
+        @test ctx.jobs == default_jobs()
+        @test ctx.memory_budget.capacity == default_memory_budget_mb()
+
+        # User can still pass 0 to disable either cap.
+        ctx0 = SimplePipelines.RunContext(jobs=0, memory_budget_mb=0)
+        @test ctx0.jobs == 0
+        @test ctx0.memory_budget.capacity == 0
+    end
+
     @testset "with_resources / Resourced" begin
         s = @step compute = `echo done`
         r = with_resources(s; mem_mb=128, threads=2)
@@ -1420,13 +1506,12 @@ clear_state!()
     end
 
     @testset "Reduce: synthetic step is stable across calls" begin
-        # The reducer step should be cached on the Reduce node so terminal_steps,
-        # state hashing, and DAG dedup all see the same Step instance.
+        # The reducer step is cached on the Reduce node so state hashing and DAG
+        # dedup see the same Step instance across visits.
         a = @step a = `echo a`
         b = @step b = `echo b`
         red = Reduce(xs -> length(xs), a & b; name=:counter)
         @test red.reduce_step.name == :counter
-        @test red.reduce_step === SimplePipelines.terminal_steps(red)[1]
 
         results = run(red, verbose=false, force=true)
         @test results[end].success
@@ -1503,12 +1588,107 @@ clear_state!()
         # Display path for non-String results no longer hits `isa String` branching;
         # multi-line show works for Int/Vector/etc.
         s_int = Step(:n, () -> 42)
-        results = run(s_int, verbose=false, force=true, keep_outputs=:all)
+        results = run(s_int, verbose=false, force=true)
         io = IOBuffer()
         show(io, MIME("text/plain"), results[1])
         out = String(take!(io))
         @test occursin("StepResult: n", out)
         @test occursin("result:", out)
+    end
+
+    @testset "expand: Cartesian product over wildcards" begin
+        # Single template, single wildcard
+        @test expand("out/{s}.bam"; s=["A", "B", "C"]) ==
+              ["out/A.bam", "out/B.bam", "out/C.bam"]
+
+        # Single template, two wildcards — last wildcard varies fastest
+        @test expand("out/{s}.{ext}"; s=["A", "B"], ext=["bam", "bai"]) ==
+              ["out/A.bam", "out/A.bai", "out/B.bam", "out/B.bai"]
+
+        # Multiple templates with shared wildcards (templates outer, combos inner)
+        @test expand(["raw/{s}.fq", "qc/{s}.html"]; s=["A", "B"]) ==
+              ["raw/A.fq", "raw/B.fq", "qc/A.html", "qc/B.html"]
+
+        # Numeric wildcard values are stringified
+        @test expand("step_{n}.txt"; n=1:3) ==
+              ["step_1.txt", "step_2.txt", "step_3.txt"]
+
+        # No wildcards: the template is returned unchanged (per-template copy)
+        @test expand("static.txt") == ["static.txt"]
+        @test expand(["a.txt", "b.txt"]) == ["a.txt", "b.txt"]
+
+        # NamedTuple form (instead of kwargs) reaches the same path
+        @test expand("{s}_R{r}.fq", (s=["A"], r=[1, 2])) ==
+              ["A_R1.fq", "A_R2.fq"]
+
+        # Missing wildcard substitution errors
+        @test_throws ErrorException expand("{missing}.txt"; other=["x"])
+    end
+
+    @testset "Workflow: registry runs end-to-end" begin
+        dir = mktempdir()
+        try
+            cd(dir) do
+                wf = Workflow(name="rnaseq")
+                # `push!` dispatches on item type:
+                push!(wf,
+                      @rule source([] => "raw/{s}.txt") =
+                          "mkdir -p raw && echo {s} > {output}",
+                      @rule align("raw/{s}.txt" => "out/{s}.aln") =
+                          "mkdir -p out && tr a-z A-Z < {input} > {output}")
+                # Vector of targets gets appended:
+                push!(wf, expand("out/{s}.aln"; s=["A", "B"]))
+
+                @test length(wf.rules) == 2
+                @test wf.targets == ["out/A.aln", "out/B.aln"]
+
+                node = plan(wf)
+                @test node isa AbstractNode
+
+                results = run(wf, verbose=false)
+                @test all(r -> r.success, results)
+                @test isfile("out/A.aln") && isfile("out/B.aln")
+
+                # `targets` kwarg overrides the registry's default targets
+                only_a = run(wf, verbose=false, targets=["out/A.aln"])
+                @test all(r -> r.success, only_a)
+            end
+        finally
+            rm(dir; recursive=true, force=true)
+        end
+    end
+
+    @testset "Workflow: empty registry errors with clear message" begin
+        wf = Workflow(name="empty")
+        @test_throws ErrorException plan(wf)
+        push!(wf, @rule x([] => "out.txt") = "echo x > {output}")
+        # Rules but no targets: also errors
+        @test_throws ErrorException plan(wf)
+        push!(wf, "out.txt")
+        @test plan(wf) isa AbstractNode
+    end
+
+    @testset "Liftable union: cross-type operators still work" begin
+        # The 12-method-per-operator overload set was collapsed to 4 specific
+        # AbstractNode methods + a single Liftable union fallback. All the same
+        # cross-type combinations must still build the right node.
+        f = () -> "func"
+        c = `echo cmd`
+        s = @step a = `echo a`
+        @test (c >> c) isa Sequence
+        @test (f >> f) isa Sequence
+        @test (c >> f) isa Sequence
+        @test (f >> c) isa Sequence
+        @test (c >> s) isa Sequence
+        @test (s >> c) isa Sequence
+        @test (f >> s) isa Sequence
+        @test (s >> f) isa Sequence
+        @test (c & f) isa Parallel
+        @test (s & c) isa Parallel
+        @test (c | f) isa Fallback
+        @test (s | c) isa Fallback
+        @test (c^3) isa Retry
+        @test (f^3) isa Retry
     end
 end
 

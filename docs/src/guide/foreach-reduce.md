@@ -70,10 +70,13 @@ The reducer receives a vector of outputs from successful parallel branches (elem
 
 ### Low-memory / large data
 
-To avoid holding many large outputs in memory:
+The runtime keeps every step's `result` alive in the per-run memo (so DAG sharing
+works correctly). To keep memory bounded:
 
-1. Have each step write its result to a file and **return the path** (e.g. `String`).
+1. Have each step write its result to a file and return a [`FilePath`](@ref) — only
+   the path travels between steps; the underlying value is freed.
 2. Let the reducer open or stream paths one at a time and return a combined path.
-3. Use `run(pipeline; keep_outputs=:last)` so `results` only retains the final step's `.result`; earlier large values become `nothing` while success, duration, and inputs/outputs remain. Use `keep_outputs=:none` to drop all result values.
+3. The returned vector contains every step's result; if you only need the final
+   value, take `last(results)`.
 
 **Next:** [Running and inspecting](running-and-results.md) — `run`, results, utilities, shell + Julia together.

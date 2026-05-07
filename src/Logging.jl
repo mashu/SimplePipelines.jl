@@ -99,6 +99,15 @@ function log_cmd(ctx::RunContext, cmd::Cmd)
     end
 end
 
+# OrCmds / AndCmds / CmdRedirect (the result of `Base.pipeline(...)` and `sh_pipe`)
+# render as a human-readable shell pipeline via their `string` method.
+function log_cmd(ctx::RunContext, cmd::Base.AbstractCmd)
+    with_log(ctx) do
+        printstyled(cmd_log_prefix, color=:light_black)
+        println(string(cmd))
+    end
+end
+
 function log_cmd(ctx::RunContext, cmd::AbstractString)
     with_log(ctx) do
         printstyled(cmd_log_prefix, color=:light_black)

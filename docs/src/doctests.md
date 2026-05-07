@@ -17,7 +17,7 @@ end
 ```jldoctest
 julia> using SimplePipelines
 
-julia> r = run(sh"echo hi" >> sh"echo second", verbose=false, keep_outputs=:all);
+julia> r = run(sh"echo hi" >> sh"echo second", verbose=false);
 
 julia> length(r)
 2
@@ -35,7 +35,7 @@ julia> a = @step a = sh"echo A";
 
 julia> b = @step b = sh"echo B";
 
-julia> r = run(a & b, verbose=false, keep_outputs=:all);
+julia> r = run(a & b, verbose=false);
 
 julia> length(r)
 2
@@ -49,7 +49,7 @@ true
 ```jldoctest
 julia> using SimplePipelines
 
-julia> r = run((@step bad = sh"false") | (@step ok = sh"echo ok"), verbose=false, keep_outputs=:all);
+julia> r = run((@step bad = sh"false") | (@step ok = sh"echo ok"), verbose=false);
 
 julia> r[end].success
 true
