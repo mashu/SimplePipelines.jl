@@ -39,6 +39,9 @@ mutable struct RunContext
     in_flight::IdDict{Step, Channel{Vector{AbstractStepResult}}}
     memory_budget::ResourceBudget   # capacity in MB
     thread_budget::ResourceBudget   # capacity in threads
+    auto_spill::Bool                # serialise large step results to disk
+    spill_threshold_bytes::Int      # values larger than this are spilled
+    spill_dir::String               # where SpilledValue tempfiles live
 end
 
 """
@@ -62,14 +65,27 @@ Override at the user level by passing `memory_budget_mb=N` to `run(...)`.
 """
 default_memory_budget_mb() = max(0, floor(Int, Sys.total_memory() / 1_000_000 / 2))
 
+"""
+    default_spill_threshold_bytes() -> Int
+
+Default size above which a step's in-memory result is auto-spilled to disk.
+10 MB — small enough to spill anything DataFrame-sized, large enough to keep
+small dictionaries / counters / arrays in RAM where the I/O cost would dominate.
+"""
+default_spill_threshold_bytes() = 10_000_000
+
 RunContext(; verbose::Bool=false, jobs::Int=default_jobs(), state_path::String=STATE_FILE[],
-           memory_budget_mb::Int=default_memory_budget_mb(), thread_budget::Int=0) =
+           memory_budget_mb::Int=default_memory_budget_mb(), thread_budget::Int=0,
+           auto_spill::Bool=true,
+           spill_threshold_bytes::Int=default_spill_threshold_bytes(),
+           spill_dir::String=tempdir()) =
     RunContext(verbose, state_path, Set{UInt64}(), state_read(state_path, STATE_LAYOUT),
                ReentrantLock(), ReentrantLock(), jobs,
                IdDict{Step, Vector{AbstractStepResult}}(),
                IdDict{Step, Channel{Vector{AbstractStepResult}}}(),
                ResourceBudget(memory_budget_mb),
-               ResourceBudget(thread_budget))
+               ResourceBudget(thread_budget),
+               auto_spill, spill_threshold_bytes, spill_dir)
 
 """Read persisted step hashes from the state file."""
 load_state()::Set{UInt64} = state_read(STATE_FILE[], STATE_LAYOUT)

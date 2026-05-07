@@ -30,6 +30,7 @@ BroadcastPipe
 Resources
 Resourced
 FilePath
+SpilledValue
 Rule
 NoWork
 ```
