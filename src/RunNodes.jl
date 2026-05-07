@@ -206,8 +206,8 @@ function run_node(seq::Sequence, ctx::RunContext, forced::Bool=false, context_in
 end
 
 function run_node(par::Parallel, ctx::RunContext, forced::Bool=false, context_input=nothing)
-    nodes = collect(par.nodes)
-    run_node(ParallelBranches(nodes, fill(nothing, length(nodes))), ctx, forced, context_input)
+    n = length(par.nodes)
+    run_node(ParallelBranches(par.nodes, fill(nothing, n)), ctx, forced, context_input)
 end
 
 function run_node(r::Retry, ctx::RunContext, forced::Bool=false, context_input=nothing)
