@@ -121,6 +121,16 @@ Execution is recursive: `run(pipeline)` calls `run_node(root, ...)` which dispat
 run
 ```
 
+### Defaults
+
+These are used as the default keyword argument values in [`run`](@ref).
+
+```@docs
+default_jobs
+default_memory_budget_mb
+default_spill_threshold_bytes
+```
+
 ## Freshness and state
 
 State is stored in `.pipeline_state` as a fixed-layout, memory-mapped file. Completions are batched and written when `run()` finishes.
