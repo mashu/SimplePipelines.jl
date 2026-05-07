@@ -301,4 +301,4 @@ struct Pipeline{N<:AbstractNode}
 end
 
 Pipeline(node::AbstractNode; name::String="pipeline") = Pipeline(node, name)
-Pipeline(nodes::Vararg{AbstractNode}; name::String="pipeline") = Pipeline(Sequence(nodes), name)
+Pipeline(nodes::Vararg{AbstractNode}; name::String="pipeline") = Pipeline(Sequence(nodes...), name)

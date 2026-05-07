@@ -87,10 +87,57 @@ macro rule(expr)
     rule_expr(expr)
 end
 
+rule_expr(x) = error("@rule expects `name(inputs => outputs) = work`, got $(x)")
+
 function rule_expr(expr::Expr)
-    expr.head === :(=) || error("@rule expects `name(inputs => outputs) = work`, got $(expr)")
+    expr.head === :tuple && return rule_expr_tuple(expr)
+    expr.head === :(=) && return rule_expr_assign(expr)
+    error("@rule expects `name(inputs => outputs) = work`, got $(expr)")
+end
+
+unwrap_singleton_block(x) = x
+function unwrap_singleton_block(expr::Expr)
+    expr.head === :block || return expr
+    stmts = Any[]
+    for a in expr.args
+        push_stmt_unless_linenumber!(stmts, a)
+    end
+    length(stmts) == 1 ? stmts[1] : expr
+end
+
+push_stmt_unless_linenumber!(::Vector{Any}, ::LineNumberNode) = nothing
+push_stmt_unless_linenumber!(stmts::Vector{Any}, a) = push!(stmts, a)
+
+is_tuple_expr(x) = false
+is_tuple_expr(expr::Expr) = (expr.head === :tuple)
+
+macrocall_rule_payload(x) = x
+function macrocall_rule_payload(expr::Expr)
+    (expr.head === :macrocall && expr.args[1] === Symbol("@rule")) ? expr.args[end] : expr
+end
+
+function rule_expr_tuple(expr::Expr)
+    rules = Any[rule_expr(macrocall_rule_payload(a)) for a in expr.args]
+    Expr(:vect, rules...)
+end
+
+function rule_expr_assign(expr::Expr)
     lhs, rhs = expr.args[1], expr.args[2]
-    rule_lhs(lhs, rhs)
+    rhs_unwrapped = unwrap_singleton_block(rhs)
+
+    # In `push!(wf, @rule a(...) = "cmd a", @rule b(...) = "cmd b")`, parsing can turn
+    # the RHS into a tuple: `"cmd a", @rule b(...) = "cmd b"`. Treat that as multiple
+    # rules returned as a vector.
+    if is_tuple_expr(rhs_unwrapped)
+        rhs_tuple = rhs_unwrapped::Expr
+        first_work = rhs_tuple.args[1]
+        rest = rhs_tuple.args[2:end]
+        rules = Any[rule_lhs(lhs, first_work)]
+        append!(rules, (rule_expr(macrocall_rule_payload(a)) for a in rest))
+        return Expr(:vect, rules...)
+    end
+
+    rule_lhs(lhs, rhs_unwrapped)
 end
 
 function rule_lhs(lhs::Expr, rhs)
@@ -344,12 +391,35 @@ end
 # substitute into every template once per combination.
 function expand_each(templates::Vector{String}, wildcards::NamedTuple)
     isempty(wildcards) && return copy(templates)
-    ks = keys(wildcards)
-    vs = values(wildcards)
+
+    # Keyword arguments get materialized as a NamedTuple whose field order is not
+    # guaranteed to match the user-written order. To make `expand("x/{a}_{b}")`
+    # deterministic, order wildcards by first appearance across the templates.
+    seen = Set{Symbol}()
+    ks = Symbol[]
+    for tmpl in templates, m in eachmatch(WILDCARD_RE, tmpl)
+        k = Symbol(m.captures[1])
+        k in seen && continue
+        push!(seen, k)
+        push!(ks, k)
+    end
+
+    # Validate: every wildcard referenced in templates must be provided.
+    for k in ks
+        haskey(wildcards, k) ||
+            error("Substitution: wildcard `{$k}` has no value (have: $(collect(keys(wildcards))))")
+    end
+
+    vs = Any[getfield(wildcards, k) for k in ks]
     out = String[]
     sizehint!(out, length(templates) * prod(length, vs; init=1))
-    for tmpl in templates, combo in Iterators.product(vs...)
-        push!(out, substitute(tmpl, NamedTuple{ks}(combo)))
+    # `Iterators.product` varies its *first* iterator fastest; we want the last
+    # wildcard to vary fastest, matching the docs/tests here. Reverse for product,
+    # then flip back before substitution.
+    for tmpl in templates, combo_rev in Iterators.product(reverse(vs)...)
+        combo = reverse(combo_rev)
+        nt = (; (ks[i] => combo[i] for i in eachindex(ks))...)
+        push!(out, substitute(tmpl, nt))
     end
     out
 end
