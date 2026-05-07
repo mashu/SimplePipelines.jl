@@ -121,8 +121,30 @@ function execute_with_freshness(step::Step, ctx::RunContext, forced::Bool, conte
     result = run_step_work(step, ctx, context_input)
     log_result(ctx, result)
     result.success && mark_complete!(ctx, step)
-    AbstractStepResult[result]
+    AbstractStepResult[maybe_spill_result(result, ctx)]
 end
+
+# After a successful step, if its in-memory `.result` is bigger than the spill
+# threshold, serialise it to a tempfile and replace the field with a tiny
+# `SpilledValue`. Keeps the per-run memo's RAM footprint bounded regardless of
+# how many step results accumulate. Already-on-disk wrappers (FilePath /
+# SpilledValue) and failure error strings are passed through unchanged.
+function maybe_spill_result(r::StepResult, ctx::RunContext)
+    ctx.auto_spill || return r
+    r.success || return r
+    spill_candidate(r.result) || return r
+    sz = Base.summarysize(r.result)
+    sz > ctx.spill_threshold_bytes || return r
+    spilled = spill_to_disk(r.result, ctx.spill_dir)
+    StepResult(r.step, r.success, r.duration, r.inputs, r.outputs, spilled)
+end
+
+# Don't spill values that are already on disk (FilePath, SpilledValue) or
+# nothing.
+spill_candidate(::Nothing) = false
+spill_candidate(::FilePath) = false
+spill_candidate(::SpilledValue) = false
+spill_candidate(_) = true
 
 # Dispatch the actual work. First arg specificity orders these unambiguously.
 run_step_work(step::Step{F}, ctx::RunContext, ::Nothing) where {F<:Function} = execute(step, ctx)

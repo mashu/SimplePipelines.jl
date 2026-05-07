@@ -38,6 +38,33 @@ all_ok = all(r -> r.success, results)
 
 Relevant fields include `.success`, `.duration`, `.result`, `.inputs`, and `.outputs`.
 
+## Memory safety: auto-spill
+
+The package treats **disk as effectively infinite, RAM as finite**. Three defaults make a default-run pipeline memory-safe by construction:
+
+1. `jobs = min(Threads.nthreads(), 8)` — concurrent fan-out can't oversubscribe the host.
+2. `auto_spill = true` — after a step finishes, if `Base.summarysize(r.result) > spill_threshold_bytes` (10 MB by default), the value is serialised to a tempfile in `spill_dir` (defaults to `tempdir()`) and `r.result` is replaced with a [`SpilledValue`](@ref). Small results stay in RAM (no I/O cost).
+3. `memory_budget_mb = 50% of total RAM` — caps the *concurrent* memory of nodes wrapped in [`with_resources`](@ref).
+
+Downstream consumers call [`materialize`](@ref) to load a `SpilledValue` (round-trips via `Base.Serialization`) or a [`FilePath`](@ref) (raw bytes by default; users specialise for typed loading like CSV → DataFrame).
+
+```julia
+# Tight RAM:
+run(plan; spill_threshold_bytes=1_000_000)        # 1 MB
+
+# Pure in-memory (small data, benchmarks):
+run(plan; auto_spill=false)
+
+# Self-cleaning spill dir:
+mktempdir() do dir
+    results = run(plan; spill_dir=dir)
+    df = materialize(last(results).result)         # spilled → DataFrame
+    # …work with df…
+end                                                # spill files gone here
+```
+
+A step that already returns a `FilePath` is left alone — the runtime only spills *unwrapped* big values.
+
 ## Mixing shell and Julia
 
 Shell commands and Julia functions compose seamlessly:

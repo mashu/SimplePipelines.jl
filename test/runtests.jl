@@ -1363,6 +1363,69 @@ clear_state!()
         end
     end
 
+    @testset "Auto-spill: large results round-trip via SpilledValue" begin
+        # Small result stays in RAM (no spill).
+        small = Step(:small, () -> [1, 2, 3])
+        rs = run(small, verbose=false, force=true)
+        @test rs[1].result isa Vector{Int}
+        @test rs[1].result == [1, 2, 3]
+
+        # Large result gets spilled; downstream materialize reconstructs it.
+        spill_dir = mktempdir()
+        try
+            big_data = collect(1:5_000_000)        # ~40 MB of Int — exceeds 10 MB default
+            big = Step(:big, () -> big_data)
+            results = run(big, verbose=false, force=true, spill_dir=spill_dir)
+            @test results[1].result isa SpilledValue
+            @test isfile(results[1].result.path)
+            @test startswith(basename(results[1].result.path), "splpl_")
+            @test materialize(results[1].result) == big_data
+
+            # Threshold tunable: very small threshold spills tiny values too.
+            tiny = Step(:tiny, () -> [1, 2, 3])
+            r2 = run(tiny, verbose=false, force=true,
+                     spill_threshold_bytes=1, spill_dir=spill_dir)
+            @test r2[1].result isa SpilledValue
+            @test materialize(r2[1].result) == [1, 2, 3]
+        finally
+            rm(spill_dir; recursive=true, force=true)
+        end
+
+        # auto_spill=false bypasses the hook entirely, even for big results.
+        big_data2 = collect(1:5_000_000)
+        big2 = Step(:big2, () -> big_data2)
+        r3 = run(big2, verbose=false, force=true, auto_spill=false)
+        @test r3[1].result isa Vector{Int}
+        @test r3[1].result == big_data2
+
+        # FilePath returned by the user is left untouched (already on disk).
+        spill_dir2 = mktempdir()
+        try
+            user_path = joinpath(spill_dir2, "user.bin")
+            write(user_path, repeat(b"x", 20_000_000))
+            keep_fp = Step(:keep, () -> FilePath(user_path))
+            r4 = run(keep_fp, verbose=false, force=true,
+                     spill_threshold_bytes=1, spill_dir=spill_dir2)
+            @test r4[1].result isa FilePath
+            @test r4[1].result.path == user_path
+        finally
+            rm(spill_dir2; recursive=true, force=true)
+        end
+
+        # Failure path: error strings are not spilled (no .success).
+        boom = Step(:boom, () -> error("nope"))
+        r5 = run(boom, verbose=false, force=true,
+                 spill_threshold_bytes=1)
+        @test !r5[1].success
+        @test r5[1].result isa AbstractString
+
+        # nothing return is preserved.
+        nothing_step = Step(:n, () -> nothing)
+        r6 = run(nothing_step, verbose=false, force=true,
+                 spill_threshold_bytes=1)
+        @test r6[1].result === nothing
+    end
+
     @testset "Memory-safe defaults" begin
         # Auto-detected defaults must be > 0 and bounded by host capacity.
         @test default_jobs() >= 1

@@ -4,7 +4,9 @@
 """
     run(p::Pipeline; verbose=true, dry_run=false, force=false,
         jobs=default_jobs(), memory_budget_mb=default_memory_budget_mb(),
-        thread_budget=0) -> Vector{AbstractStepResult}
+        thread_budget=0,
+        auto_spill=true, spill_threshold_bytes=default_spill_threshold_bytes(),
+        spill_dir=tempdir()) -> Vector{AbstractStepResult}
     run(node::AbstractNode; kwargs...) -> Vector{AbstractStepResult}
 
 Execute a pipeline or node, returning a `StepResult` for every step that ran.
@@ -18,37 +20,48 @@ Execute a pipeline or node, returning a `StepResult` for every step that ran.
   the machine. Pass `jobs=0` to disable (unbounded — only do this if every
   branch is annotated with [`with_resources`](@ref)).
 - `memory_budget_mb`: Soft cap (MB) on concurrent memory across nodes wrapped with
-  [`with_resources`](@ref). Defaults to **50% of total system RAM** so a default
-  run is memory-safe by construction. Branches with declared `mem_mb` block on a
-  semaphore until enough budget is free. Pass `0` to disable.
+  [`with_resources`](@ref). Defaults to **50% of total system RAM**. Branches
+  with declared `mem_mb` block on a semaphore until enough budget is free. Pass
+  `0` to disable.
 - `thread_budget=0`: Soft cap on concurrent CPU threads across nodes that declare
   `threads`; `0` disables the cap.
+- `auto_spill=true`: After a successful step, if `Base.summarysize(r.result) >
+  spill_threshold_bytes`, serialise it to a tempfile in `spill_dir` and replace
+  `r.result` with a [`SpilledValue`](@ref). Keeps the per-run memo's RAM
+  footprint bounded regardless of step count. Pass `auto_spill=false` to keep
+  every result in RAM.
+- `spill_threshold_bytes`: Spill threshold; defaults to 10 MB.
+- `spill_dir`: Where the spill tempfiles live; defaults to `tempdir()`. Pass a
+  `mktempdir()` if you want auto-cleanup at scope exit.
 
 # Memory safety
-The package treats **disk as effectively infinite, RAM as finite**. The
-combination of `jobs` and `memory_budget_mb` defaults is chosen so an
-unannotated pipeline cannot fan out beyond the host's thread count, and
-annotated heavy steps cannot collectively exceed 50% of RAM. If a default-run
-pipeline still OOMs your box, the cause is usually un-annotated heavy steps in
-a tight `jobs` window — annotate them with [`with_resources`](@ref) (declared
-`mem_mb`) and the budget will serialise them.
+The package treats **disk as effectively infinite, RAM as finite**. Three
+defaults combine to make a default-run pipeline memory-safe by construction:
 
-Step results live in the per-run memo for the duration of the run (so DAG
-sharing works). For pipelines that produce large in-memory data per step,
-write the value to disk and return a [`FilePath`](@ref); only the path travels
-between steps.
+1. `jobs` caps the live-execution set at the host's thread count.
+2. `auto_spill` swaps each finished step's big result for a tiny `SpilledValue`
+   so the memo doesn't accumulate raw values.
+3. `memory_budget_mb` serialises declared-heavy steps via
+   [`with_resources`](@ref).
+
+Downstream consumers call [`materialize`](@ref) to retrieve a `SpilledValue`
+or `FilePath`. Small step results (below threshold) stay in RAM with no I/O cost.
 
 The returned vector contains every step's result. If you only want the terminal
 value, take `last(results)`; if you want successes, `filter(r -> r.success, results)`.
 
 See also: [`is_fresh`](@ref), [`Force`](@ref), [`print_dag`](@ref),
-[`with_resources`](@ref), [`FilePath`](@ref), [`default_jobs`](@ref),
+[`with_resources`](@ref), [`FilePath`](@ref), [`SpilledValue`](@ref),
+[`materialize`](@ref), [`default_jobs`](@ref),
 [`default_memory_budget_mb`](@ref).
 """
 function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false,
                   jobs::Int=default_jobs(),
                   memory_budget_mb::Int=default_memory_budget_mb(),
-                  thread_budget::Int=0)
+                  thread_budget::Int=0,
+                  auto_spill::Bool=true,
+                  spill_threshold_bytes::Int=default_spill_threshold_bytes(),
+                  spill_dir::String=tempdir())
     print_pipeline_header(verbose, p)
     if dry_run
         verbose && print_dag(p.root)
@@ -56,7 +69,10 @@ function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::B
     end
     ctx = RunContext(verbose=verbose, jobs=jobs, state_path=STATE_FILE[],
                      memory_budget_mb=memory_budget_mb,
-                     thread_budget=thread_budget)
+                     thread_budget=thread_budget,
+                     auto_spill=auto_spill,
+                     spill_threshold_bytes=spill_threshold_bytes,
+                     spill_dir=spill_dir)
     start = time()
     results = run_node(p.root, ctx, force, nothing)
     save_state!(merge_state(ctx), ctx.state_path)
