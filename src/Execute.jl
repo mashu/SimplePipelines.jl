@@ -96,7 +96,8 @@ function stderr_tail(err_buf::IOBuffer)
     bytes = take!(err_buf)
     n = length(bytes)
     n <= STDERR_CAPTURE_BYTES && return String(bytes)
-    String(bytes[1:STDERR_CAPTURE_BYTES]) * "\n[stderr truncated: $(n - STDERR_CAPTURE_BYTES) bytes dropped]"
+    dropped = n - STDERR_CAPTURE_BYTES
+    String(resize!(bytes, STDERR_CAPTURE_BYTES)) * "\n[stderr truncated: $dropped bytes dropped]"
 end
 
 function execute(step::Step{F}, ctx::RunContext) where {F<:Function}
