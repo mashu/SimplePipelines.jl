@@ -166,22 +166,22 @@ include("Display.jl")
 using PrecompileTools: @setup_workload, @compile_workload
 
 @setup_workload begin
-    # Redirect the state file to a tempfile during precompile so we do not litter
-    # the package source tree (or current directory) with a `.pipeline_state`.
-    _saved_state_path = STATE_FILE[]
-    STATE_FILE[] = tempname()
+    # Use a tempfile state path during precompile so we do not litter the
+    # package source tree (or current directory) with a `.pipeline_state`.
+    # Passed via the `state_path=` kwarg — no global mutation needed.
+    precompile_state = tempname()
     @compile_workload begin
         # Single Cmd step
-        run(Pipeline(@step nop = `true`); verbose=false, force=true)
+        run(Pipeline(@step nop = `true`); verbose=false, force=true, state_path=precompile_state)
         # Sequence + Parallel + Function step
         f = () -> 1
-        run(Pipeline((@step a = `true`) >> (@step b = f) & (@step c = `true`)); verbose=false, force=true)
+        run(Pipeline((@step a = `true`) >> (@step b = f) & (@step c = `true`)); verbose=false, force=true, state_path=precompile_state)
         # ForEach over a small collection
-        run(Pipeline(ForEach([1, 2]) do x; Step(Symbol("e", x), `true`); end); verbose=false, force=true)
+        run(Pipeline(ForEach([1, 2]) do x; Step(Symbol("e", x), `true`); end); verbose=false, force=true, state_path=precompile_state)
         # Resource budget
-        run(Pipeline(with_resources(`true`; mem_mb=1)); verbose=false, force=true, memory_budget_mb=8)
+        run(Pipeline(with_resources(`true`; mem_mb=1)); verbose=false, force=true, memory_budget_mb=8, state_path=precompile_state)
         # OS-level shell pipeline (Step{<:AbstractCmd} path)
-        run(Pipeline(@step _piped = sh_pipe(sh"echo a", sh"cat")); verbose=false, force=true)
+        run(Pipeline(@step piped = sh_pipe(sh"echo a", sh"cat")); verbose=false, force=true, state_path=precompile_state)
         # Rule resolution helpers (avoid hitting the filesystem)
         SimplePipelines.match_pattern("data/{x}.fq", "data/A.fq")
         SimplePipelines.substitute("out/{x}.bam", Dict("x" => "A"))
@@ -189,8 +189,7 @@ using PrecompileTools: @setup_workload, @compile_workload
         # expand: lock in NamedTuple kwargs path
         expand("out/{s}.bam"; s=["A", "B"])
     end
-    isfile(STATE_FILE[]) && rm(STATE_FILE[])
-    STATE_FILE[] = _saved_state_path
+    isfile(precompile_state) && rm(precompile_state)
 end
 
 end # module

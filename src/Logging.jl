@@ -90,11 +90,11 @@ function log_reduce(ctx::RunContext, n::Symbol)
     end
 end
 
-const cmd_log_prefix = shell_raw"  $ "
+const CMD_LOG_PREFIX = shell_raw"  $ "
 
 function log_cmd(ctx::RunContext, cmd::Cmd)
     with_log(ctx) do
-        printstyled(cmd_log_prefix, color=:light_black)
+        printstyled(CMD_LOG_PREFIX, color=:light_black)
         println(join(cmd.exec, " "))
     end
 end
@@ -103,14 +103,14 @@ end
 # render as a human-readable shell pipeline via their `string` method.
 function log_cmd(ctx::RunContext, cmd::Base.AbstractCmd)
     with_log(ctx) do
-        printstyled(cmd_log_prefix, color=:light_black)
+        printstyled(CMD_LOG_PREFIX, color=:light_black)
         println(string(cmd))
     end
 end
 
 function log_cmd(ctx::RunContext, cmd::AbstractString)
     with_log(ctx) do
-        printstyled(cmd_log_prefix, color=:light_black)
+        printstyled(CMD_LOG_PREFIX, color=:light_black)
         println(cmd)
     end
 end
