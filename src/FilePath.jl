@@ -79,7 +79,11 @@ streamed-to-disk shell stdout back as a `String`.
 materialize(x) = x
 materialize(fp::FilePath) = read(fp.path)
 materialize(s::SpilledValue) = open(deserialize, s.path)
-materialize(s::SpilledStdout) = read(s.path, String)
+function materialize(s::SpilledStdout)
+    str = read(s.path, String)
+    isfile(s.path) && rm(s.path; force=true)
+    str
+end
 
 # Internal: serialise `value` to a tempfile in `dir` and return a SpilledValue.
 function spill_to_disk(value, dir::AbstractString)

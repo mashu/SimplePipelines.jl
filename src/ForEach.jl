@@ -53,10 +53,14 @@ function ForEach(f::Function, pattern::String)
 end
 ForEach(pattern::String) = f -> ForEach(f, pattern)
 
+function ForEach(f::F, items::Vector{T}) where {F<:Function, T}
+    ForEach{F, Vector{T}}(f, items)
+end
+
 function ForEach(f::Function, items)
     vec = collect(items)
     isempty(vec) && error("ForEach requires at least one item")
-    ForEach{typeof(f), typeof(vec)}(f, vec)
+    ForEach(f, vec)
 end
 ForEach(f::Function) = items -> ForEach(f, items)
 

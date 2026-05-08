@@ -53,7 +53,6 @@ end
 # Resourced wrapper: budget is acquired only when the wrapped node is actually going
 # to execute. If the inner is a memoized Step that another task is already running, we
 # do not acquire — otherwise waiting visitors would double-count the budget.
-# `try/finally` is used purely to guarantee release; no exceptions are caught.
 run_node(r::Resourced, ctx::RunContext, forced::Bool=false, context_input=nothing) =
     run_resourced(r.node, r.resources, ctx, forced, context_input)
 
@@ -80,17 +79,13 @@ function handle_resourced_claim(::ExecuteClaim, step::Step, res::Resources, ctx:
     end
 end
 
-# Acquire matching slots in both budgets, run, release in reverse order.
-# `try/finally` here is purely cleanup, not exception handling.
 function with_acquired_resources(f, res::Resources, ctx::RunContext)
     mem_taken = acquire!(ctx.memory_budget, res.mem_mb)
     threads_taken = acquire!(ctx.thread_budget, res.threads)
-    try
-        f()
-    finally
-        release!(ctx.thread_budget, threads_taken)
-        release!(ctx.memory_budget, mem_taken)
-    end
+    out = f()
+    release!(ctx.thread_budget, threads_taken)
+    release!(ctx.memory_budget, mem_taken)
+    out
 end
 
 # Leaf step. The first task to encounter `step` in a run executes it; concurrent and

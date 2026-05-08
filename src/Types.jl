@@ -131,7 +131,7 @@ end
 function Branch(cond::Function, t, f)
     tn = node_operand(t)
     fn = node_operand(f)
-    Branch{typeof(cond), typeof(tn), typeof(fn)}(cond, tn, fn)
+    Branch(cond, tn, fn)
 end
 
 """
@@ -165,7 +165,7 @@ struct Reduce{F<:Function, N<:AbstractNode} <: AbstractNode
     reduce_step::Step{F}
 end
 function Reduce(f::Function, node::AbstractNode; name::Symbol=:reduce)
-    Reduce{typeof(f), typeof(node)}(f, node, name, Step(name, f))
+    Reduce(f, node, name, Step(name, f))
 end
 Reduce(node::AbstractNode; name::Symbol=:reduce) = f -> Reduce(f, node; name=name)
 
@@ -264,6 +264,34 @@ end
 abstract type AbstractStepResult end
 
 """
+    StepFailure(kind, message; detail="")
+
+Structured failure payload for unsuccessful steps and internal execution errors.
+
+- `kind` is a symbol categorising the error (`:missing_input`, `:missing_output`,
+  `:process_failed`, `:exception`, ...).
+- `message` is a short human-readable summary.
+- `detail` holds optional extra context (e.g. stderr tail). It may be empty.
+
+This replaces stringly-typed `"Error: ..."` results; formatting is deferred to
+`showerror` / display code.
+"""
+struct StepFailure
+    kind::Symbol
+    message::String
+    detail::String
+end
+StepFailure(kind::Symbol, message::AbstractString; detail::AbstractString="") =
+    StepFailure(kind, String(message), String(detail))
+
+Base.showerror(io::IO, e::StepFailure) = isempty(e.detail) ?
+    print(io, e.message) :
+    print(io, e.message, "\n", e.detail)
+
+Base.string(e::StepFailure) = sprint(showerror, e)
+Base.show(io::IO, e::StepFailure) = print(io, "StepFailure(", repr(e.kind), ", ", repr(e.message), ")")
+
+"""
     StepResult(step, success, duration, inputs, outputs, result)
 
 Result of running one step. Type is `StepResult{S, I, O, V}`. Type-stable: no `Any`.
@@ -284,7 +312,7 @@ struct StepResult{S<:Step, I, O, V} <: AbstractStepResult
 end
 StepResult(step::S, success::Bool, duration::Float64, inputs::I, outputs::O, result::V) where {S<:Step, I, O, V} = StepResult{S, I, O, V}(step, success, duration, inputs, outputs, result)
 
-"""Type-stable outcome of running a thunk: success and value, or failure and error string. Sole exception boundary."""
+"""Type-stable outcome of running a thunk: success + value, or failure + `StepFailure`. Sole exception boundary."""
 struct RunOutcome{T}
     ok::Bool
     value::T

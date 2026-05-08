@@ -65,14 +65,11 @@ same number).
 function acquire!(b::ResourceBudget, n::Int)
     (b.capacity == 0 || n <= 0) && return 0
     admit = min(n, b.capacity)
-    lock(b.cond)
-    try
+    lock(b.cond) do
         while b.used + admit > b.capacity
             wait(b.cond)
         end
         b.used += admit
-    finally
-        unlock(b.cond)
     end
     admit
 end
@@ -85,12 +82,9 @@ or `n <= 0`. `n` should be the value returned by the matching `acquire!`.
 """
 function release!(b::ResourceBudget, n::Int)
     (b.capacity == 0 || n <= 0) && return
-    lock(b.cond)
-    try
+    lock(b.cond) do
         b.used = max(0, b.used - n)
         notify(b.cond; all=true)
-    finally
-        unlock(b.cond)
     end
     nothing
 end

@@ -234,6 +234,12 @@ function show_result_inline(io::IO, s::String)
     trunc = length(s) > 80 ? first(s, 80) * "…" : s
     println(io, " \"", replace(trunc, '\n' => "\\n"), "\"")
 end
+function show_result_inline(io::IO, e::StepFailure)
+    s = string(e)
+    isempty(s) && return println(io)
+    trunc = length(s) > 80 ? first(s, 80) * "…" : s
+    println(io, " \"", replace(trunc, '\n' => "\\n"), "\"")
+end
 show_result_inline(io::IO, _) = println(io)
 
 Base.show(io::IO, s::Step) = print(io, "Step(:", s.name, ")")

@@ -47,6 +47,7 @@ module SimplePipelines
 
 export Step, @step, Sequence, Parallel, Pipeline, AbstractNode
 export StepResult, AbstractStepResult
+export StepFailure
 export Retry, Fallback, Branch, Timeout, Force
 export Reduce, ForEach, fe
 export SameInputPipe, >>>, BroadcastPipe

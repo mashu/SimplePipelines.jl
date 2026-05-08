@@ -267,7 +267,7 @@ build_step_from_work(name::Symbol, w::Function, inputs, outputs) = Step(name, w,
 build_step_from_work(name::Symbol, w::ShRun, inputs, outputs) = Step(name, w, inputs, outputs)
 build_step_from_work(name::Symbol, w::AbstractNode, _inputs, _outputs) = w
 build_step_from_work(name::Symbol, w, inputs, outputs) =
-    error("Rule `$name`: work function must return Cmd, String, Function, ShRun, or AbstractNode, got $(typeof(w))")
+    error("Rule `$name`: work function must return Cmd, String, Function, ShRun, or AbstractNode.")
 
 """
     resolve(rules, targets) -> AbstractNode

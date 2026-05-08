@@ -5,12 +5,15 @@ function run_safely(f)::RunOutcome
     try
         RunOutcome(true, f())
     catch e
-        RunOutcome(false, sprint(showerror, e))
+        RunOutcome(false, StepFailure(:exception, sprint(showerror, e)))
     end
 end
 
 path_ready_error(path::String, is_input::Bool) =
-    isfile(path) ? nothing : (is_input ? "Missing input: $path" : "Missing output: $path")
+    isfile(path) ? nothing :
+    (is_input ?
+        StepFailure(:missing_input, "Missing input: $path") :
+        StepFailure(:missing_output, "Missing output: $path"))
 
 function path_check_inputs(step::Step)
     for inp in step.inputs
@@ -63,7 +66,9 @@ function run_streaming(step::Step, ctx::RunContext, work::Base.AbstractCmd, star
     elapsed = time() - start
     if !outcome.ok
         rm(out_path; force=true)
-        return step_result(step, false, elapsed, "Error: $(outcome.value)\n$(stderr_tail(err_buf))")
+        return step_result(step, false, elapsed,
+                           StepFailure(:process_failed, "Error while running command";
+                                       detail="$(string(outcome.value))\n$(stderr_tail(err_buf))"))
     end
     out_err = path_check_outputs(step)
     if out_err !== nothing
@@ -86,7 +91,9 @@ function run_inmem(step::Step, work::Base.AbstractCmd, start::Float64)
     err_buf = IOBuffer()
     outcome = run_safely(() -> Base.run(Base.pipeline(work, stdout=out_buf, stderr=err_buf)))
     elapsed = time() - start
-    outcome.ok || return step_result(step, false, elapsed, "Error: $(outcome.value)\n$(String(take!(err_buf)))")
+    outcome.ok || return step_result(step, false, elapsed,
+                                     StepFailure(:process_failed, "Error while running command";
+                                                 detail="$(string(outcome.value))\n$(String(take!(err_buf)))"))
     out_err = path_check_outputs(step)
     out_err === nothing || return step_result(step, false, elapsed, out_err)
     step_result(step, true, elapsed, String(take!(out_buf)))
@@ -109,7 +116,9 @@ function execute(step::Step{F}, ctx::RunContext) where {F<:Function}
     end
     elapsed = time() - start
     if !outcome.ok
-        return step_result(step, false, elapsed, "Error: $(outcome.value)")
+        return step_result(step, false, elapsed,
+                           StepFailure(:exception, "Error while running function step";
+                                       detail=string(outcome.value)))
     end
     out_err = path_check_outputs(step)
     out_err !== nothing && return step_result(step, false, elapsed, out_err)
@@ -124,7 +133,9 @@ function execute(step::Step{F}, ctx::RunContext, input) where {F<:Function}
     end
     elapsed = time() - start
     if !outcome.ok
-        return step_result(step, false, elapsed, "Error: $(outcome.value)")
+        return step_result(step, false, elapsed,
+                           StepFailure(:exception, "Error while running function step";
+                                       detail=string(outcome.value)))
     end
     out_err = path_check_outputs(step)
     out_err !== nothing && return step_result(step, false, elapsed, out_err)
@@ -134,8 +145,8 @@ end
 # Fallback for invalid work types: produce a clear failure StepResult, not a MethodError.
 function execute(step::Step, ::RunContext)
     msg = "Step work must be an AbstractCmd (Cmd / OrCmds / …), Function, or ShRun. " *
-          "Got $(typeof(step.work)). If you used `@step name(input) = process_file(...)`, " *
+          "If you used `@step name(input) = process_file(...)`, " *
           "the call runs at build time. Use `@step name(\"path\") = process_file` (function " *
           "without parentheses) so the function receives the input at run time."
-    step_result(step, false, 0.0, msg)
+    step_result(step, false, 0.0, StepFailure(:invalid_step_work, msg))
 end
