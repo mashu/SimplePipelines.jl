@@ -31,6 +31,7 @@ Resources
 Resourced
 FilePath
 SpilledValue
+SpilledStdout
 Rule
 NoWork
 ```

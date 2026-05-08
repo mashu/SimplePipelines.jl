@@ -30,61 +30,75 @@ end
 step_result(step::Step, success::Bool, elapsed::Float64, result) =
     StepResult(step, success, elapsed, step.inputs, step.outputs, result)
 
-"""Execute a shell command string under sh -c with stdout/stderr captured separately."""
-function execute_shell(step::Step, ctx::RunContext, cmdstr::AbstractString)
-    start = time()
-    err = path_check_inputs(step)
-    err !== nothing && return step_result(step, false, time() - start, err)
-    log_cmd(ctx, cmdstr)
-    out_buf = IOBuffer()
-    err_buf = IOBuffer()
-    outcome = run_safely() do
-        Base.run(Base.pipeline(Cmd(["sh", "-c", cmdstr]), stdout=out_buf, stderr=err_buf))
-    end
-    elapsed = time() - start
-    if !outcome.ok
-        return step_result(step, false, elapsed, "Error: $(outcome.value)\n$(String(take!(err_buf)))")
-    end
-    out_err = path_check_outputs(step)
-    out_err !== nothing && return step_result(step, false, elapsed, out_err)
-    step_result(step, true, elapsed, String(take!(out_buf)))
-end
+const STDERR_CAPTURE_BYTES = 64 * 1024
 
-# Cmd from sh"..." or sh(s) is ["sh", "-c", script]; share the shell path.
+"""Execute a shell command string under sh -c with stdout/stderr captured separately."""
+execute_shell(step::Step, ctx::RunContext, cmdstr::AbstractString) =
+    capture_cmd(step, ctx, Cmd(["sh", "-c", cmdstr]), cmdstr)
+
 function execute(step::Step{Cmd}, ctx::RunContext)
     exec = step.work.exec
     length(exec) >= 3 && exec[1] == "sh" && exec[2] == "-c" &&
         return execute_shell(step, ctx, exec[3])
-    execute_cmd(step, step.work, ctx)
+    capture_cmd(step, ctx, step.work, step.work)
 end
 
-# Any other AbstractCmd — including the OrCmds returned by `Base.pipeline(c1, c2, …)`
-# (which is what `sh_pipe` builds). Stdout flows through OS pipes between the
-# component commands; only the final stage's stdout is captured.
 execute(step::Step{T}, ctx::RunContext) where {T<:Base.AbstractCmd} =
-    execute_cmd(step, step.work, ctx)
+    capture_cmd(step, ctx, step.work, step.work)
 
-# Internal: run an AbstractCmd, capturing final stdout / stderr.
-function execute_cmd(step::Step, work::Base.AbstractCmd, ctx::RunContext)
+execute(step::Step{<:ShRun}, ctx::RunContext) = execute_shell(step, ctx, step.work())
+
+function capture_cmd(step::Step, ctx::RunContext, work::Base.AbstractCmd, log_target)
     start = time()
     err = path_check_inputs(step)
-    err !== nothing && return step_result(step, false, time() - start, err)
-    log_cmd(ctx, work)
-    out_buf = IOBuffer()
+    err === nothing || return step_result(step, false, time() - start, err)
+    log_cmd(ctx, log_target)
+    ctx.auto_spill ? run_streaming(step, ctx, work, start) : run_inmem(step, work, start)
+end
+
+function run_streaming(step::Step, ctx::RunContext, work::Base.AbstractCmd, start::Float64)
+    out_path = reserve_stdout_path(ctx.spill_dir)
     err_buf = IOBuffer()
-    outcome = run_safely() do
-        Base.run(Base.pipeline(work, stdout=out_buf, stderr=err_buf))
-    end
+    outcome = run_safely(() -> Base.run(Base.pipeline(work, stdout=out_path, stderr=err_buf)))
     elapsed = time() - start
     if !outcome.ok
-        return step_result(step, false, elapsed, "Error: $(outcome.value)\n$(String(take!(err_buf)))")
+        rm(out_path; force=true)
+        return step_result(step, false, elapsed, "Error: $(outcome.value)\n$(stderr_tail(err_buf))")
     end
     out_err = path_check_outputs(step)
-    out_err !== nothing && return step_result(step, false, elapsed, out_err)
+    if out_err !== nothing
+        rm(out_path; force=true)
+        return step_result(step, false, elapsed, out_err)
+    end
+    finalize_stdout(step, ctx, out_path, elapsed)
+end
+
+function finalize_stdout(step::Step, ctx::RunContext, out_path::String, elapsed::Float64)
+    filesize(out_path) > ctx.spill_threshold_bytes &&
+        return step_result(step, true, elapsed, SpilledStdout(out_path))
+    s = read(out_path, String)
+    rm(out_path; force=true)
+    step_result(step, true, elapsed, s)
+end
+
+function run_inmem(step::Step, work::Base.AbstractCmd, start::Float64)
+    out_buf = IOBuffer()
+    err_buf = IOBuffer()
+    outcome = run_safely(() -> Base.run(Base.pipeline(work, stdout=out_buf, stderr=err_buf)))
+    elapsed = time() - start
+    outcome.ok || return step_result(step, false, elapsed, "Error: $(outcome.value)\n$(String(take!(err_buf)))")
+    out_err = path_check_outputs(step)
+    out_err === nothing || return step_result(step, false, elapsed, out_err)
     step_result(step, true, elapsed, String(take!(out_buf)))
 end
 
-execute(step::Step{<:ShRun}, ctx::RunContext) = execute_shell(step, ctx, step.work())
+function stderr_tail(err_buf::IOBuffer)
+    bytes = take!(err_buf)
+    n = length(bytes)
+    n <= STDERR_CAPTURE_BYTES && return String(bytes)
+    dropped = n - STDERR_CAPTURE_BYTES
+    String(resize!(bytes, STDERR_CAPTURE_BYTES)) * "\n[stderr truncated: $dropped bytes dropped]"
+end
 
 function execute(step::Step{F}, ctx::RunContext) where {F<:Function}
     start = time()

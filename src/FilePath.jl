@@ -49,15 +49,37 @@ Base.string(s::SpilledValue) = s.path
 Base.show(io::IO, s::SpilledValue) = print(io, "SpilledValue(", repr(s.path), ")")
 
 """
+    SpilledStdout(path::String)
+
+Wrapper for a shell step's captured stdout that was *streamed directly to disk*
+rather than buffered in RAM. The runtime emits this when an `auto_spill`-enabled
+shell step's output file exceeds `spill_threshold_bytes`, so peak memory is
+independent of the command's output size. `materialize(::SpilledStdout)` reads
+the file back as a `String`.
+
+Distinct from [`SpilledValue`](@ref): `SpilledValue` stores a `Base.Serialization`
+blob of an arbitrary Julia object; `SpilledStdout` is raw bytes from a captured
+process — never serialised, never deserialised.
+"""
+struct SpilledStdout
+    path::String
+end
+
+Base.string(s::SpilledStdout) = s.path
+Base.show(io::IO, s::SpilledStdout) = print(io, "SpilledStdout(", repr(s.path), ")")
+
+"""
     materialize(value)
 
 Identity for plain values. For [`FilePath`](@ref), reads raw bytes from disk
 (extend for typed loaders). For [`SpilledValue`](@ref), deserialises the value
-back into the original Julia object.
+back into the original Julia object. For [`SpilledStdout`](@ref), reads the
+streamed-to-disk shell stdout back as a `String`.
 """
 materialize(x) = x
 materialize(fp::FilePath) = read(fp.path)
 materialize(s::SpilledValue) = open(deserialize, s.path)
+materialize(s::SpilledStdout) = read(s.path, String)
 
 # Internal: serialise `value` to a tempfile in `dir` and return a SpilledValue.
 function spill_to_disk(value, dir::AbstractString)
@@ -65,6 +87,11 @@ function spill_to_disk(value, dir::AbstractString)
     path = joinpath(dir, "splpl_" * randstring_lower(12) * ".jls")
     open(io -> serialize(io, value), path, "w")
     SpilledValue(path)
+end
+
+function reserve_stdout_path(dir::AbstractString)
+    isdir(dir) || mkpath(dir)
+    joinpath(dir, "splpl_out_" * randstring_lower(12))
 end
 
 # Tiny lowercase-alphanumeric token for spill filenames; avoids pulling in

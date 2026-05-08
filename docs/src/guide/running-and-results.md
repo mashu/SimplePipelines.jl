@@ -43,10 +43,12 @@ Relevant fields include `.success`, `.duration`, `.result`, `.inputs`, and `.out
 The package treats **disk as effectively infinite, RAM as finite**. Three defaults make a default-run pipeline memory-safe by construction:
 
 1. `jobs = min(Threads.nthreads(), 8)` — concurrent fan-out can't oversubscribe the host.
-2. `auto_spill = true` — after a step finishes, if `Base.summarysize(r.result) > spill_threshold_bytes` (10 MB by default), the value is serialised to a tempfile in `spill_dir` (defaults to `tempdir()`) and `r.result` is replaced with a [`SpilledValue`](@ref). Small results stay in RAM (no I/O cost).
+2. `auto_spill = true` — keeps both shell *and* function step results out of RAM:
+   - **Shell steps** stream stdout straight to a tempfile in `spill_dir` while the command runs, so peak RAM is the OS pipe buffer (≈ 64 KB) rather than the full output. After the process exits, outputs below `spill_threshold_bytes` (10 MB by default) are read back as a `String` and the tempfile is deleted; outputs above the threshold stay on disk and `r.result` becomes a [`SpilledStdout`](@ref).
+   - **Function steps** are checked after they return: if `Base.summarysize(r.result) > spill_threshold_bytes`, the value is serialised to a tempfile and `r.result` is replaced with a [`SpilledValue`](@ref). Small results stay in RAM (no I/O cost).
 3. `memory_budget_mb = 50% of total RAM` — caps the *concurrent* memory of nodes wrapped in [`with_resources`](@ref).
 
-Downstream consumers call [`materialize`](@ref) to load a `SpilledValue` (round-trips via `Base.Serialization`) or a [`FilePath`](@ref) (raw bytes by default; users specialise for typed loading like CSV → DataFrame).
+Downstream consumers call [`materialize`](@ref) to load a `SpilledValue` (round-trips via `Base.Serialization`), a `SpilledStdout` (read as `String`), or a [`FilePath`](@ref) (raw bytes by default; users specialise for typed loading like CSV → DataFrame).
 
 ```julia
 # Tight RAM:
