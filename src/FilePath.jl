@@ -89,8 +89,6 @@ function spill_to_disk(value, dir::AbstractString)
     SpilledValue(path)
 end
 
-# Internal: pre-allocate a fresh tempfile path inside `dir` for streaming
-# stdout into. The caller is responsible for opening / writing the file.
 function reserve_stdout_path(dir::AbstractString)
     isdir(dir) || mkpath(dir)
     joinpath(dir, "splpl_out_" * randstring_lower(12))
