@@ -25,11 +25,20 @@ Execute a pipeline or node, returning a `StepResult` for every step that ran.
   `0` to disable.
 - `thread_budget=0`: Soft cap on concurrent CPU threads across nodes that declare
   `threads`; `0` disables the cap.
-- `auto_spill=true`: After a successful step, if `Base.summarysize(r.result) >
-  spill_threshold_bytes`, serialise it to a tempfile in `spill_dir` and replace
-  `r.result` with a [`SpilledValue`](@ref). Keeps the per-run memo's RAM
-  footprint bounded regardless of step count. Pass `auto_spill=false` to keep
-  every result in RAM.
+- `auto_spill=true`: Two complementary behaviours.
+  *(1) Shell steps:* stdout streams **directly** to a tempfile in `spill_dir`
+  while the command runs, so peak RAM is bounded by the OS pipe buffer rather
+  than the command's total output. After the process exits, if the file is
+  below `spill_threshold_bytes` it is read back as a `String` and the tempfile
+  is deleted (preserving in-RAM semantics for typical short outputs); above
+  threshold, `r.result` becomes a [`SpilledStdout`](@ref) wrapper that
+  `materialize` reads back as a `String` on demand.
+  *(2) Function steps:* after the step returns, if
+  `Base.summarysize(r.result) > spill_threshold_bytes`, the value is
+  serialised to a tempfile and `r.result` is replaced with a [`SpilledValue`](@ref).
+  Together these keep the per-run memo's RAM footprint bounded regardless of
+  step count or command output size. Pass `auto_spill=false` to keep every
+  result in RAM (shell steps revert to the legacy `IOBuffer` capture).
 - `spill_threshold_bytes`: Spill threshold; defaults to 10 MB.
 - `spill_dir`: Where the spill tempfiles live; defaults to `tempdir()`. Pass a
   `mktempdir()` if you want auto-cleanup at scope exit.

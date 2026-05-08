@@ -1441,6 +1441,58 @@ clear_state!()
         @test r6[1].result === nothing
     end
 
+    @testset "Shell stdout streams to disk (no IOBuffer balloon)" begin
+        # SpilledStdout wrapper: round-trip via materialize.
+        ss = SpilledStdout("/nonexistent/path")
+        @test ss isa SpilledStdout
+        @test string(ss) == "/nonexistent/path"
+        @test occursin("SpilledStdout", sprint(show, ss))
+
+        spill_dir = mktempdir()
+        try
+            # Small stdout: streams to disk, gets read back, file is cleaned up,
+            # caller still sees a String just like before.
+            small = Step(:small_sh, sh"echo hello")
+            r = run(small, verbose=false, force=true, spill_dir=spill_dir)
+            @test r[1].success
+            @test r[1].result isa String
+            @test strip(r[1].result) == "hello"
+            # Streaming tempfile was deleted because output stayed under threshold.
+            @test isempty(filter(f -> startswith(f, "splpl_out_"), readdir(spill_dir)))
+
+            # Large stdout: stays on disk as SpilledStdout — peak RAM is the
+            # 64-KiB pipe, not the full output. Force a low threshold to keep
+            # the test cheap.
+            big = Step(:big_sh, sh"yes hello | head -c 200000")
+            rb = run(big, verbose=false, force=true,
+                     spill_dir=spill_dir, spill_threshold_bytes=1024)
+            @test rb[1].success
+            @test rb[1].result isa SpilledStdout
+            @test isfile(rb[1].result.path)
+            @test startswith(basename(rb[1].result.path), "splpl_out_")
+            @test filesize(rb[1].result.path) == 200000
+            mat = materialize(rb[1].result)
+            @test mat isa String
+            @test length(mat) == 200000
+
+            # auto_spill=false falls back to the old IOBuffer path.
+            inmem = Step(:inmem_sh, sh"echo small")
+            ri = run(inmem, verbose=false, force=true,
+                     auto_spill=false, spill_dir=spill_dir)
+            @test ri[1].result isa String
+            @test strip(ri[1].result) == "small"
+
+            # Failed shell step: stderr is captured and tempfile is cleaned up.
+            bad = Step(:bad_sh, sh"echo to-stderr 1>&2; exit 7")
+            rf = run(bad, verbose=false, force=true, spill_dir=spill_dir)
+            @test !rf[1].success
+            @test occursin("to-stderr", rf[1].result)
+            @test isempty(filter(f -> startswith(f, "splpl_out_"), readdir(spill_dir)))
+        finally
+            rm(spill_dir; recursive=true, force=true)
+        end
+    end
+
     @testset "Memory-safe defaults" begin
         # Auto-detected defaults must be > 0 and bounded by host capacity.
         @test default_jobs() >= 1

@@ -139,11 +139,12 @@ function maybe_spill_result(r::StepResult, ctx::RunContext)
     StepResult(r.step, r.success, r.duration, r.inputs, r.outputs, spilled)
 end
 
-# Don't spill values that are already on disk (FilePath, SpilledValue) or
-# nothing.
+# Don't spill values that are already on disk (FilePath, SpilledValue,
+# SpilledStdout) or nothing.
 spill_candidate(::Nothing) = false
 spill_candidate(::FilePath) = false
 spill_candidate(::SpilledValue) = false
+spill_candidate(::SpilledStdout) = false
 spill_candidate(_) = true
 
 # Dispatch the actual work. First arg specificity orders these unambiguously.
