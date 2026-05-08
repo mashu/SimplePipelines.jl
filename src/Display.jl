@@ -118,22 +118,11 @@ function print_dag(io::IO, ::NoWork, pre::String, cont::String, st::Styler)
     print(io, pre); emitln(st, io, "∅ NoWork"; color=:light_black)
 end
 
-# A Branch arm is rendered as "├─<marker><node>" / "└─<marker><node>", where
-# the marker is colored on `Color`. Plain styler folds the marker into the
-# prefix so layout matches the colored output.
 function print_branch_arm(io::IO, node::AbstractNode, cont::String, branch::String, gutter::String,
-                          ::Color, marker_color::Symbol, marker::String)
-    pre = cont * branch
-    next = cont * gutter * "  "
-    print(io, pre)
-    printstyled(io, marker, color=marker_color)
-    print_dag(io, node, "", next, Color())
-end
-function print_branch_arm(io::IO, node::AbstractNode, cont::String, branch::String, gutter::String,
-                          ::Plain, ::Symbol, marker::String)
-    pre = cont * branch * marker
-    next = cont * gutter * "  "
-    print_dag(io, node, pre, next, Plain())
+                          st::Styler, marker_color::Symbol, marker::String)
+    print(io, cont, branch)
+    emit(st, io, marker; color=marker_color)
+    print_dag(io, node, "", cont * gutter * "  ", st)
 end
 
 function print_children(io::IO, nodes, cont::String, st::Styler)
@@ -146,27 +135,17 @@ function print_children(io::IO, nodes, cont::String, st::Styler)
     end
 end
 
-# One-line show (e.g. in vectors): named fields, omit empty; use colors when io has :color for readability.
-# Two methods on the result type to avoid Union{String,Nothing} kwarg.
-show_stepresult_oneline(io::IO, r::StepResult, dur::Float64) =
-    show_stepresult_oneline_impl(io, r, dur, nothing)
-show_stepresult_oneline(io::IO, r::StepResult, dur::Float64, result_str::AbstractString) =
-    show_stepresult_oneline_impl(io, r, dur, result_str)
-
-function show_stepresult_oneline_impl(io::IO, r::StepResult, dur::Float64, result_str)
+# One-line show: named fields, empty inputs/outputs omitted, optional ", result=…" tail.
+# `result_str = ""` means "skip the result field" — chosen over a Union to keep dispatch flat.
+function show_stepresult_oneline(io::IO, r::StepResult, dur::Float64, result_str::AbstractString="")
     st = styler(get(io, :color, false)::Bool)
     print(io, "StepResult(step=")
     show_step_inline(io, r.step, st)
-    print(io, ", success=")
-    emit(st, io, string(r.success); color=r.success ? :green : :red)
-    print(io, ", duration=")
-    emit(st, io, string(round(dur; digits=2)); color=:light_black)
+    print(io, ", success="); emit(st, io, string(r.success); color=r.success ? :green : :red)
+    print(io, ", duration="); emit(st, io, string(round(dur; digits=2)); color=:light_black)
     isempty(r.inputs)  || print(io, ", inputs=",  summary(r.inputs))
     isempty(r.outputs) || print(io, ", outputs=", summary(r.outputs))
-    if result_str !== nothing
-        print(io, ", result=")
-        emit(st, io, result_str; color=:light_black)
-    end
+    isempty(result_str) || (print(io, ", result="); emit(st, io, result_str; color=:light_black))
     print(io, ")")
 end
 
@@ -175,14 +154,11 @@ show_step_inline(io::IO, s::Step, ::Plain) = show(io, s)
 
 function Base.show(io::IO, r::StepResult{S, I, O, String}) where {S, I, O}
     s = r.result
-    result_str = length(s) > 200 ? repr(first(s, 200) * "…") : repr(s)
-    show_stepresult_oneline(io, r, r.duration, result_str)
+    show_stepresult_oneline(io, r, r.duration,
+                            length(s) > 200 ? repr(first(s, 200) * "…") : repr(s))
 end
-function Base.show(io::IO, r::StepResult{S, I, O, V}) where {S, I, O, V}
-    r.result === nothing ?
-        show_stepresult_oneline(io, r, r.duration) :
-        show_stepresult_oneline(io, r, r.duration, repr(r.result))
-end
+Base.show(io::IO, r::StepResult{S, I, O, V}) where {S, I, O, V} =
+    show_stepresult_oneline(io, r, r.duration, r.result === nothing ? "" : repr(r.result))
 
 # Multi-line show for REPL: show only sections that have content (dispatch by presence of inputs/result).
 # Steps with no input files (start nodes): omit input line. No "(none)" or "Nothing"; cleaner and consistent.

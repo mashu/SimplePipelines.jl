@@ -6,7 +6,7 @@ const WILDCARD_RE = r"\{(\w+)\}"
 const REGEX_META_RE = r"[.+^*?$()\[\]|]"
 
 """Escape regex metacharacters in a literal pattern fragment (single pass)."""
-escape_regex_literal(s::AbstractString) = replace(s, REGEX_META_RE => s -> "\\" * s)
+escape_regex_literal(s::AbstractString) = replace(s, REGEX_META_RE => m -> "\\" * m)
 
 as_node(n::AbstractNode) = n
 as_node(x) = Step(x)

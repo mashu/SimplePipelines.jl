@@ -333,34 +333,23 @@ function run_node(bp::BroadcastPipe, ctx::RunContext, forced::Bool=false, contex
     run_node(bp.first >> bp.second, ctx, forced, context_input)
 end
 
-# Expand a ForEach into a list of nodes and per-branch contexts.
-# The pattern variant always returns a `Vector{Vector{String}}` for `contexts`
-# (one element per branch), keeping the contexts vector type-stable. Single-
-# capture patterns thus produce 1-element inner vectors; the user's block has
-# already received the unwrapped scalar via `fe.f(c[1])`.
+# Expand a ForEach into (nodes, per-branch contexts). The pattern variant
+# always returns `matches::Vector{Vector{String}}` as contexts so the contexts
+# vector is type-stable across branches; the user block still sees unwrapped
+# scalars (via `fe.f(c[1])` or `fe.f(c...)`).
 function expand_foreach(fe::ForEach{F, String}) where F
-    pattern = fe.source
-    matches = find_matches(pattern, for_each_regex(pattern))
-    isempty(matches) && error("ForEach: no files match '$pattern'")
-    nodes = AbstractNode[as_node(call_foreach_block(fe, c)) for c in matches]
+    matches = find_matches(fe.source, for_each_regex(fe.source))
+    isempty(matches) && error("ForEach: no files match '$(fe.source)'")
+    nodes = AbstractNode[ensure_foreach_node(fe, length(c) == 1 ? fe.f(c[1]) : fe.f(c...)) for c in matches]
     nodes, matches
 end
 function expand_foreach(fe::ForEach{F, Vector{T}}) where {F, T}
     items = collect(fe.source)
-    nodes = AbstractNode[as_node(call_foreach_block(fe, item)) for item in items]
+    nodes = AbstractNode[ensure_foreach_node(fe, fe.f(item)) for item in items]
     nodes, items
 end
 
-# Apply the ForEach block to one branch's captures/item with a couple of guards.
-function call_foreach_block(fe::ForEach{F, String}, captures::Vector{String}) where F
-    r = length(captures) == 1 ? fe.f(captures[1]) : fe.f(captures...)
-    foreach_block_check(fe, r)
-end
-function call_foreach_block(fe::ForEach, item)
-    foreach_block_check(fe, fe.f(item))
-end
-
-function foreach_block_check(fe::ForEach, r)
+function ensure_foreach_node(fe::ForEach, r)
     r === nothing && error("ForEach block must return a Step or node, not nothing.")
     node = as_node(r)
     contains_node(fe, node) && error("Pipeline cycle: ForEach block returned a node containing this ForEach.")

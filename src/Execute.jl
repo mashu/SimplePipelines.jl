@@ -9,20 +9,15 @@ function run_safely(f)::RunOutcome
     end
 end
 
-# Shared "must be on disk" check. `kind` is :missing_input or :missing_output
-# and selects which step.* field to scan and which failure tag to emit.
-function check_paths_on_disk(step::Step, kind::Symbol)
-    paths, label = kind === :missing_input ?
-        (step.inputs, "Missing input") :
-        (step.outputs, "Missing output")
+function check_paths_on_disk(paths::Vector{String}, kind::Symbol, label::AbstractString)
     for path in paths
         isfile(path) || return StepFailure(kind, "$label: $path")
     end
     nothing
 end
 
-path_check_inputs(step::Step) = check_paths_on_disk(step, :missing_input)
-path_check_outputs(step::Step) = check_paths_on_disk(step, :missing_output)
+path_check_inputs(step::Step)  = check_paths_on_disk(step.inputs,  :missing_input,  "Missing input")
+path_check_outputs(step::Step) = check_paths_on_disk(step.outputs, :missing_output, "Missing output")
 
 step_result(step::Step, success::Bool, elapsed::Float64, result) =
     StepResult(step, success, elapsed, step.inputs, step.outputs, result)

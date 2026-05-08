@@ -219,21 +219,13 @@ end
 
 Expand `{input}`, `{input[i]}`, `{output}`, `{output[i]}` in a shell template.
 """
-const INDEXED_INPUT_RE = r"\{input\[(\d+)\]\}"
-const INDEXED_OUTPUT_RE = r"\{output\[(\d+)\]\}"
-
-# Parse the index from a matched "{input[N]}" / "{output[N]}" substring without
-# re-running the regex (the bracketed digits are between `[` and `]`).
-function bracket_index(matched::AbstractString)
-    lb = findfirst('[', matched)::Int
-    rb = findlast(']', matched)::Int
-    parse(Int, matched[lb+1:rb-1])
-end
+# Parse N from a matched "{input[N]}" / "{output[N]}" substring (digits sit between `[` and `]`).
+bracket_index(m::AbstractString) = parse(Int, m[findfirst('[', m)+1 : findlast(']', m)-1])
 
 function fill_special(template::String, inputs::Vector{String}, outputs::Vector{String})
-    s = replace(template, INDEXED_INPUT_RE => m -> inputs[bracket_index(m)])
-    s = replace(s, INDEXED_OUTPUT_RE => m -> outputs[bracket_index(m)])
-    s = replace(s, "{input}" => join(inputs, " "))
+    s = replace(template, r"\{input\[(\d+)\]\}"  => m -> inputs[bracket_index(m)])
+    s = replace(s,        r"\{output\[(\d+)\]\}" => m -> outputs[bracket_index(m)])
+    s = replace(s, "{input}"  => join(inputs, " "))
     replace(s, "{output}" => join(outputs, " "))
 end
 
