@@ -360,7 +360,7 @@ clear_state!()
             write("in.txt", "x")
             results = run(step, verbose=false, force=true)
             @test !results[1].success
-            @test occursin("Missing output", results[1].result) || occursin("out.txt", results[1].result)
+            @test occursin("Missing output", string(results[1].result)) || occursin("out.txt", string(results[1].result))
         end
         rm(dir; recursive=true)
 
@@ -368,14 +368,14 @@ clear_state!()
         step_missing_in = Step(:need_in, `echo x`, ["/nonexistent/in.txt"], [])
         results_in = run(step_missing_in, verbose=false, force=true)
         @test !results_in[1].success
-        @test occursin("Missing input", results_in[1].result)
+        @test occursin("Missing input", string(results_in[1].result))
 
         # Step with invalid work type returns a failure StepResult with a clear message,
         # not a MethodError (the helpful execute fallback handles it).
         bad_results = SimplePipelines.run_node(Step(:bad, 42), SimplePipelines.RunContext(), false)
         @test length(bad_results) == 1
         @test !bad_results[1].success
-        @test occursin("Step work must be", bad_results[1].result)
+        @test occursin("Step work must be", string(bad_results[1].result))
     end
     
     @testset "Verbose execution" begin
@@ -709,13 +709,13 @@ clear_state!()
         s_cmd = Step(:cmd_missing, `cat nonexistent.txt`, ["nonexistent_file_12345.txt"], String[])
         results = run(s_cmd, verbose=false)
         @test !results[1].success
-        @test contains(results[1].result, "Missing input")
+        @test contains(string(results[1].result), "Missing input")
         
         # Function step with missing input file
         s_func = Step(:func_missing, () -> "test", ["nonexistent_file_12345.txt"], String[])
         results_func = run(s_func, verbose=false)
         @test !results_func[1].success
-        @test contains(results_func[1].result, "Missing input")
+        @test contains(string(results_func[1].result), "Missing input")
     end
     
     @testset "Error handling - command failure" begin
@@ -723,7 +723,7 @@ clear_state!()
         s = @step fail = `false`
         results = run(s, verbose=false)
         @test !results[1].success
-        @test contains(results[1].result, "Error")
+        @test contains(string(results[1].result), "Error")
     end
     
     @testset "Error handling - function throws" begin
@@ -731,7 +731,7 @@ clear_state!()
         s = Step(:throws, () -> error("intentional error"))
         results = run(s, verbose=false)
         @test !results[1].success
-        @test contains(results[1].result, "intentional error")
+        @test contains(string(results[1].result), "intentional error")
     end
     
     @testset "Error handling - verbose failure" begin
@@ -1043,7 +1043,7 @@ clear_state!()
         @test length(results_fail) == 3  # ok, fail_step, reduce
         @test !results_fail[2].success
         @test !results_fail[3].success
-        @test occursin("upstream", results_fail[3].result) || occursin("Reduce", results_fail[3].result)
+        @test occursin("upstream", string(results_fail[3].result)) || occursin("Reduce", string(results_fail[3].result))
         
         # Utilities
         @test count_steps(r) == 3  # a, b, reduce
@@ -1432,7 +1432,8 @@ clear_state!()
         r5 = run(boom, verbose=false, force=true,
                  spill_threshold_bytes=1)
         @test !r5[1].success
-        @test r5[1].result isa AbstractString
+        @test r5[1].result isa StepFailure
+        @test occursin("nope", string(r5[1].result))
 
         # nothing return is preserved.
         nothing_step = Step(:n, () -> nothing)
@@ -1477,7 +1478,8 @@ clear_state!()
             bad = Step(:bad_sh, sh"echo to-stderr 1>&2; exit 7")
             rf = run(bad, verbose=false, force=true, spill_dir=spill_dir)
             @test !rf[1].success
-            @test occursin("to-stderr", rf[1].result)
+            @test rf[1].result isa StepFailure
+            @test occursin("to-stderr", string(rf[1].result))
             @test isempty(filter(f -> startswith(f, "splpl_out_"), readdir(spill_dir)))
         finally
             rm(spill_dir; recursive=true, force=true)
@@ -1569,7 +1571,7 @@ clear_state!()
 
                 # Re-running with everything fresh should produce no work.
                 results2 = run(plan, verbose=false)
-                @test all(r -> r.success || (r.result !== nothing && contains(r.result, "up to date")), results2)
+                @test all(r -> r.success || (r.result !== nothing && contains(string(r.result), "up to date")), results2)
 
                 # An existing file short-circuits resolution; nothing to plan (see `resolve` docstring).
                 @test resolve([source], ["raw/A.txt"]) isa NoWork
