@@ -14,7 +14,8 @@
 #     {output[i]}  → i-th concrete output
 #     {wildcard}   → the value extracted from the matched output pattern
 
-const WILDCARD_RE = r"\{(\w+)\}"
+# WILDCARD_RE and escape_regex_literal are defined in ForEach.jl (loaded first)
+# and reused here for pattern→regex compilation.
 
 """
     Rule(name, inputs, outputs, work)
@@ -36,35 +37,24 @@ struct Rule{W}
     # Inner constructor only: the default `Rule{W}(::Vector{String}, ...)` would bypass
     # `validate_rule_wildcards` when argument types match the struct fields exactly.
     function Rule(name::Symbol, inputs::AbstractVector, outputs::AbstractVector, work::W) where {W}
-        inputs_s = String[String(s) for s in inputs]
-        outputs_s = String[String(s) for s in outputs]
+        inputs_s = [String(s) for s in inputs]
+        outputs_s = [String(s) for s in outputs]
         validate_rule_wildcards(name, inputs_s, outputs_s)
         new{W}(name, inputs_s, outputs_s, work)
     end
 end
 
-"""Collect distinct wildcard names that appear in any of the patterns, in order of first appearance."""
-function pattern_wildcards(patterns::Vector{String})
-    seen = Set{String}()
-    names = String[]
-    for p in patterns, m in eachmatch(WILDCARD_RE, p)
-        n = String(m.captures[1])
-        n in seen && continue
-        push!(seen, n)
-        push!(names, n)
-    end
-    names
-end
+"""Distinct wildcard names appearing in any pattern, in order of first appearance."""
+pattern_wildcards(patterns::Vector{String}) =
+    unique(String(m.captures[1]) for p in patterns for m in eachmatch(WILDCARD_RE, p))
 
 # Every wildcard used in input patterns must appear in output patterns (or the concrete
 # target). Catches typos like `{smaple}` in inputs vs `{sample}` in outputs.
 function validate_rule_wildcards(name::Symbol, inputs::Vector{String}, outputs::Vector{String})
     out_wc = Set(pattern_wildcards(outputs))
-    in_wc = pattern_wildcards(inputs)
-    extras = String[w for w in in_wc if !(w in out_wc)]
-    isempty(extras) ||
-        error("Rule `$name`: input pattern uses wildcard(s) $(extras) not present in any output pattern $(outputs).")
-    nothing
+    extras = [w for w in pattern_wildcards(inputs) if w ∉ out_wc]
+    isempty(extras) && return
+    error("Rule `$name`: input pattern uses wildcard(s) $(extras) not present in any output pattern $(outputs).")
 end
 
 """
@@ -176,16 +166,10 @@ function pattern_to_regex(pattern::String)
         push!(names, m[2:end-1])
         placeholder
     end)
-    # Escape backslashes in the pattern first; otherwise a later `\.` becomes `\\.` after
-    # the `\`-pass. Do not escape `/` (not special in Julia/PCRE here; escaping `/` then
-    # `\` had produced broken patterns like `data\\/...`).
-    temp = replace(temp, "\\" => "\\\\")
-    for c in ".+^*?\$()[]|"
-        temp = replace(temp, string(c) => "\\" * c)
-    end
-    for _ in names
-        temp = replace(temp, placeholder => "([^/]+)"; count=1)
-    end
+    # Escape backslashes first so the regex-meta pass below doesn't double-escape
+    # the backslashes it just inserted. `/` is not regex-meta, leave it alone.
+    temp = escape_regex_literal(replace(temp, "\\" => "\\\\"))
+    temp = replace(temp, placeholder => "([^/]+)")
     (Regex("^" * temp * "\$"), names)
 end
 
@@ -226,19 +210,14 @@ end
 
 Expand `{input}`, `{input[i]}`, `{output}`, `{output[i]}` in a shell template.
 """
+# Parse N from a matched "{input[N]}" / "{output[N]}" substring (digits sit between `[` and `]`).
+bracket_index(m::AbstractString) = parse(Int, m[findfirst('[', m)+1 : findlast(']', m)-1])
+
 function fill_special(template::String, inputs::Vector{String}, outputs::Vector{String})
-    s = template
-    s = replace(s, r"\{input\[(\d+)\]\}" => sub -> begin
-        i = parse(Int, match(r"\{input\[(\d+)\]\}", sub).captures[1])
-        inputs[i]
-    end)
-    s = replace(s, r"\{output\[(\d+)\]\}" => sub -> begin
-        i = parse(Int, match(r"\{output\[(\d+)\]\}", sub).captures[1])
-        outputs[i]
-    end)
-    s = replace(s, "{input}" => join(inputs, " "))
-    s = replace(s, "{output}" => join(outputs, " "))
-    s
+    s = replace(template, r"\{input\[(\d+)\]\}"  => m -> inputs[bracket_index(m)])
+    s = replace(s,        r"\{output\[(\d+)\]\}" => m -> outputs[bracket_index(m)])
+    s = replace(s, "{input}"  => join(inputs, " "))
+    replace(s, "{output}" => join(outputs, " "))
 end
 
 # A rule produces concrete (inputs, outputs, node) at resolve time.
@@ -310,8 +289,8 @@ function resolve_target!(rules::AbstractVector{<:Rule}, target::String,
     rule_match === nothing &&
         error("resolve: no rule produces `$target` and the file does not exist")
     rule, wildcards = rule_match
-    inputs = String[substitute(p, wildcards) for p in rule.inputs]
-    outputs = String[substitute(p, wildcards) for p in rule.outputs]
+    inputs = [substitute(p, wildcards) for p in rule.inputs]
+    outputs = [substitute(p, wildcards) for p in rule.outputs]
     push!(visited, target)
     deps = AbstractNode[]
     for inp in inputs
@@ -373,9 +352,9 @@ expand(templates::AbstractVector{<:AbstractString}; kwargs...) =
     expand(templates, NamedTuple(kwargs))
 
 expand(template::AbstractString, wildcards::NamedTuple) =
-    expand_each(String[String(template)], wildcards)
+    expand_each([String(template)], wildcards)
 expand(templates::AbstractVector{<:AbstractString}, wildcards::NamedTuple) =
-    expand_each(String[String(t) for t in templates], wildcards)
+    expand_each([String(t) for t in templates], wildcards)
 
 # Substitute supports NamedTuples too — keys are Symbols, values stringified on demand.
 function substitute(template::String, wildcards::NamedTuple)
@@ -393,16 +372,9 @@ function expand_each(templates::Vector{String}, wildcards::NamedTuple)
     isempty(wildcards) && return copy(templates)
 
     # Keyword arguments get materialized as a NamedTuple whose field order is not
-    # guaranteed to match the user-written order. To make `expand("x/{a}_{b}")`
-    # deterministic, order wildcards by first appearance across the templates.
-    seen = Set{Symbol}()
-    ks = Symbol[]
-    for tmpl in templates, m in eachmatch(WILDCARD_RE, tmpl)
-        k = Symbol(m.captures[1])
-        k in seen && continue
-        push!(seen, k)
-        push!(ks, k)
-    end
+    # guaranteed to match the user-written order. Re-order by first appearance in
+    # the templates so `expand("x/{a}_{b}")` is deterministic regardless of kwarg order.
+    ks = unique(Symbol(m.captures[1]) for tmpl in templates for m in eachmatch(WILDCARD_RE, tmpl))
 
     # Validate: every wildcard referenced in templates must be provided.
     for k in ks

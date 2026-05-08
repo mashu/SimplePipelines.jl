@@ -1,4 +1,18 @@
 # print_dag, print_children, Base.show for StepResult, nodes, Pipeline, MIME. Requires Types, RunNodes.
+#
+# Color vs no-color is handled by dispatch on a Styler trait (`Color`/`Plain`)
+# rather than threading a `color::Bool` through every method and branching at
+# every printstyled call site.
+
+abstract type Styler end
+struct Color <: Styler end
+struct Plain <: Styler end
+styler(color::Bool) = color ? Color() : Plain()
+
+# Styled print primitives — dispatch instead of the repeated `color ? printstyled : print` ternary.
+emit(::Plain, io::IO, s; kwargs...) = print(io, s)
+emit(::Color, io::IO, s; kwargs...) = printstyled(io, s; kwargs...)
+emitln(s::Styler, io::IO, x; kwargs...) = (emit(s, io, x; kwargs...); println(io))
 
 """
     print_dag(node [; color=true])
@@ -7,218 +21,163 @@
 Print a tree visualization of the pipeline DAG. With `color=true` (default when writing to a terminal), uses colors for node types and status.
 Steps with no inputs (start nodes) are shown with ◆ in light cyan; steps with inputs use ○ in cyan. See also [`run`](@ref) and `display(pipeline)`.
 """
-print_dag(node::AbstractNode; color::Bool=true) = print_dag(stdout, node, "", "", color)
-print_dag(io::IO, node::AbstractNode, ::Int=0) = print_dag(io, node, "", "", false)
+print_dag(node::AbstractNode; color::Bool=true) = print_dag(stdout, node, "", "", styler(color))
+print_dag(io::IO, node::AbstractNode, ::Int=0) = print_dag(io, node, "", "", Plain())
 
 # pre = prefix for first line, cont = continuation prefix for subsequent lines
-function print_dag(io::IO, s::Step, pre::String, cont::String, color::Bool)
+function print_dag(io::IO, s::Step, pre::String, cont::String, st::Styler)
     print(io, pre)
     is_start = isempty(s.inputs)
-    if color
-        if is_start
-            printstyled(io, "◆ ", color=:light_cyan)  # start node (no inputs)
-        else
-            printstyled(io, "○ ", color=:cyan)
-        end
-    else
-        print(io, is_start ? "◆ " : "○ ")
-    end
+    emit(st, io, is_start ? "◆ " : "○ "; color=is_start ? :light_cyan : :cyan)
     println(io, step_label(s))
-    if !isempty(s.inputs)
-        print(io, cont, "    ")
-        color ? printstyled(io, "← ", color=:green) : print(io, "← ")
-        println(io, join(s.inputs, ", "))
-    end
-    if !isempty(s.outputs)
-        print(io, cont, "    ")
-        color ? printstyled(io, "→ ", color=:yellow) : print(io, "→ ")
-        println(io, join(s.outputs, ", "))
-    end
+    isempty(s.inputs) || (print(io, cont, "    "); emit(st, io, "← "; color=:green); println(io, join(s.inputs, ", ")))
+    isempty(s.outputs) || (print(io, cont, "    "); emit(st, io, "→ "; color=:yellow); println(io, join(s.outputs, ", ")))
 end
 
-function print_dag(io::IO, s::Sequence, pre::String, cont::String, color::Bool)
-    print(io, pre)
-    color ? printstyled(io, "▸ Sequence\n", color=:blue) : println(io, "▸ Sequence")
-    print_children(io, s.nodes, cont, color)
+function print_dag(io::IO, s::Sequence, pre::String, cont::String, st::Styler)
+    print(io, pre); emitln(st, io, "▸ Sequence"; color=:blue)
+    print_children(io, s.nodes, cont, st)
 end
 
-function print_dag(io::IO, p::Parallel, pre::String, cont::String, color::Bool)
-    print(io, pre)
-    color ? printstyled(io, "⊕ Parallel\n", color=:magenta) : println(io, "⊕ Parallel")
-    print_children(io, p.nodes, cont, color)
+function print_dag(io::IO, p::Parallel, pre::String, cont::String, st::Styler)
+    print(io, pre); emitln(st, io, "⊕ Parallel"; color=:magenta)
+    print_children(io, p.nodes, cont, st)
 end
 
-function print_dag(io::IO, r::Retry, pre::String, cont::String, color::Bool)
-    print(io, pre)
-    color ? printstyled(io, "↻ Retry", color=:yellow) : print(io, "↻ Retry")
+function print_dag(io::IO, r::Retry, pre::String, cont::String, st::Styler)
+    print(io, pre); emit(st, io, "↻ Retry"; color=:yellow)
     println(io, " ×$(r.max_attempts)", r.delay > 0 ? " ($(r.delay)s delay)" : "")
-    print_dag(io, r.node, cont * "    ", cont * "    ", color)
+    print_dag(io, r.node, cont * "    ", cont * "    ", st)
 end
 
-function print_dag(io::IO, f::Fallback, pre::String, cont::String, color::Bool)
-    print(io, pre)
-    color ? printstyled(io, "↯ Fallback\n", color=:yellow) : println(io, "↯ Fallback")
-    print_dag(io, f.primary,  cont * "  ├─", cont * "  │ ", color)
-    print_dag(io, f.fallback, cont * "  └─", cont * "    ", color)
+function print_dag(io::IO, f::Fallback, pre::String, cont::String, st::Styler)
+    print(io, pre); emitln(st, io, "↯ Fallback"; color=:yellow)
+    print_dag(io, f.primary,  cont * "  ├─", cont * "  │ ", st)
+    print_dag(io, f.fallback, cont * "  └─", cont * "    ", st)
 end
 
-function print_dag(io::IO, b::Branch, pre::String, cont::String, color::Bool)
-    print(io, pre)
-    color ? printstyled(io, "? Branch\n", color=:blue) : println(io, "? Branch")
-    if color
-        print_dag(io, b.if_true,  cont * "  ├─", cont * "  │ ", color, :green, "✓ ")
-        print_dag(io, b.if_false, cont * "  └─", cont * "    ", color, :red, "✗ ")
-    else
-        print_dag(io, b.if_true,  cont * "  ├─✓ ", cont * "  │   ", false)
-        print_dag(io, b.if_false, cont * "  └─✗ ", cont * "      ", false)
-    end
+function print_dag(io::IO, b::Branch, pre::String, cont::String, st::Styler)
+    print(io, pre); emitln(st, io, "? Branch"; color=:blue)
+    print_branch_arm(io, b.if_true,  cont, "  ├─", "  │ ", st, :green, "✓ ")
+    print_branch_arm(io, b.if_false, cont, "  └─", "    ", st, :red,   "✗ ")
 end
 
-function print_dag(io::IO, t::Timeout, pre::String, cont::String, color::Bool)
-    print(io, pre)
-    color ? printstyled(io, "⏱ Timeout", color=:cyan) : print(io, "⏱ Timeout")
+function print_dag(io::IO, t::Timeout, pre::String, cont::String, st::Styler)
+    print(io, pre); emit(st, io, "⏱ Timeout"; color=:cyan)
     println(io, " $(t.seconds)s")
-    print_dag(io, t.node, cont * "    ", cont * "    ", color)
+    print_dag(io, t.node, cont * "    ", cont * "    ", st)
 end
 
-function print_dag(io::IO, r::Reduce, pre::String, cont::String, color::Bool)
-    print(io, pre)
-    color ? printstyled(io, "⊛ Reduce", color=:magenta) : print(io, "⊛ Reduce")
+function print_dag(io::IO, r::Reduce, pre::String, cont::String, st::Styler)
+    print(io, pre); emit(st, io, "⊛ Reduce"; color=:magenta)
     println(io, " :$(r.name)")
-    print_dag(io, r.node, cont * "    ", cont * "    ", color)
+    print_dag(io, r.node, cont * "    ", cont * "    ", st)
 end
 
-function print_dag(io::IO, f::Force, pre::String, cont::String, color::Bool)
-    print(io, pre)
-    color ? printstyled(io, "⚡ Force\n", color=:yellow, bold=true) : println(io, "⚡ Force")
-    print_dag(io, f.node, cont * "    ", cont * "    ", color)
+function print_dag(io::IO, f::Force, pre::String, cont::String, st::Styler)
+    print(io, pre); emitln(st, io, "⚡ Force"; color=:yellow, bold=true)
+    print_dag(io, f.node, cont * "    ", cont * "    ", st)
 end
 
-function print_dag(io::IO, fe::ForEach{F, String}, pre::String, cont::String, color::Bool) where F
-    print(io, pre)
-    color ? printstyled(io, "⊕ ForEach", color=:magenta) : print(io, "⊕ ForEach")
+function print_dag(io::IO, fe::ForEach{F, String}, pre::String, cont::String, st::Styler) where F
+    print(io, pre); emit(st, io, "⊕ ForEach"; color=:magenta)
     println(io, " \"", fe.source, "\"")
 end
 
-function print_dag(io::IO, fe::ForEach{F, Vector{T}}, pre::String, cont::String, color::Bool) where {F, T}
-    print(io, pre)
-    color ? printstyled(io, "⊕ ForEach", color=:magenta) : print(io, "⊕ ForEach")
+function print_dag(io::IO, fe::ForEach{F, Vector{T}}, pre::String, cont::String, st::Styler) where {F, T}
+    print(io, pre); emit(st, io, "⊕ ForEach"; color=:magenta)
     println(io, " ($(length(fe.source)) items)")
 end
 
-function print_dag(io::IO, p::Pipe, pre::String, cont::String, color::Bool)
+function print_dag(io::IO, p::Pipe, pre::String, cont::String, st::Styler)
+    print(io, pre); emitln(st, io, "▸ Pipe (output → input)"; color=:cyan)
+    print_dag(io, p.first,  cont * "  ├─", cont * "  │ ", st)
+    print_dag(io, p.second, cont * "  └─", cont * "    ", st)
+end
+
+function print_dag(io::IO, sip::SameInputPipe, pre::String, cont::String, st::Styler)
+    print(io, pre); emitln(st, io, "▸ SameInputPipe (same input)"; color=:cyan)
+    print_dag(io, sip.first,  cont * "  ├─", cont * "  │ ", st)
+    print_dag(io, sip.second, cont * "  └─", cont * "    ", st)
+end
+
+function print_dag(io::IO, bp::BroadcastPipe, pre::String, cont::String, st::Styler)
+    print(io, pre); emitln(st, io, "▸ BroadcastPipe (.>>  each branch → second)"; color=:cyan)
+    print_dag(io, bp.first,  cont * "  ├─", cont * "  │ ", st)
+    print_dag(io, bp.second, cont * "  └─", cont * "    ", st)
+end
+
+function print_dag(io::IO, r::Resourced, pre::String, cont::String, st::Styler)
     print(io, pre)
-    color ? printstyled(io, "▸ Pipe (output → input)\n", color=:cyan) : println(io, "▸ Pipe (output → input)")
-    print_dag(io, p.first,  cont * "  ├─", cont * "  │ ", color)
-    print_dag(io, p.second, cont * "  └─", cont * "    ", color)
+    emitln(st, io, "▣ Resources(mem=$(r.resources.mem_mb)MB, threads=$(r.resources.threads))";
+           color=:light_yellow)
+    print_dag(io, r.node, cont * "    ", cont * "    ", st)
 end
 
-function print_dag(io::IO, sip::SameInputPipe, pre::String, cont::String, color::Bool)
-    print(io, pre)
-    color ? printstyled(io, "▸ SameInputPipe (same input)\n", color=:cyan) : println(io, "▸ SameInputPipe (same input)")
-    print_dag(io, sip.first,  cont * "  ├─", cont * "  │ ", color)
-    print_dag(io, sip.second, cont * "  └─", cont * "    ", color)
+function print_dag(io::IO, ::NoWork, pre::String, cont::String, st::Styler)
+    print(io, pre); emitln(st, io, "∅ NoWork"; color=:light_black)
 end
 
-function print_dag(io::IO, bp::BroadcastPipe, pre::String, cont::String, color::Bool)
-    print(io, pre)
-    color ? printstyled(io, "▸ BroadcastPipe (.>>  each branch → second)\n", color=:cyan) : println(io, "▸ BroadcastPipe (.>>  each branch → second)")
-    print_dag(io, bp.first,  cont * "  ├─", cont * "  │ ", color)
-    print_dag(io, bp.second, cont * "  └─", cont * "    ", color)
+function print_branch_arm(io::IO, node::AbstractNode, cont::String, branch::String, gutter::String,
+                          st::Styler, marker_color::Symbol, marker::String)
+    print(io, cont, branch)
+    emit(st, io, marker; color=marker_color)
+    print_dag(io, node, "", cont * gutter * "  ", st)
 end
 
-function print_dag(io::IO, r::Resourced, pre::String, cont::String, color::Bool)
-    print(io, pre)
-    label = "▣ Resources(mem=$(r.resources.mem_mb)MB, threads=$(r.resources.threads))"
-    color ? printstyled(io, label, color=:light_yellow) : print(io, label)
-    println(io)
-    print_dag(io, r.node, cont * "    ", cont * "    ", color)
-end
-
-function print_dag(io::IO, ::NoWork, pre::String, cont::String, color::Bool)
-    print(io, pre)
-    color ? printstyled(io, "∅ NoWork", color=:light_black) : print(io, "∅ NoWork")
-    println(io)
-end
-
-# Branch helper with marker
-function print_dag(io::IO, node::AbstractNode, pre::String, cont::String, color::Bool, marker_color::Symbol, marker::String)
-    printstyled(io, marker, color=marker_color)
-    print_dag(io, node, pre, cont * "  ", color)
-end
-
-function print_children(io::IO, nodes, cont::String, color::Bool)
+function print_children(io::IO, nodes, cont::String, st::Styler)
     n = length(nodes)
     for (i, node) in enumerate(nodes)
         last = i == n
         pre  = cont * (last ? "  └─" : "  ├─")
         next = cont * (last ? "    " : "  │ ")
-        print_dag(io, node, pre, next, color)
+        print_dag(io, node, pre, next, st)
     end
 end
 
-# One-line show (e.g. in vectors): named fields, omit empty; use colors when io has :color for readability
-function show_stepresult_oneline(io::IO, r::StepResult, dur::Float64; result_str::Union{String,Nothing}=nothing)
-    color = get(io, :color, false)::Bool
+# One-line show: named fields, empty inputs/outputs omitted, optional ", result=…" tail.
+# `result_str = ""` means "skip the result field" — chosen over a Union to keep dispatch flat.
+function show_stepresult_oneline(io::IO, r::StepResult, dur::Float64, result_str::AbstractString="")
+    st = styler(get(io, :color, false)::Bool)
     print(io, "StepResult(step=")
-    if color
-        printstyled(io, "Step(:", step_label(r.step), ")", color=:cyan)
-    else
-        show(io, r.step)
-    end
-    print(io, ", success=")
-    if color
-        printstyled(io, string(r.success), color=r.success ? :green : :red)
-    else
-        print(io, r.success)
-    end
-    print(io, ", duration=")
-    if color
-        printstyled(io, string(round(dur; digits=2)), color=:light_black)
-    else
-        print(io, round(dur; digits=2))
-    end
-    !isempty(r.inputs) && print(io, ", inputs=", summary(r.inputs))
-    !isempty(r.outputs) && print(io, ", outputs=", summary(r.outputs))
-    if result_str !== nothing
-        print(io, ", result=")
-        color ? printstyled(io, result_str, color=:light_black) : print(io, result_str)
-    end
+    show_step_inline(io, r.step, st)
+    print(io, ", success="); emit(st, io, string(r.success); color=r.success ? :green : :red)
+    print(io, ", duration="); emit(st, io, string(round(dur; digits=2)); color=:light_black)
+    isempty(r.inputs)  || print(io, ", inputs=",  summary(r.inputs))
+    isempty(r.outputs) || print(io, ", outputs=", summary(r.outputs))
+    isempty(result_str) || (print(io, ", result="); emit(st, io, result_str; color=:light_black))
     print(io, ")")
 end
+
+show_step_inline(io::IO, s::Step, ::Color) = printstyled(io, "Step(:", step_label(s), ")", color=:cyan)
+show_step_inline(io::IO, s::Step, ::Plain) = show(io, s)
+
 function Base.show(io::IO, r::StepResult{S, I, O, String}) where {S, I, O}
     s = r.result
-    result_str = length(s) > 200 ? repr(first(s, 200) * "…") : repr(s)
-    show_stepresult_oneline(io, r, r.duration; result_str)
+    show_stepresult_oneline(io, r, r.duration,
+                            length(s) > 200 ? repr(first(s, 200) * "…") : repr(s))
 end
-function Base.show(io::IO, r::StepResult{S, I, O, V}) where {S, I, O, V}
-    result_str = r.result === nothing ? nothing : repr(r.result)
-    show_stepresult_oneline(io, r, r.duration; result_str)
-end
+Base.show(io::IO, r::StepResult{S, I, O, V}) where {S, I, O, V} =
+    show_stepresult_oneline(io, r, r.duration, r.result === nothing ? "" : repr(r.result))
 
 # Multi-line show for REPL: show only sections that have content (dispatch by presence of inputs/result).
 # Steps with no input files (start nodes): omit input line. No "(none)" or "Nothing"; cleaner and consistent.
 function Base.show(io::IO, ::MIME"text/plain", r::StepResult)
-    color = get(io, :color, false)::Bool
-    if color
-        printstyled(io, r.success ? "✓ " : "✗ ", color = r.success ? :green : :red)
-        print(io, "StepResult: ")
-        printstyled(io, step_label(r.step), color=:cyan)
-        print(io, " (")
-        printstyled(io, string(round(r.duration; digits=2)), color=:light_black)
-        println(io, "s)")
-    else
-        print(io, r.success ? "✓ " : "✗ ")
-        println(io, "StepResult: ", step_label(r.step), " (", round(r.duration; digits=2), "s)")
-    end
+    st = styler(get(io, :color, false)::Bool)
+    emit(st, io, r.success ? "✓ " : "✗ "; color = r.success ? :green : :red)
+    print(io, "StepResult: ")
+    emit(st, io, step_label(r.step); color=:cyan)
+    print(io, " (")
+    emit(st, io, string(round(r.duration; digits=2)); color=:light_black)
+    println(io, "s)")
     if !isempty(r.inputs)
         print(io, "  input files:  ")
-        color && printstyled(io, "← ", color=:green)
+        emit(st, io, "← "; color=:green)
         println(io, join(r.inputs, "\n               "))
     end
     if !isempty(r.outputs)
         print(io, "  output files: ")
-        color && printstyled(io, "→ ", color=:yellow)
+        emit(st, io, "→ "; color=:yellow)
         println(io, join(r.outputs, "\n               "))
     end
     if r.result !== nothing
@@ -228,18 +187,13 @@ function Base.show(io::IO, ::MIME"text/plain", r::StepResult)
 end
 
 # Inline preview of a step's result value: short string (truncated, newlines escaped),
-# or nothing for arbitrary types (the `summary` already named the type).
+# or just a newline for arbitrary types (the `summary` already named the type).
 function show_result_inline(io::IO, s::String)
     isempty(s) && return println(io)
     trunc = length(s) > 80 ? first(s, 80) * "…" : s
     println(io, " \"", replace(trunc, '\n' => "\\n"), "\"")
 end
-function show_result_inline(io::IO, e::StepFailure)
-    s = string(e)
-    isempty(s) && return println(io)
-    trunc = length(s) > 80 ? first(s, 80) * "…" : s
-    println(io, " \"", replace(trunc, '\n' => "\\n"), "\"")
-end
+show_result_inline(io::IO, e::StepFailure) = show_result_inline(io, string(e))
 show_result_inline(io::IO, _) = println(io)
 
 Base.show(io::IO, s::Step) = print(io, "Step(:", s.name, ")")
@@ -261,18 +215,13 @@ Base.show(io::IO, ::NoWork) = print(io, "NoWork()")
 Base.show(io::IO, p::Pipeline) = print(io, "Pipeline(\"", p.name, "\", ", count_steps(p.root), " steps)")
 
 function Base.show(io::IO, ::MIME"text/plain", p::Pipeline)
-    color = get(io, :color, false)::Bool
-    if color
-        printstyled(io, "Pipeline: ", color=:blue, bold=true)
-        printstyled(io, p.name, color=:white, bold=true)
-        printstyled(io, " ($(count_steps(p.root)) steps)\n", color=:light_black)
-    else
-        println(io, "Pipeline: ", p.name, " (", count_steps(p.root), " steps)")
-    end
-    print_dag(io, p.root, "", "", color)
+    st = styler(get(io, :color, false)::Bool)
+    emit(st, io, "Pipeline: "; color=:blue, bold=true)
+    emit(st, io, p.name; color=:white, bold=true)
+    emitln(st, io, " ($(count_steps(p.root)) steps)"; color=:light_black)
+    print_dag(io, p.root, "", "", st)
 end
 
 function Base.show(io::IO, ::MIME"text/plain", node::AbstractNode)
-    color = get(io, :color, false)::Bool
-    print_dag(io, node, "", "", color)
+    print_dag(io, node, "", "", styler(get(io, :color, false)::Bool))
 end

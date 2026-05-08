@@ -301,7 +301,9 @@ node_children(p::Pipe) = [p.first, p.second]
 node_children(sip::SameInputPipe) = [sip.first, sip.second]
 node_children(bp::BroadcastPipe) = [bp.first, bp.second]
 node_children(r::Resourced) = [r.node]
-node_children(::Union{Step,ForEach,NoWork}) = AbstractNode[]
+node_children(::Step) = AbstractNode[]
+node_children(::ForEach) = AbstractNode[]
+node_children(::NoWork) = AbstractNode[]
 
 function run_node(pipe::Pipe, ctx::RunContext, forced::Bool=false, context_input=nothing)
     r1 = run_node(pipe.first, ctx, forced, context_input)
@@ -331,34 +333,27 @@ function run_node(bp::BroadcastPipe, ctx::RunContext, forced::Bool=false, contex
     run_node(bp.first >> bp.second, ctx, forced, context_input)
 end
 
-# Expand a ForEach into a list of nodes and per-branch contexts.
+# Expand a ForEach into (nodes, per-branch contexts). The pattern variant
+# always returns `matches::Vector{Vector{String}}` as contexts so the contexts
+# vector is type-stable across branches; the user block still sees unwrapped
+# scalars (via `fe.f(c[1])` or `fe.f(c...)`).
 function expand_foreach(fe::ForEach{F, String}) where F
-    pattern = fe.source
-    regex = for_each_regex(pattern)
-    matches = find_matches(pattern, regex)
-    isempty(matches) && error("ForEach: no files match '$pattern'")
-    nodes = AbstractNode[]
-    for c in matches
-        r = length(c) == 1 ? fe.f(c[1]) : fe.f(c...)
-        r === nothing && error("ForEach block must return a Step or node, not nothing.")
-        node = as_node(r)
-        contains_node(fe, node) && error("Pipeline cycle: ForEach block returned a node containing this ForEach.")
-        push!(nodes, node)
-    end
-    contexts = [length(matches[i]) == 1 ? matches[i][1] : matches[i] for i in 1:length(nodes)]
-    nodes, contexts
+    matches = find_matches(fe.source, for_each_regex(fe.source))
+    isempty(matches) && error("ForEach: no files match '$(fe.source)'")
+    nodes = AbstractNode[ensure_foreach_node(fe, length(c) == 1 ? fe.f(c[1]) : fe.f(c...)) for c in matches]
+    nodes, matches
 end
 function expand_foreach(fe::ForEach{F, Vector{T}}) where {F, T}
     items = collect(fe.source)
-    nodes = AbstractNode[]
-    for item in items
-        r = fe.f(item)
-        r === nothing && error("ForEach block must return a Step or node, not nothing.")
-        node = as_node(r)
-        contains_node(fe, node) && error("Pipeline cycle: ForEach block returned a node containing this ForEach.")
-        push!(nodes, node)
-    end
+    nodes = AbstractNode[ensure_foreach_node(fe, fe.f(item)) for item in items]
     nodes, items
+end
+
+function ensure_foreach_node(fe::ForEach, r)
+    r === nothing && error("ForEach block must return a Step or node, not nothing.")
+    node = as_node(r)
+    contains_node(fe, node) && error("Pipeline cycle: ForEach block returned a node containing this ForEach.")
+    node
 end
 
 function run_node(fe::ForEach, ctx::RunContext, forced::Bool=false, context_input=nothing)
@@ -373,35 +368,15 @@ run_node(::NoWork, ::RunContext, ::Bool=false, _=nothing) = AbstractStepResult[]
     steps(node) -> Vector{Step}
 
 Return all leaf steps in the DAG (flattened). Shared sub-graphs are listed once.
+Composite nodes recurse via `node_children`; leaf nodes specialise.
 """
 steps(s::Step) = Step[s]
-steps(s::Sequence) = unique_by_id(reduce(vcat, steps.(s.nodes)))
-steps(p::Parallel) = unique_by_id(reduce(vcat, steps.(p.nodes)))
-steps(r::Retry) = steps(r.node)
-steps(f::Fallback) = unique_by_id(vcat(steps(f.primary), steps(f.fallback)))
-steps(b::Branch) = unique_by_id(vcat(steps(b.if_true), steps(b.if_false)))
-steps(t::Timeout) = steps(t.node)
-steps(r::Reduce) = steps(r.node)
-steps(f::Force) = steps(f.node)
-steps(p::Pipe) = unique_by_id(vcat(steps(p.first), steps(p.second)))
-steps(sip::SameInputPipe) = unique_by_id(vcat(steps(sip.first), steps(sip.second)))
-steps(bp::BroadcastPipe) = unique_by_id(vcat(steps(bp.first), steps(bp.second)))
-steps(r::Resourced) = steps(r.node)
-steps(::ForEach) = Step[]  # lazy: not discovered until run
+steps(::ForEach) = Step[]   # lazy: not discovered until run
 steps(::NoWork) = Step[]
+steps(node::AbstractNode) =
+    unique_by_id(mapreduce(steps, vcat, node_children(node); init=Step[]))
 
-function unique_by_id(v::AbstractVector{<:Step})
-    seen = Set{UInt}()
-    out = Step[]
-    for s in v
-        id = objectid(s)
-        if !(id in seen)
-            push!(seen, id)
-            push!(out, s)
-        end
-    end
-    out
-end
+unique_by_id(v::AbstractVector{<:Step}) = unique(objectid, v)
 
 """
     count_steps(node) -> Int

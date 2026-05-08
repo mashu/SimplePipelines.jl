@@ -1,20 +1,23 @@
 # ForEach constructors (pattern or collection), pattern matching, as_node.
-# Required before run_node(ForEach).
+# Required before run_node(ForEach). Also hosts the wildcard / regex helpers
+# shared with Rules.jl (which is loaded later).
+
+const WILDCARD_RE = r"\{(\w+)\}"
+const REGEX_META_RE = r"[.+^*?$()\[\]|]"
+
+"""Escape regex metacharacters in a literal pattern fragment (single pass)."""
+escape_regex_literal(s::AbstractString) = replace(s, REGEX_META_RE => m -> "\\" * m)
 
 as_node(n::AbstractNode) = n
 as_node(x) = Step(x)
 
 function for_each_regex(pattern::String)::Regex
-    wildcard_rx = r"\{(\w+)\}"
     parts = split(pattern, "/")
     first_wild = findfirst(p -> contains(p, "{"), parts)
     first_wild === nothing && error("ForEach pattern must contain {wildcard}: $pattern")
     pattern_suffix = join(parts[first_wild:end], "/")
     placeholder = "\x00WILD\x00"
-    temp = replace(pattern_suffix, wildcard_rx => placeholder)
-    for c in ".+^*?\$()[]|"
-        temp = replace(temp, string(c) => "\\" * c)
-    end
+    temp = escape_regex_literal(replace(pattern_suffix, WILDCARD_RE => placeholder))
     Regex("^" * replace(temp, placeholder => "([^/]+)") * "\$")
 end
 
@@ -47,8 +50,7 @@ end
 ```
 """
 function ForEach(f::Function, pattern::String)
-    wildcard_rx = r"\{(\w+)\}"
-    contains(pattern, wildcard_rx) || error("ForEach pattern must contain {wildcard}: $pattern")
+    contains(pattern, WILDCARD_RE) || error("ForEach pattern must contain {wildcard}: $pattern")
     ForEach{typeof(f), String}(f, pattern)
 end
 ForEach(pattern::String) = f -> ForEach(f, pattern)

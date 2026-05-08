@@ -70,13 +70,14 @@ function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::B
                   thread_budget::Int=0,
                   auto_spill::Bool=true,
                   spill_threshold_bytes::Int=default_spill_threshold_bytes(),
-                  spill_dir::String=tempdir())
+                  spill_dir::String=tempdir(),
+                  state_path::String=STATE_FILE[])
     print_pipeline_header(verbose, p)
     if dry_run
         verbose && print_dag(p.root)
         return AbstractStepResult[]
     end
-    ctx = RunContext(verbose=verbose, jobs=jobs, state_path=STATE_FILE[],
+    ctx = RunContext(verbose=verbose, jobs=jobs, state_path=state_path,
                      memory_budget_mb=memory_budget_mb,
                      thread_budget=thread_budget,
                      auto_spill=auto_spill,
