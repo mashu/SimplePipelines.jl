@@ -24,24 +24,20 @@ function run_node(pb::ParallelBranches, ctx::RunContext, forced::Bool=false, con
     nodes, contexts = pb.nodes, pb.contexts
     n = length(nodes)
     length(contexts) == n || throw(ArgumentError("nodes and contexts length mismatch"))
-    log_parallel(ctx, n)
-    max_p = ctx.jobs
     n == 0 && return AbstractStepResult[]
-    if max_p > 0
-        results = AbstractStepResult[]
-        for i in 1:max_p:n
-            chunk = i:min(i + max_p - 1, n)
-            tasks = [@spawn run_node(nodes[k], ctx, forced, contexts[k]) for k in chunk]
-            for t in tasks
-                append!(results, fetch(t))
-            end
-            log_progress(ctx, length(results), n)
-        end
-        return results
-    end
     n == 1 && return run_node(nodes[1], ctx, forced, contexts[1])
-    tasks = [@spawn run_node(nodes[j], ctx, forced, contexts[j]) for j in 1:n]
-    reduce(vcat, fetch.(tasks))
+    log_parallel(ctx, n)
+    chunk_size = ctx.jobs == 0 ? n : ctx.jobs
+    results = AbstractStepResult[]
+    for i in 1:chunk_size:n
+        rng = i:min(i + chunk_size - 1, n)
+        tasks = [@spawn run_node(nodes[k], ctx, forced, contexts[k]) for k in rng]
+        for t in tasks
+            append!(results, fetch(t))
+        end
+        ctx.jobs > 0 && log_progress(ctx, length(results), n)
+    end
+    results
 end
 
 # Step wrapping another node (e.g. @step name = a >> b): delegate when work is a node.
@@ -266,21 +262,16 @@ function run_node(r::Reduce, ctx::RunContext, forced::Bool=false, context_input=
     results = run_node(r.node, ctx, forced, context_input)
     outputs = [res.result for res in results if res.success]
     rs = r.reduce_step
-    if length(outputs) < length(results)
-        return vcat(results, [StepResult(rs, false, time() - start, rs.inputs,
-                                         rs.outputs, "Reduce aborted: upstream failed")])
-    end
+    reduce_step_result(payload, success) =
+        StepResult(rs, success, time() - start, rs.inputs, rs.outputs, payload)
+    length(outputs) < length(results) &&
+        return push!(results, reduce_step_result("Reduce aborted: upstream failed", false))
     log_reduce(ctx, r.name)
-    outcome = run_safely() do
-        r.reducer(outputs)
-    end
-    if !outcome.ok
-        return vcat(results, [StepResult(rs, false, time() - start, rs.inputs,
-                                         rs.outputs, "Reduce error: $(outcome.value)")])
-    end
-    result = StepResult(rs, true, time() - start, rs.inputs, rs.outputs, outcome.value)
+    outcome = run_safely(() -> r.reducer(outputs))
+    outcome.ok ||
+        return push!(results, reduce_step_result("Reduce error: $(outcome.value)", false))
     mark_complete!(ctx, rs)
-    vcat(results, [result])
+    push!(results, reduce_step_result(outcome.value, true))
 end
 
 # Cycle check for ForEach expansion.
@@ -310,15 +301,13 @@ function run_node(pipe::Pipe, ctx::RunContext, forced::Bool=false, context_input
     any(!r.success for r in r1) && return r1
     out = length(r1) == 1 ? sequence_output_for_next(r1[1]) :
                             [sequence_output_for_next(r) for r in r1 if r.success]
-    r2 = run_node(pipe.second, ctx, forced, out)
-    vcat(r1, r2)
+    append!(r1, run_node(pipe.second, ctx, forced, out))
 end
 
 function run_node(sip::SameInputPipe, ctx::RunContext, forced::Bool=false, context_input=nothing)
     r1 = run_node(sip.first, ctx, forced, context_input)
     any(!r.success for r in r1) && return r1
-    r2 = run_node(sip.second, ctx, forced, context_input)
-    vcat(r1, r2)
+    append!(r1, run_node(sip.second, ctx, forced, context_input))
 end
 
 function run_node(bp::BroadcastPipe{<:ForEach, <:AbstractNode}, ctx::RunContext, forced::Bool=false, context_input=nothing)
@@ -343,9 +332,8 @@ function expand_foreach(fe::ForEach{F, String}) where F
     nodes, matches
 end
 function expand_foreach(fe::ForEach{F, Vector{T}}) where {F, T}
-    items = collect(fe.source)
-    nodes = AbstractNode[ensure_foreach_node(fe, fe.f(item)) for item in items]
-    nodes, items
+    nodes = AbstractNode[ensure_foreach_node(fe, fe.f(item)) for item in fe.source]
+    nodes, fe.source
 end
 
 function ensure_foreach_node(fe::ForEach, r)
