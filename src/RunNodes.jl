@@ -289,8 +289,8 @@ contains_node(needle::ForEach, s::Step) = step_contains(needle, s)
 contains_node(needle::ForEach, n::AbstractNode) = any(c -> contains_node(needle, c), node_children(n))
 step_contains(needle::ForEach, s::Step{N}) where {N<:AbstractNode} = s.work === needle || contains_node(needle, s.work)
 step_contains(::ForEach, ::Step) = false
-node_children(n::Sequence) = collect(n.nodes)
-node_children(n::Parallel) = collect(n.nodes)
+node_children(n::Sequence) = n.nodes
+node_children(n::Parallel) = n.nodes
 node_children(n::Retry) = [n.node]
 node_children(n::Fallback) = [n.primary, n.fallback]
 node_children(n::Branch) = [n.if_true, n.if_false]
@@ -339,7 +339,6 @@ end
 # scalars (via `fe.f(c[1])` or `fe.f(c...)`).
 function expand_foreach(fe::ForEach{F, String}) where F
     matches = find_matches(fe.source, for_each_regex(fe.source))
-    isempty(matches) && error("ForEach: no files match '$(fe.source)'")
     nodes = AbstractNode[ensure_foreach_node(fe, length(c) == 1 ? fe.f(c[1]) : fe.f(c...)) for c in matches]
     nodes, matches
 end
@@ -356,8 +355,17 @@ function ensure_foreach_node(fe::ForEach, r)
     node
 end
 
+# Surface "no files matched" as a structured StepFailure rather than a raw
+# exception, so callers see it in the result vector like any other step failure.
+function foreach_no_matches_result(fe::ForEach{F, String}) where F
+    step = Step(Symbol("foreach[", fe.source, "]"), `true`)
+    failure = StepFailure(:no_matches, "ForEach: no files match '$(fe.source)'")
+    AbstractStepResult[StepResult(step, false, 0.0, step.inputs, step.outputs, failure)]
+end
+
 function run_node(fe::ForEach, ctx::RunContext, forced::Bool=false, context_input=nothing)
     nodes, contexts = expand_foreach(fe)
+    isempty(nodes) && return foreach_no_matches_result(fe)
     run_node(ParallelBranches(nodes, contexts), ctx, forced, nothing)
 end
 

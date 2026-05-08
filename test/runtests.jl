@@ -1216,12 +1216,16 @@ clear_state!()
             @test "donor2\n" in outputs
         end
 
-        # Error on no matches when run (lazy: no match check at construction)
+        # No matches surfaces as a structured StepFailure (kind=:no_matches), not a raw exception.
         cd(dir) do
             pipeline = ForEach("{x}_nonexistent.xyz") do x
                 Step(:x, `echo`)
             end
-            @test_throws ErrorException run(pipeline, verbose=false)
+            results = run(pipeline, verbose=false)
+            @test length(results) == 1
+            @test !results[1].success
+            @test results[1].result isa SimplePipelines.StepFailure
+            @test results[1].result.kind === :no_matches
         end
         
         # Error on pattern without wildcard
