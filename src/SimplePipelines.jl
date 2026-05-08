@@ -166,22 +166,22 @@ include("Display.jl")
 using PrecompileTools: @setup_workload, @compile_workload
 
 @setup_workload begin
-    # Use a tempfile state path during precompile so we do not litter the
-    # package source tree (or current directory) with a `.pipeline_state`.
-    # Passed via the `state_path=` kwarg — no global mutation needed.
+    # Tempfile state path during precompile so we don't litter the package source tree
+    # (or current directory) with a `.pipeline_state`. Passed explicitly — no global mutation.
     precompile_state = tempname()
+    prerun(node; kwargs...) = run(Pipeline(node); verbose=false, force=true, state_path=precompile_state, kwargs...)
     @compile_workload begin
         # Single Cmd step
-        run(Pipeline(@step nop = `true`); verbose=false, force=true, state_path=precompile_state)
+        prerun(@step nop = `true`)
         # Sequence + Parallel + Function step
         f = () -> 1
-        run(Pipeline((@step a = `true`) >> (@step b = f) & (@step c = `true`)); verbose=false, force=true, state_path=precompile_state)
+        prerun((@step a = `true`) >> (@step b = f) & (@step c = `true`))
         # ForEach over a small collection
-        run(Pipeline(ForEach([1, 2]) do x; Step(Symbol("e", x), `true`); end); verbose=false, force=true, state_path=precompile_state)
+        prerun(ForEach([1, 2]) do x; Step(Symbol("e", x), `true`); end)
         # Resource budget
-        run(Pipeline(with_resources(`true`; mem_mb=1)); verbose=false, force=true, memory_budget_mb=8, state_path=precompile_state)
+        prerun(with_resources(`true`; mem_mb=1); memory_budget_mb=8)
         # OS-level shell pipeline (Step{<:AbstractCmd} path)
-        run(Pipeline(@step piped = sh_pipe(sh"echo a", sh"cat")); verbose=false, force=true, state_path=precompile_state)
+        prerun(@step piped = sh_pipe(sh"echo a", sh"cat"))
         # Rule resolution helpers (avoid hitting the filesystem)
         SimplePipelines.match_pattern("data/{x}.fq", "data/A.fq")
         SimplePipelines.substitute("out/{x}.bam", Dict("x" => "A"))

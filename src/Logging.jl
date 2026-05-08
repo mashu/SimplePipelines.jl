@@ -3,38 +3,37 @@
 
 with_log(f, ctx::RunContext) = ctx.verbose ? lock(f, ctx.log_lock) : nothing
 
-function log_start(ctx::RunContext, s::Step)
+# Most log_* functions just emit `<colored prefix><message>` under the lock.
+log_event(ctx::RunContext, prefix, color::Symbol, msg; bold::Bool=false) =
     with_log(ctx) do
-        printstyled("▶ Running: ", color=:cyan)
-        println(step_label(s))
+        printstyled(prefix; color=color, bold=bold)
+        println(msg)
     end
-end
 
-function log_skip(ctx::RunContext, s::Step)
-    with_log(ctx) do
-        printstyled("⊳ Up to date: ", color=:light_black)
-        printstyled(step_label(s), "\n", color=:light_black)
-    end
+log_start(ctx::RunContext, s::Step)    = log_event(ctx, "▶ Running: ", :cyan,    step_label(s))
+log_parallel(ctx::RunContext, n::Int)  = log_event(ctx, "⊕ ",          :magenta, "Running $n branches in parallel...")
+log_retry(ctx::RunContext, n, max)     = log_event(ctx, "↻ ",          :yellow,  "Attempt $n/$max")
+log_fallback(ctx::RunContext)          = log_event(ctx, "↯ ",          :yellow,  "Primary failed, trying fallback...")
+log_branch(ctx::RunContext, c::Bool)   = log_event(ctx, "? ",          :blue,    "Condition: $(c ? "true → if_true" : "false → if_false")")
+log_timeout(ctx::RunContext, s::Float64) = log_event(ctx, "⏱ ",        :cyan,    "Timeout: $(s)s")
+log_force(ctx::RunContext)             = log_event(ctx, "⚡ ",          :yellow,  "Forcing execution..."; bold=true)
+log_reduce(ctx::RunContext, n::Symbol) = log_event(ctx, "⊛ ",          :magenta, "Reducing: $n")
+
+# log_skip prints the step name in the same dim colour as the prefix; doesn't fit log_event's plain-message shape.
+log_skip(ctx::RunContext, s::Step) = with_log(ctx) do
+    printstyled("⊳ Up to date: ", color=:light_black)
+    printstyled(step_label(s), "\n", color=:light_black)
 end
 
 function log_result(ctx::RunContext, r::AbstractStepResult)
     with_log(ctx) do
-        if r.success
-            printstyled("  ✓ ", color=:green)
-            println("Completed in $(round(r.duration, digits=2))s")
-        else
-            printstyled("  ✗ ", color=:red, bold=true)
-            println("Completed in $(round(r.duration, digits=2))s")
+        marker, color = r.success ? ("  ✓ ", :green) : ("  ✗ ", :red)
+        printstyled(marker; color=color, bold=!r.success)
+        println("Completed in $(round(r.duration, digits=2))s")
+        if !r.success
             printstyled("  Error: ", color=:red)
             println(r.result)
         end
-    end
-end
-
-function log_parallel(ctx::RunContext, n::Int)
-    with_log(ctx) do
-        printstyled("⊕ ", color=:magenta)
-        println("Running $n branches in parallel...")
     end
 end
 
@@ -48,69 +47,8 @@ function log_progress(ctx::RunContext, done::Int, total::Int)
     end
 end
 
-function log_retry(ctx::RunContext, n::Int, max::Int)
-    with_log(ctx) do
-        printstyled("↻ ", color=:yellow)
-        println("Attempt $n/$max")
-    end
-end
-
-function log_fallback(ctx::RunContext)
-    with_log(ctx) do
-        printstyled("↯ ", color=:yellow)
-        println("Primary failed, trying fallback...")
-    end
-end
-
-function log_branch(ctx::RunContext, c::Bool)
-    with_log(ctx) do
-        printstyled("? ", color=:blue)
-        println("Condition: $(c ? "true → if_true" : "false → if_false")")
-    end
-end
-
-function log_timeout(ctx::RunContext, s::Float64)
-    with_log(ctx) do
-        printstyled("⏱ ", color=:cyan)
-        println("Timeout: $(s)s")
-    end
-end
-
-function log_force(ctx::RunContext)
-    with_log(ctx) do
-        printstyled("⚡ ", color=:yellow, bold=true)
-        println("Forcing execution...")
-    end
-end
-
-function log_reduce(ctx::RunContext, n::Symbol)
-    with_log(ctx) do
-        printstyled("⊛ ", color=:magenta)
-        println("Reducing: $n")
-    end
-end
-
 const CMD_LOG_PREFIX = shell_raw"  $ "
 
-function log_cmd(ctx::RunContext, cmd::Cmd)
-    with_log(ctx) do
-        printstyled(CMD_LOG_PREFIX, color=:light_black)
-        println(join(cmd.exec, " "))
-    end
-end
-
-# OrCmds / AndCmds / CmdRedirect (the result of `Base.pipeline(...)` and `sh_pipe`)
-# render as a human-readable shell pipeline via their `string` method.
-function log_cmd(ctx::RunContext, cmd::Base.AbstractCmd)
-    with_log(ctx) do
-        printstyled(CMD_LOG_PREFIX, color=:light_black)
-        println(string(cmd))
-    end
-end
-
-function log_cmd(ctx::RunContext, cmd::AbstractString)
-    with_log(ctx) do
-        printstyled(CMD_LOG_PREFIX, color=:light_black)
-        println(cmd)
-    end
-end
+log_cmd(ctx::RunContext, cmd::Cmd)              = log_event(ctx, CMD_LOG_PREFIX, :light_black, join(cmd.exec, " "))
+log_cmd(ctx::RunContext, cmd::Base.AbstractCmd) = log_event(ctx, CMD_LOG_PREFIX, :light_black, string(cmd))
+log_cmd(ctx::RunContext, cmd::AbstractString)   = log_event(ctx, CMD_LOG_PREFIX, :light_black, cmd)

@@ -44,18 +44,9 @@ struct Rule{W}
     end
 end
 
-"""Collect distinct wildcard names that appear in any of the patterns, in order of first appearance."""
-function pattern_wildcards(patterns::Vector{String})
-    seen = Set{String}()
-    names = String[]
-    for p in patterns
-        for m in eachmatch(WILDCARD_RE, p)
-            n = String(m.captures[1])
-            n in seen || (push!(seen, n); push!(names, n))
-        end
-    end
-    names
-end
+"""Distinct wildcard names appearing in any pattern, in order of first appearance."""
+pattern_wildcards(patterns::Vector{String}) =
+    unique(String(m.captures[1]) for p in patterns for m in eachmatch(WILDCARD_RE, p))
 
 # Every wildcard used in input patterns must appear in output patterns (or the concrete
 # target). Catches typos like `{smaple}` in inputs vs `{sample}` in outputs.
@@ -381,16 +372,9 @@ function expand_each(templates::Vector{String}, wildcards::NamedTuple)
     isempty(wildcards) && return copy(templates)
 
     # Keyword arguments get materialized as a NamedTuple whose field order is not
-    # guaranteed to match the user-written order. To make `expand("x/{a}_{b}")`
-    # deterministic, order wildcards by first appearance across the templates.
-    seen = Set{Symbol}()
-    ks = Symbol[]
-    for tmpl in templates
-        for m in eachmatch(WILDCARD_RE, tmpl)
-            k = Symbol(m.captures[1])
-            k in seen || (push!(seen, k); push!(ks, k))
-        end
-    end
+    # guaranteed to match the user-written order. Re-order by first appearance in
+    # the templates so `expand("x/{a}_{b}")` is deterministic regardless of kwarg order.
+    ks = unique(Symbol(m.captures[1]) for tmpl in templates for m in eachmatch(WILDCARD_RE, tmpl))
 
     # Validate: every wildcard referenced in templates must be provided.
     for k in ks
