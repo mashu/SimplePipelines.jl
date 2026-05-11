@@ -54,6 +54,16 @@ just queues work without speeding it up, but it *does* multiply memory pressure.
 default_jobs() = min(Threads.nthreads(), 8)
 
 """
+    default_thread_budget() -> Int
+
+Safe default soft cap for declared CPU-thread use. It matches [`default_jobs`](@ref),
+so resourced nodes that declare `threads` cannot collectively exceed the same
+host-aware cap used for parallel branch scheduling. Pass `thread_budget=0` to
+`run` to disable this cap.
+"""
+default_thread_budget() = default_jobs()
+
+"""
     default_memory_budget_mb() -> Int
 
 Safe default soft cap for the per-run memory budget: 50% of total system RAM,
@@ -75,7 +85,8 @@ small dictionaries / counters / arrays in RAM where the I/O cost would dominate.
 default_spill_threshold_bytes() = 10_000_000
 
 RunContext(; verbose::Bool=false, jobs::Int=default_jobs(), state_path::String=STATE_FILE[],
-           memory_budget_mb::Int=default_memory_budget_mb(), thread_budget::Int=0,
+           memory_budget_mb::Int=default_memory_budget_mb(),
+           thread_budget::Int=default_thread_budget(),
            auto_spill::Bool=true,
            spill_threshold_bytes::Int=default_spill_threshold_bytes(),
            spill_dir::String=tempdir()) =

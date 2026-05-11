@@ -210,6 +210,7 @@ end
     @test default_jobs() >= 1
     @test default_jobs() <= max(1, Threads.nthreads())
     @test default_jobs() <= 8
+    @test default_thread_budget() == default_jobs()
     # 50% of total RAM as MB. Should be at least a few MB on any real box.
     @test default_memory_budget_mb() > 0
     @test default_memory_budget_mb() <= floor(Int, Sys.total_memory() / 1_000_000)
@@ -218,11 +219,13 @@ end
     ctx = SimplePipelines.RunContext()
     @test ctx.jobs == default_jobs()
     @test ctx.memory_budget.capacity == default_memory_budget_mb()
+    @test ctx.thread_budget.capacity == default_thread_budget()
 
     # User can still pass 0 to disable either cap.
-    ctx0 = SimplePipelines.RunContext(jobs=0, memory_budget_mb=0)
+    ctx0 = SimplePipelines.RunContext(jobs=0, memory_budget_mb=0, thread_budget=0)
     @test ctx0.jobs == 0
     @test ctx0.memory_budget.capacity == 0
+    @test ctx0.thread_budget.capacity == 0
 end
 
 @testset "with_resources / Resourced" begin
@@ -407,6 +410,32 @@ end
     ]
     run(reduce(&, nodes), verbose=false, force=true, thread_budget=2, jobs=4)
     @test peak[] == 1
+end
+
+@testset "memory and thread budgets compose" begin
+    # A resourced node must fit both budgets before it runs. Here memory would
+    # allow three concurrent branches and threads would allow two, so the
+    # composed limit is two.
+    active = Threads.Atomic{Int}(0)
+    peak = Threads.Atomic{Int}(0)
+    bump_peak! = () -> begin
+        cur = Threads.atomic_add!(active, 1) + 1
+        old = peak[]
+        while cur > old
+            Threads.atomic_cas!(peak, old, cur) == old && break
+            old = peak[]
+        end
+        sleep(0.04)
+        Threads.atomic_sub!(active, 1)
+        "ok"
+    end
+    nodes = AbstractNode[
+        with_resources(Step(Symbol("mt$i"), bump_peak!); mem_mb=400, threads=2)
+        for i in 1:4
+    ]
+    run(reduce(&, nodes), verbose=false, force=true,
+        memory_budget_mb=1200, thread_budget=4, jobs=4)
+    @test peak[] == 2
 end
 
 @testset "resources release after resourced node throws" begin

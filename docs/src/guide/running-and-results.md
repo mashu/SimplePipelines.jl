@@ -65,9 +65,37 @@ end)
 
 ## Memory Safety
 
-SimplePipelines assumes disk is cheaper than RAM. By default, large captured
-outputs are spilled to files and represented by lightweight wrappers in results.
-Most users do not need to configure this.
+SimplePipelines assumes disk is cheaper than RAM, and that unbounded parallelism
+can make a laptop unusable. A default `run(pipeline)` therefore has three safety
+limits:
+
+- `jobs=default_jobs()` runs at most `min(Threads.nthreads(), 8)` parallel
+  branches at once.
+- `auto_spill=true` spills large captured results to disk instead of keeping
+  every result in RAM.
+- `memory_budget_mb=default_memory_budget_mb()` and
+  `thread_budget=default_thread_budget()` limit nodes annotated with
+  [`with_resources`](@ref).
+
+Most users do not need to configure these for small pipelines.
+
+The resource budgets apply when a step declares what it needs:
+
+```julia
+heavy = with_resources(step; mem_mb=4_000, threads=4)
+run(heavy & other)
+```
+
+A node that declares both must fit both budgets before it starts. The caps are
+composed: memory pressure can queue the node, CPU-thread pressure can queue the
+node, and either one is enough to delay it until resources are free.
+
+Unannotated steps are still protected by the `jobs` branch cap, but the runtime
+cannot guess how much RAM or how many CPU threads an external tool will use. Add
+`with_resources` around known-heavy nodes so they queue instead of running all at
+once.
+
+## Spilled Results
 
 When you do need to read a spilled value, call [`materialize`](@ref):
 

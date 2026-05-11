@@ -140,6 +140,7 @@ These are used as the default keyword argument values in [`run`](@ref).
 ```@docs
 default_jobs
 default_memory_budget_mb
+default_thread_budget
 default_spill_threshold_bytes
 ```
 

@@ -52,6 +52,26 @@ end
 Use pattern mode when the input files already exist and should drive the work.
 Use rules when the requested output target should drive dependency resolution.
 
+## Resource Limits
+
+Fan-out can create many runnable branches. By default, `run` limits live branches
+with `jobs=default_jobs()`, so a large `ForEach` queues work instead of starting
+everything at once.
+
+If each branch calls a heavy tool, declare that too:
+
+```julia
+pipeline = ForEach(samples) do sample
+    step = @step align = sh("bwa mem -t 4 ref.fa $(sample).fq > $(sample).bam")
+    with_resources(step; mem_mb=8_000, threads=4)
+end
+
+run(pipeline)
+```
+
+The default memory and thread budgets then keep declared-heavy branches from
+running together when they would exceed the host-aware caps.
+
 ## Reduce Branch Outputs
 
 `Reduce` runs a node and gives successful branch results to one reducer

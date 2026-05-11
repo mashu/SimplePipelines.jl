@@ -7,8 +7,9 @@
 #     run(Pipeline(heavy & heavy_b); memory_budget_mb=8_000, thread_budget=8)
 #
 # Branches with declared resources block (cooperatively, on a Condition) until
-# the RunContext has enough free budget to admit them. Zero means "no cap" so
-# existing pipelines keep their semantics.
+# the RunContext has enough free budget to admit them. The default run context
+# caps memory at half of system RAM and declared threads at default_jobs().
+# Passing zero for a budget disables that specific cap.
 
 """
     Resources(; mem_mb=0, threads=1)

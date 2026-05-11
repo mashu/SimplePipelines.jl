@@ -62,7 +62,12 @@ only need [`with_resources`](@ref) for steps that you know are heavy:
 
 ```julia
 heavy = with_resources(step; mem_mb=4_000, threads=4)
-run(heavy & other; memory_budget_mb=8_000, thread_budget=8)
+run(heavy & other)
 ```
+
+By default, `run` already caps live parallel branches with `jobs`, caps declared
+memory at half of system RAM, and caps declared threads at the same host-aware
+limit as `jobs`. Pass explicit budgets only when you want stricter or looser
+limits.
 
 For details on results and spill behavior, see [Running and inspecting](running-and-results.md).

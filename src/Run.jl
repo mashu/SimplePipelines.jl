@@ -5,7 +5,7 @@ maybe_report(f, results::AbstractVector{<:AbstractStepResult}, name::AbstractStr
 """
     run(p::Pipeline; verbose=true, dry_run=false, force=false,
         jobs=default_jobs(), memory_budget_mb=default_memory_budget_mb(),
-        thread_budget=0,
+        thread_budget=default_thread_budget(),
         auto_spill=true, spill_threshold_bytes=default_spill_threshold_bytes(),
         spill_dir=tempdir(), report=nothing) -> Vector{AbstractStepResult}
     run(node::AbstractNode; kwargs...) -> Vector{AbstractStepResult}
@@ -24,8 +24,9 @@ Execute a pipeline or node, returning a `StepResult` for every step that ran.
   [`with_resources`](@ref). Defaults to **50% of total system RAM**. Branches
   with declared `mem_mb` block on a semaphore until enough budget is free. Pass
   `0` to disable.
-- `thread_budget=0`: Soft cap on concurrent CPU threads across nodes that declare
-  `threads`; `0` disables the cap.
+- `thread_budget`: Soft cap on concurrent CPU threads across nodes wrapped with
+  [`with_resources`](@ref). Defaults to [`default_thread_budget`](@ref), which
+  matches `jobs`. Pass `0` to disable.
 - `auto_spill=true`: Two complementary behaviours.
   *(1) Shell steps:* stdout streams **directly** to a tempfile in `spill_dir`
   while the command runs, so peak RAM is bounded by the OS pipe buffer rather
@@ -51,7 +52,7 @@ defaults combine to make a default-run pipeline memory-safe by construction:
 1. `jobs` caps the live-execution set at the host's thread count.
 2. `auto_spill` swaps each finished step's big result for a tiny `SpilledValue`
    so the memo doesn't accumulate raw values.
-3. `memory_budget_mb` serialises declared-heavy steps via
+3. `memory_budget_mb` and `thread_budget` serialise declared-heavy steps via
    [`with_resources`](@ref).
 
 Downstream consumers call [`materialize`](@ref) to retrieve a `SpilledValue`
@@ -66,12 +67,12 @@ value, take `last(results)`; if you want successes, `filter(r -> r.success, resu
 See also: [`is_fresh`](@ref), [`Force`](@ref), [`print_dag`](@ref),
 [`with_resources`](@ref), [`FilePath`](@ref), [`SpilledValue`](@ref),
 [`materialize`](@ref), [`default_jobs`](@ref),
-[`default_memory_budget_mb`](@ref).
+[`default_memory_budget_mb`](@ref), [`default_thread_budget`](@ref).
 """
 function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::Bool=false,
                   jobs::Int=default_jobs(),
                   memory_budget_mb::Int=default_memory_budget_mb(),
-                  thread_budget::Int=0,
+                  thread_budget::Int=default_thread_budget(),
                   auto_spill::Bool=true,
                   spill_threshold_bytes::Int=default_spill_threshold_bytes(),
                   spill_dir::String=tempdir(),

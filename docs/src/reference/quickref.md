@@ -61,6 +61,8 @@ When the left side has **multiple** outputs (`ForEach`, `Parallel`), `>>`, `|>`,
 | Call / field | Role |
 |--------------|------|
 | `run(p)` / `p \|> run` | Execute; returns result vector |
+| `run(..., jobs=N)` | Cap live parallel branches |
+| `with_resources(step; mem_mb=M, threads=T)` | Declare heavy-node resource use |
 | `run(..., verbose=false)` | Quiet (no command echo) |
 | `run(..., dry_run=true)` | Preview only |
 | `run(..., report=(res; pipeline) -> …)` | Hook after run, before saving state |
