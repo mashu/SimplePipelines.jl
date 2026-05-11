@@ -35,7 +35,9 @@ pipeline = primary^3 | fallback
 
 ## `Branch` (conditional)
 
-Pick a branch using a runtime condition:
+Pick a branch using a runtime condition. With **no** value flowing from a previous step in the same [`Sequence`](@ref), the condition is invoked as `condition()` (zero arguments). After a step that **passes data forward**, use a **one-argument** predicate: `condition(upstream_value)` — for example `Branch((path) -> endswith(path, ".gz"), …)`.
+
+The [`@branch`](@ref) macro builds the common zero-argument case: `@branch use_fast[] fast_step slow_step` is equivalent to `Branch(() -> use_fast[], fast_step, slow_step)`.
 
 ```julia
 large_file_pipeline = @step large = sh"process_large data.txt"
@@ -57,7 +59,7 @@ pipeline = Branch(
 
 ## `Timeout`
 
-Fail if a node exceeds a time limit:
+Fail if a node exceeds a time limit. On expiry the result is a failed step whose `StepFailure` payload has kind **`:timed_out`**. If the inner node **throws** before finishing (for example a predicate error inside [`Branch`](@ref)), the wrapper reports **`:inner_exception`**. Shell subprocesses are not always killed when the Julia side is interrupted.
 
 ```julia
 long_running_step = @step long = sh"sleep 1"

@@ -1,12 +1,13 @@
-# Public run() entry point. Builds a RunContext per call (no mutable globals), runs
-# the root node, persists state, and returns the per-step results.
+maybe_report(::Nothing, ::AbstractVector{<:AbstractStepResult}, ::AbstractString) = nothing
+maybe_report(f, results::AbstractVector{<:AbstractStepResult}, name::AbstractString) =
+    f(results; pipeline=name)
 
 """
     run(p::Pipeline; verbose=true, dry_run=false, force=false,
         jobs=default_jobs(), memory_budget_mb=default_memory_budget_mb(),
         thread_budget=0,
         auto_spill=true, spill_threshold_bytes=default_spill_threshold_bytes(),
-        spill_dir=tempdir()) -> Vector{AbstractStepResult}
+        spill_dir=tempdir(), report=nothing) -> Vector{AbstractStepResult}
     run(node::AbstractNode; kwargs...) -> Vector{AbstractStepResult}
 
 Execute a pipeline or node, returning a `StepResult` for every step that ran.
@@ -59,6 +60,9 @@ or `FilePath`. Small step results (below threshold) stay in RAM with no I/O cost
 The returned vector contains every step's result. If you only want the terminal
 value, take `last(results)`; if you want successes, `filter(r -> r.success, results)`.
 
+- `report`: optional `report(results; pipeline::String)` called after the DAG finishes
+  and before state is saved. Use for summaries, artifact registries, or CI badges.
+
 See also: [`is_fresh`](@ref), [`Force`](@ref), [`print_dag`](@ref),
 [`with_resources`](@ref), [`FilePath`](@ref), [`SpilledValue`](@ref),
 [`materialize`](@ref), [`default_jobs`](@ref),
@@ -71,7 +75,8 @@ function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::B
                   auto_spill::Bool=true,
                   spill_threshold_bytes::Int=default_spill_threshold_bytes(),
                   spill_dir::String=tempdir(),
-                  state_path::String=STATE_FILE[])
+                  state_path::String=STATE_FILE[],
+                  report=nothing)
     print_pipeline_header(verbose, p)
     if dry_run
         verbose && print_dag(p.root)
@@ -85,6 +90,7 @@ function Base.run(p::Pipeline; verbose::Bool=true, dry_run::Bool=false, force::B
                      spill_dir=spill_dir)
     start = time()
     results = run_node(p.root, ctx, force, nothing)
+    maybe_report(report, results, p.name)
     save_state!(merge_state(ctx), ctx.state_path)
     print_pipeline_footer(verbose, results, start)
     results

@@ -139,7 +139,11 @@ end
 """
     Timeout{N} <: AbstractNode
 
-Wraps a node with a time limit. Returns failure if time exceeded.
+Wraps a node with a time limit. If the deadline passes before the inner node
+finishes, the synthetic timeout step fails with [`StepFailure`](@ref) kind
+`:timed_out`. If the inner node throws (including from [`Branch`](@ref) before
+children run), the result uses kind `:inner_exception`. External processes
+started under `sh` / `Cmd` are not reliably terminated on interrupt.
 """
 struct Timeout{N<:AbstractNode} <: AbstractNode
     node::N
@@ -271,7 +275,7 @@ abstract type AbstractStepResult end
 Structured failure payload for unsuccessful steps and internal execution errors.
 
 - `kind` is a symbol categorising the error (`:missing_input`, `:missing_output`,
-  `:process_failed`, `:exception`, ...).
+  `:process_failed`, `:exception`, `:timed_out`, `:inner_exception`, `:no_matches`, …).
 - `message` is a short human-readable summary.
 - `detail` holds optional extra context (e.g. stderr tail). It may be empty.
 

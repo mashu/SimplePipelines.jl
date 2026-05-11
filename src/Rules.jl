@@ -1,13 +1,7 @@
-# Output-pattern rules: `{wildcard}` placeholders in paths; `resolve` walks targets backward.
+# Rules: `{wildcard}` patterns on paths; `resolve(rules, targets)` builds concrete Steps.
+# Shared outputs deduplicate so each Step runs once per run.
 #
-# A `Rule` declares input and output *patterns* (with `{wildcard}` placeholders) and
-# a work template. Calling `resolve(rules, targets)` walks each requested target
-# backward through the rule set, instantiating concrete `Step`s for every link in
-# the dependency chain. Steps that produce shared dependencies are deduplicated by
-# output-path identity, so the runtime DAG protocol (claim/in-flight) executes
-# them exactly once even when reached from multiple targets.
-#
-# Substitutions in the work template:
+# Work template placeholders:
 #     {input}      → space-joined concrete input paths
 #     {input[i]}   → i-th concrete input
 #     {output}     → space-joined concrete output paths

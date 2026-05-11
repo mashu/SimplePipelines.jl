@@ -25,4 +25,4 @@ run(sh"echo one" >> sh"echo two")
 run((sh"A" & sh"B") >> sh"merge")
 ```
 
-**[Steps and shell](guide/steps-and-shell.md)** · **[Composing pipelines](guide/composition.md)** · **[Control flow](guide/control-flow.md)** · **[Fan-out and reduce](guide/foreach-reduce.md)** · **[Running and inspecting](guide/running-and-results.md)** · **[Examples](examples/basics.md)** · **[Quick reference](reference/quickref.md)** · **[API](api.md)**
+**[Steps and shell](guide/steps-and-shell.md)** · **[Composing pipelines](guide/composition.md)** · **[Choosing operators & Workflow](guide/decision-guide.md)** · **[Control flow](guide/control-flow.md)** · **[Fan-out and reduce](guide/foreach-reduce.md)** · **[Running and inspecting](guide/running-and-results.md)** · **[Examples](examples/basics.md)** · **[Quick reference](reference/quickref.md)** · **[Public API policy](reference/public-api.md)** · **[API](api.md)**

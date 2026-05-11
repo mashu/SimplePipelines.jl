@@ -12,6 +12,7 @@ Order = [:module]
 ```@docs
 AbstractNode
 SimplePipelines.AbstractStepResult
+StepFailure
 StepResult
 Step
 ShRun
@@ -40,6 +41,7 @@ NoWork
 
 ```@docs
 @step
+@branch
 @rule
 @sh_str
 @shell_raw_str
@@ -55,6 +57,7 @@ resource use under a soft cap. Wrap heavy values in [`FilePath`](@ref) and use
 ```@docs
 with_resources
 materialize
+materialize_table
 ```
 
 ## Output-side wildcard inference

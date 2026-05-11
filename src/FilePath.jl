@@ -85,7 +85,18 @@ function materialize(s::SpilledStdout)
     str
 end
 
-# Internal: serialise `value` to a tempfile in `dir` and return a SpilledValue.
+"""
+    materialize_table(fp::FilePath; kwargs...)
+
+Read a CSV file from disk as a `DataFrame` (via CSV.jl). Load `CSV` and `DataFrames`
+after SimplePipelines so the package extension is active; otherwise this function
+has no methods and you get `MethodError`.
+
+Keyword arguments are passed through to [`CSV.read`](https://csv.juliadata.org/stable/).
+"""
+function materialize_table end
+
+# Serialise `value` to a tempfile in `dir` and return a SpilledValue.
 function spill_to_disk(value, dir::AbstractString)
     isdir(dir) || mkpath(dir)
     path = joinpath(dir, "splpl_" * randstring_lower(12) * ".jls")

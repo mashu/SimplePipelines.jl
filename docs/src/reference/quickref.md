@@ -38,7 +38,8 @@ When the left side has **multiple** outputs (`ForEach`, `Parallel`), `>>`, `|>`,
 | API | Role |
 |-----|------|
 | `Timeout(a, secs)` | Fail if overrun |
-| `Branch(cond, a, b)` | Conditional subgraph |
+| `Branch(cond, a, b)` | Conditional subgraph (`cond()` or `cond(upstream)` after `>>`) |
+| `@branch flag[] a b` | Sugar for `Branch(() -> flag[], a, b)` |
 | `ForEach(xs) do ... end` | Fan-out over collection |
 | `ForEach("pat/{x}.ext") do ... end` | Fan-out from glob pattern |
 | `Reduce(f, a & b)` | Merge parallel outputs |
@@ -51,7 +52,9 @@ When the left side has **multiple** outputs (`ForEach`, `Parallel`), `>>`, `|>`,
 | `run(p)` / `p \|> run` | Execute; returns result vector |
 | `run(..., verbose=false)` | Quiet (no command echo) |
 | `run(..., dry_run=true)` | Preview only |
+| `run(..., report=(res; pipeline) -> …)` | Hook after run, before saving state |
 | `.success`, `.duration`, `.result`, `.inputs`, `.outputs` | Per-step outcome fields |
+| `materialize_table(FilePath(p))` | After `using CSV, DataFrames`: CSV → `DataFrame` |
 
 ## Utilities
 

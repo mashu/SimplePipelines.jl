@@ -20,6 +20,14 @@ p = Pipeline(step_a >> step_b, name="My Workflow")
 run(p)
 ```
 
+### Report callback
+
+Pass `report=(results; pipeline) -> …` to run a hook **after** the DAG finishes and **before** state is written. `results` is the `Vector` of [`AbstractStepResult`](@ref); `pipeline` is the [`Pipeline`](@ref) name string. Use for summaries, writing a JSON manifest, or CI notifications.
+
+```julia
+run(plan; verbose=false, report=(res; pipeline) -> @info "done" pipeline n=length(res))
+```
+
 ## Checking results
 
 ```julia
@@ -48,7 +56,7 @@ The package treats **disk as effectively infinite, RAM as finite**. Three defaul
    - **Function steps** are checked after they return: if `Base.summarysize(r.result) > spill_threshold_bytes`, the value is serialised to a tempfile and `r.result` is replaced with a [`SpilledValue`](@ref). Small results stay in RAM (no I/O cost).
 3. `memory_budget_mb = 50% of total RAM` — caps the *concurrent* memory of nodes wrapped in [`with_resources`](@ref).
 
-Downstream consumers call [`materialize`](@ref) to load a `SpilledValue` (round-trips via `Base.Serialization`), a `SpilledStdout` (read as `String`), or a [`FilePath`](@ref) (raw bytes by default; users specialise for typed loading like CSV → DataFrame).
+Downstream consumers call [`materialize`](@ref) to load a `SpilledValue` (round-trips via `Base.Serialization`), a `SpilledStdout` (read as `String`), or a [`FilePath`](@ref) (raw bytes by default). For CSV tables as a `DataFrame`, load [`CSV`](https://github.com/JuliaData/CSV.jl) and [`DataFrames`](https://github.com/JuliaData/DataFrames.jl) after SimplePipelines, then use [`materialize_table`](@ref)(`FilePath(path)`).
 
 ```julia
 # Tight RAM:

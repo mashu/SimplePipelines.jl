@@ -1,5 +1,4 @@
-# Verbosity logging routed through RunContext. All printing is serialized via
-# ctx.log_lock so concurrent Parallel/ForEach branches do not interleave output.
+# Verbose pipeline logging; uses ctx.log_lock so parallel branches do not interleave.
 
 with_log(f, ctx::RunContext) = ctx.verbose ? lock(f, ctx.log_lock) : nothing
 

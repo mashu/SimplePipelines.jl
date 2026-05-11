@@ -30,6 +30,7 @@ makedocs(
         "User guide" => [
             "Steps and shell" => "guide/steps-and-shell.md",
             "Composing pipelines" => "guide/composition.md",
+            "Choosing operators & Workflow" => "guide/decision-guide.md",
             "Control flow" => "guide/control-flow.md",
             "Fan-out and reduce" => "guide/foreach-reduce.md",
             "Running and inspecting" => "guide/running-and-results.md",
@@ -42,6 +43,7 @@ makedocs(
         ],
         "Reference" => [
             "Quick reference" => "reference/quickref.md",
+            "Public API policy" => "reference/public-api.md",
             "API" => "api.md",
         ],
         "Internals" => "design.md",

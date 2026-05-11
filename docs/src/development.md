@@ -4,11 +4,13 @@ SimplePipelines is designed for easy extension via Julia's multiple dispatch.
 
 ## Testing and coverage
 
-Run the test suite:
+Tests live under `test/suites/` (included from `test/runtests.jl`) so each file stays a manageable size. Run the full suite:
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
+
+Table I/O tests need the optional test extras (`CSV`, `DataFrames`) declared in the root `Project.toml` `[targets] test = [...]`.
 
 ## Building the docs
 
@@ -43,8 +45,8 @@ All nodes inherit from `AbstractNode`. To add custom behavior, define a new subt
 ```
 AbstractNode
     ├── Step{F}           # Leaf node
-    ├── Sequence{T}       # Sequential
-    ├── Parallel{T}       # Concurrent
+    ├── Sequence          # Sequential (`Vector{AbstractNode}`)
+    ├── Parallel          # Concurrent (`Vector{AbstractNode}`)
     ├── Retry{N}          # Retry on failure
     ├── Fallback{A,B}     # Try A, else B
     └── Branch{C,T,F}     # Conditional
@@ -54,7 +56,7 @@ AbstractNode
 
 ```julia
 using SimplePipelines
-import SimplePipelines: AbstractNode, run_node, print_dag, count_steps, steps
+import SimplePipelines: AbstractNode, RunContext, run_node, print_dag, count_steps, steps
 
 # 1. Define type (parametric for type stability)
 struct Timeout{N<:AbstractNode} <: AbstractNode
@@ -62,10 +64,10 @@ struct Timeout{N<:AbstractNode} <: AbstractNode
     seconds::Float64
 end
 
-# 2. Implement execution (signature: v, forced::Bool, context_input=nothing)
-function run_node(t::Timeout, v, forced::Bool, context_input=nothing)
+# 2. Implement execution (match package signature: ctx, forced, context_input)
+function run_node(t::Timeout, ctx::RunContext, forced::Bool=false, context_input=nothing)
     # ... timeout logic ...
-    return run_node(t.node, v, forced, context_input)
+    return run_node(t.node, ctx, forced, context_input)
 end
 
 # 3. Implement visualization (signature: io, node, pre, cont, color)

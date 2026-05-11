@@ -56,7 +56,7 @@ export @sh_str, sh, sh_pipe, ShRun
 export @shell_raw_str, shell_raw
 export Resources, Resourced, with_resources
 export default_jobs, default_memory_budget_mb, default_spill_threshold_bytes
-export FilePath, SpilledValue, SpilledStdout, materialize
+export FilePath, SpilledValue, SpilledStdout, materialize, materialize_table
 export Rule, @rule, resolve, NoWork, expand, Workflow, plan
 
 import Base: >>, &, |, ^, |>, >>>
@@ -160,14 +160,11 @@ include("Run.jl")
 include("Display.jl")
 
 #==============================================================================#
-# Precompile workload — locks in inference for the hot dispatch paths so first
-# `run(pipeline)` is sub-100 ms instead of multi-second.
+# Precompile workload for common run_node / resolve paths.
 #==============================================================================#
 using PrecompileTools: @setup_workload, @compile_workload
 
 @setup_workload begin
-    # Tempfile state path during precompile so we don't litter the package source tree
-    # (or current directory) with a `.pipeline_state`. Passed explicitly — no global mutation.
     precompile_state = tempname()
     prerun(node; kwargs...) = run(Pipeline(node); verbose=false, force=true, state_path=precompile_state, kwargs...)
     @compile_workload begin

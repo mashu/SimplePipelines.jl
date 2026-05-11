@@ -84,10 +84,13 @@ step_outputs_expr(x) = esc(x)
 """
     @branch condition iftrue iffalse
 
-Conditional node: at run time evaluates `condition` (must yield a `Bool`) and
-runs `iftrue` or `iffalse`. Equivalent to
-`Branch(() -> condition, iftrue, iffalse)` with [`node_operand`](@ref) lifting
-for `Cmd` / `Function` leaves.
+Builds a [`Branch`](@ref): at run time evaluates `condition` (must yield a `Bool`)
+and runs one side. Equivalent to `Branch(() -> condition, …)` with lifting for
+`Cmd` / `Function` operands.
+
+When the branch sits after a step that passes data (e.g. in a [`Sequence`](@ref)),
+use `Branch((ctx) -> …, iftrue, iffalse)` so the predicate receives that value;
+with no upstream value the runtime calls `condition()` with no arguments.
 
 # Example
 ```julia

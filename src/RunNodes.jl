@@ -1,12 +1,7 @@
-# run_node dispatch over RunContext, with IdDict memoization to make node sharing
-# (the same Step or sub-DAG referenced from multiple places) execute exactly once
-# per run — i.e. the runtime treats the tree-shaped DSL as a real DAG.
-#
-# Signature: run_node(node, ctx::RunContext, forced::Bool=false, context_input=nothing).
-# `context_input` (when not nothing) is the data flowing in from a sequence/pipe; with
-# context_input=nothing the result is memoizable by node identity.
+# run_node: recursive execution on RunContext. Shared Step instances run once per run
+# (memo + in-flight channel). Optional context_input is data from Sequence / Pipe.
 
-# Broadcast of >> (a .>> b): build a BroadcastPipe; expand at run time.
+# Broadcast of >> → BroadcastPipe.
 function Base.Broadcast.broadcasted(::typeof(>>), left::AbstractNode, right::AbstractNode)
     BroadcastPipe(left, right)
 end
@@ -224,24 +219,34 @@ function run_node(f::Fallback, ctx::RunContext, forced::Bool=false, context_inpu
     run_node(f.fallback, ctx, forced, context_input)
 end
 
+branch_eval(b::Branch{C,T,F}, ::Nothing) where {C<:Function,T<:AbstractNode,F<:AbstractNode} =
+    b.condition()
+branch_eval(b::Branch{C,T,F}, ctx) where {C<:Function,T<:AbstractNode,F<:AbstractNode} =
+    b.condition(ctx)
+
 function run_node(b::Branch, ctx::RunContext, forced::Bool=false, context_input=nothing)
-    cond = b.condition()
+    cond = branch_eval(b, context_input)
     log_branch(ctx, cond)
     run_node(cond ? b.if_true : b.if_false, ctx, forced, context_input)
 end
 
-# Timeout: inner node runs on a spawned task; a one-shot Timer interrupts it at the
-# deadline (InterruptException). Only one of {worker, timer} may put! on the channel.
-# Subprocesses already launched by Base.run are not reliably killed — best-effort.
+# Timeout: inner node on a task; one-shot Timer interrupts at the deadline.
+# Worker wraps `run_node` in `run_safely` so throws become results (see `:inner_exception`).
+# Only one of worker or timer puts on the channel. Subprocesses from Base.run are not
+# reliably killed on interrupt.
 function run_node(t::Timeout, ctx::RunContext, forced::Bool=false, context_input=nothing)
     log_timeout(ctx, t.seconds)
     ch = Channel{Vector{AbstractStepResult}}(1)
-    winner = Threads.Atomic{UInt8}(0)  # 0 unset; 1 worker; 2 timer
+    winner = Threads.Atomic{UInt8}(0)
     worker_ref = Ref{Union{Nothing,Task}}(nothing)
     worker = Threads.@spawn begin
-        r = run_node(t.node, ctx, forced, context_input)
+        outcome = run_safely(() -> run_node(t.node, ctx, forced, context_input))
         if Threads.atomic_cas!(winner, 0x00, 0x01) === 0x00
-            put!(ch, r)
+            if outcome.ok
+                put!(ch, outcome.value)
+            else
+                put!(ch, timeout_inner_results(t, outcome.value))
+            end
         end
     end
     worker_ref[] = worker
@@ -260,8 +265,16 @@ end
 
 function timeout_step_results(t::Timeout)
     timeout_step = Step(:timeout, `true`)
-    AbstractStepResult[StepResult(timeout_step, false, t.seconds, timeout_step.inputs, timeout_step.outputs,
-                                  "Timeout after $(t.seconds)s")]
+    fail = StepFailure(:timed_out, "Timeout after $(t.seconds)s";
+                       detail="The inner node did not finish before the deadline. External processes may keep running.")
+    AbstractStepResult[StepResult(timeout_step, false, t.seconds, timeout_step.inputs, timeout_step.outputs, fail)]
+end
+
+function timeout_inner_results(t::Timeout, err::StepFailure)
+    timeout_step = Step(:timeout, `true`)
+    inner = StepFailure(:inner_exception, "Inner node failed inside Timeout";
+                        detail=sprint(showerror, err))
+    AbstractStepResult[StepResult(timeout_step, false, t.seconds, timeout_step.inputs, timeout_step.outputs, inner)]
 end
 
 function run_node(f::Force, ctx::RunContext, ::Bool=false, context_input=nothing)
