@@ -17,11 +17,12 @@ When the left side has **one** successful path, `>>`, `|>`, `.>>`, and `>>>` beh
 
 | Situation | Prefer |
 |:----------|:-------|
-| Many targets built from patterns (`data/{id}.fq` → `out/{id}.bam`), shared deps, Make-like resolve | [`Workflow`](@ref) + [`@rule`](@ref) + [`resolve`](@ref) / [`plan`](@ref) |
+| Learn or debug one rule pattern | [`check`](@ref) on a [`@rule`](@ref), then `check(rule, "out/A.bam")` |
+| Many targets built from patterns (`data/{id}.fq` → `out/{id}.bam`), shared deps, Make-like resolve | [`@workflow`](@ref) + [`@rule`](@ref) + [`@targets`](@ref) |
 | One-off script, few steps, explicit graph in code | `>>` / `&` on [`Step`](@ref)s directly |
-| Inspect what would run without executing | `run(..., dry_run=true)` or [`print_dag`](@ref) on [`plan(wf)`](@ref) |
+| Inspect what would run without executing | [`explain`](@ref) for rule resolution, or [`print_dag`](@ref) on [`plan(wf)`](@ref) |
 
-[`Workflow`](@ref) is a registry of rules and default target strings; `run(wf)` calls [`plan`](@ref) then the same [`run`](@ref) as a [`Pipeline`](@ref).
+[`Workflow`](@ref) is a registry of rules and default target strings; `run(wf)` calls [`plan`](@ref) then the same [`run`](@ref) as a [`Pipeline`](@ref). See [Rules and diagnostics](rules-and-diagnostics.md) for the gradual `check` → `@workflow` → `explain` path.
 
 ## Memory and parallelism
 

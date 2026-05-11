@@ -196,6 +196,51 @@ end
 show_result_inline(io::IO, e::StepFailure) = show_result_inline(io, string(e))
 show_result_inline(io::IO, _) = println(io)
 
+function print_wildcards(io::IO, wildcards::AbstractDict)
+    pairs = sort!(collect(wildcards); by=first)
+    isempty(pairs) && return println(io, "(none)")
+    println(io, join(("$(k) => $(v)" for (k, v) in pairs), ", "))
+end
+
+function Base.show(io::IO, ::MIME"text/plain", c::RuleCheck)
+    println(io, "Rule check: ", c.rule.name)
+    println(io, "  input patterns:  ", isempty(c.rule.inputs) ? "(none)" : join(c.rule.inputs, ", "))
+    println(io, "  output patterns: ", isempty(c.rule.outputs) ? "(none)" : join(c.rule.outputs, ", "))
+    println(io, "  wildcards:       ", isempty(c.wildcards) ? "(none)" : join(c.wildcards, ", "))
+    println(io, "  placeholders:    ", isempty(c.placeholders) ? "(none)" : join(c.placeholders, ", "))
+end
+
+function Base.show(io::IO, ::MIME"text/plain", c::RuleInstantiationCheck)
+    println(io, "Rule target check: ", c.rule.name)
+    println(io, "  target:    ", c.target)
+    print(io, "  wildcards: ")
+    print_wildcards(io, c.wildcards)
+    println(io, "  inputs:    ", isempty(c.inputs) ? "(none)" : join(c.inputs, ", "))
+    println(io, "  outputs:   ", isempty(c.outputs) ? "(none)" : join(c.outputs, ", "))
+    isempty(c.command) || println(io, "  command:   ", c.command)
+    isempty(c.function_note) || println(io, "  note:      ", c.function_note)
+end
+
+function Base.show(io::IO, ::MIME"text/plain", p::PlanExplanation)
+    println(io, "Workflow explanation for target: ", p.target)
+    for (i, step) in enumerate(p.steps)
+        i > 1 && println(io)
+        print_explanation_step(io, step)
+    end
+end
+
+function print_explanation_step(io::IO, step::RuleExplanationStep)
+    println(io, "Rule: ", step.rule.name)
+    println(io, "  target:       ", step.target)
+    print(io, "  wildcards:    ")
+    print_wildcards(io, step.wildcards)
+    println(io, "  inputs:       ", isempty(step.inputs) ? "(none)" : join(step.inputs, ", "))
+    println(io, "  outputs:      ", isempty(step.outputs) ? "(none)" : join(step.outputs, ", "))
+    isempty(step.command) || println(io, "  command:      ", step.command)
+    isempty(step.function_note) || println(io, "  note:         ", step.function_note)
+    println(io, "  dependencies: ", isempty(step.dependencies) ? "(none)" : join(step.dependencies, ", "))
+end
+
 Base.show(io::IO, s::Step) = print(io, "Step(:", s.name, ")")
 Base.show(io::IO, s::Sequence) = print(io, "Sequence(", join(s.nodes, " >> "), ")")
 Base.show(io::IO, p::Parallel) = print(io, "Parallel(", join(p.nodes, " & "), ")")

@@ -72,10 +72,14 @@ product, and a [`Workflow`](@ref) bundles rules + default targets behind a singl
 `run(::Workflow)` entry point.
 
 ```@docs
+check
+@targets
+@workflow
 resolve
 expand
 Workflow
 plan
+explain
 ```
 
 ## Operators

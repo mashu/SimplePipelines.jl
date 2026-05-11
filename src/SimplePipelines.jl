@@ -57,7 +57,8 @@ export @shell_raw_str, shell_raw
 export Resources, Resourced, with_resources
 export default_jobs, default_memory_budget_mb, default_spill_threshold_bytes
 export FilePath, SpilledValue, SpilledStdout, materialize, materialize_table
-export Rule, @rule, resolve, NoWork, expand, Workflow, plan
+export Rule, @rule, @targets, @workflow, resolve, NoWork, expand, Workflow, plan
+export check, explain, RuleCheck, RuleInstantiationCheck, PlanExplanation
 
 import Base: >>, &, |, ^, |>, >>>
 
@@ -185,6 +186,17 @@ using PrecompileTools: @setup_workload, @compile_workload
         SimplePipelines.fill_special("cp {input} {output}", ["a"], ["b"])
         # expand: lock in NamedTuple kwargs path
         expand("out/{s}.bam"; s=["A", "B"])
+        # Rule onboarding helpers: single-rule check, target check, workflow explain.
+        pc_rule = @rule align("raw/{s}.fq" => "out/{s}.bam") = "cmd {input} > {output}"
+        check(pc_rule)
+        check(pc_rule, "out/A.bam")
+        pc_wf = @workflow "pc" begin
+            @rule source([] => "raw/{s}.fq") = "touch {output}"
+            @rule align("raw/{s}.fq" => "out/{s}.bam") = "cmd {input} > {output}"
+            @targets "out/{s}.bam" s=["A", "B"]
+        end
+        explain(pc_wf; target="out/A.bam")
+        plan(pc_wf)
         # Cold paths: NoWork, Branch, FilePath materialize
         prerun(NoWork())
         prerun(@branch true `true` `false`)

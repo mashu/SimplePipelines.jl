@@ -30,6 +30,7 @@ makedocs(
         "User guide" => [
             "Steps and shell" => "guide/steps-and-shell.md",
             "Composing pipelines" => "guide/composition.md",
+            "Rules and diagnostics" => "guide/rules-and-diagnostics.md",
             "Choosing operators & Workflow" => "guide/decision-guide.md",
             "Control flow" => "guide/control-flow.md",
             "Fan-out and reduce" => "guide/foreach-reduce.md",

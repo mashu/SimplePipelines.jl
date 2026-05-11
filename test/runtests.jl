@@ -10,6 +10,7 @@ clear_state!()
     include("suites/04_foreach_pipe_reduce.jl")
     include("suites/05_dag_rules_resources.jl")
     include("suites/06_report_branch_timeout_tables.jl")
+    include("suites/07_rule_onboarding.jl")
 end
 
 # Documenter `jldoctest` blocks in `docs/src/` (see `doctests.md`). Spawn a fresh Julia with a

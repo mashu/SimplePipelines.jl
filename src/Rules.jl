@@ -74,6 +74,17 @@ macro rule(expr)
     rule_expr(expr)
 end
 
+"""
+    @targets "out/{sample}.bam" sample=["A", "B"]
+    @targets ["out/{sample}.bam", "qc/{sample}.html"] sample=["A", "B"]
+
+Generate concrete target paths from wildcard values. This is macro sugar over
+[`expand`](@ref) for use inside [`@workflow`](@ref) blocks or `push!(wf, ...)`.
+"""
+macro targets(template, args...)
+    Expr(:call, :expand, Expr(:parameters, (esc(a) for a in args)...), esc(template))
+end
+
 rule_expr(x) = error("@rule expects `name(inputs => outputs) = work`, got $(x)")
 
 function rule_expr(expr::Expr)
@@ -316,6 +327,130 @@ function find_rule(rules::AbstractVector{<:Rule}, target::String)
 end
 
 #==============================================================================#
+# Rule checks and workflow explanations
+#==============================================================================#
+
+"""
+    check(rule)
+    check(rule, target)
+
+Inspect a rule without running it. `check(rule)` shows the wildcard shape and
+template placeholders; `check(rule, target)` tests one concrete target and shows
+the wildcards, inputs, outputs, and rendered shell command when the rule work is
+a string template.
+"""
+struct RuleCheck{W}
+    rule::Rule{W}
+    wildcards::Vector{String}
+    placeholders::Vector{String}
+end
+
+struct RuleInstantiationCheck{W}
+    rule::Rule{W}
+    target::String
+    wildcards::Dict{String,String}
+    inputs::Vector{String}
+    outputs::Vector{String}
+    command::String
+    function_note::String
+end
+
+struct RuleExplanationStep{W}
+    rule::Rule{W}
+    target::String
+    wildcards::Dict{String,String}
+    inputs::Vector{String}
+    outputs::Vector{String}
+    command::String
+    function_note::String
+    dependencies::Vector{String}
+end
+
+struct PlanExplanation
+    target::String
+    steps::Vector{RuleExplanationStep}
+end
+
+rule_placeholders(rule::Rule{<:AbstractString}) =
+    unique(String(m.match) for m in eachmatch(WILDCARD_RE, String(rule.work)))
+rule_placeholders(::Rule) = String[]
+
+check(rule::Rule) = RuleCheck(rule, pattern_wildcards(vcat(rule.inputs, rule.outputs)),
+                              rule_placeholders(rule))
+
+function check(rule::Rule, target::AbstractString)
+    t = String(target)
+    wildcards = rule_target_wildcards(rule, t)
+    inputs = [substitute(p, wildcards) for p in rule.inputs]
+    outputs = [substitute(p, wildcards) for p in rule.outputs]
+    command, note = rule_work_preview(rule, inputs, outputs, wildcards)
+    RuleInstantiationCheck(rule, t, wildcards, inputs, outputs, command, note)
+end
+
+@doc """
+    check(rule)
+    check(rule, target)
+
+Inspect rule patterns without running work. `check(rule)` reports wildcard names,
+input/output patterns, and placeholders used by string work templates.
+`check(rule, target)` matches one concrete target and reports the inferred
+wildcards, concrete inputs/outputs, and rendered shell command when available.
+""" check
+
+function rule_target_wildcards(rule::Rule, target::String)
+    for op in rule.outputs
+        wildcards = match_pattern(op, target)
+        wildcards === nothing && continue
+        return wildcards
+    end
+    error("Rule `$(rule.name)` does not produce target `$target`; output patterns: $(rule.outputs)")
+end
+
+function rule_work_preview(rule::Rule{<:AbstractString}, inputs::Vector{String},
+                           outputs::Vector{String}, wildcards::AbstractDict)
+    command = substitute(fill_special(String(rule.work), inputs, outputs), wildcards)
+    command, ""
+end
+rule_work_preview(::Rule{<:Function}, ::Vector{String}, ::Vector{String}, ::AbstractDict) =
+    ("", "function rule: would receive (inputs, outputs, wildcards)")
+rule_work_preview(::Rule, ::Vector{String}, ::Vector{String}, ::AbstractDict) =
+    ("", "rule work is not a string template")
+
+explain(rules::AbstractVector{<:Rule}, target::AbstractString) =
+    PlanExplanation(String(target), explain_steps(rules, String(target), Set{String}()))
+
+@doc """
+    explain(rules, target)
+    explain(workflow; target)
+
+Explain how a concrete target is resolved through one or more rules without
+running the pipeline. The result shows each matched rule, inferred wildcards,
+concrete inputs/outputs, rendered string command, and rule dependencies.
+""" explain
+
+function explain_steps(rules::AbstractVector{<:Rule}, target::String, visiting::Set{String})
+    target in visiting && error("explain: cycle detected at `$target`")
+    rule_match = find_rule(rules, target)
+    rule_match === nothing && error("explain: no rule produces `$target`")
+    rule, wildcards = rule_match
+    inputs = [substitute(p, wildcards) for p in rule.inputs]
+    outputs = [substitute(p, wildcards) for p in rule.outputs]
+    command, note = rule_work_preview(rule, inputs, outputs, wildcards)
+    push!(visiting, target)
+    deps = RuleExplanationStep[]
+    dependencies = String[]
+    for inp in inputs
+        find_rule(rules, inp) === nothing && continue
+        push!(dependencies, inp)
+        append!(deps, explain_steps(rules, inp, visiting))
+    end
+    delete!(visiting, target)
+    push!(deps, RuleExplanationStep(rule, target, wildcards, inputs, outputs,
+                                    command, note, dependencies))
+    deps
+end
+
+#==============================================================================#
 # expand — declarative target generation by Cartesian product of wildcard values
 #==============================================================================#
 
@@ -422,6 +557,48 @@ mutable struct Workflow
     targets::Vector{String}
 end
 Workflow(; name::AbstractString="workflow") = Workflow(String(name), Rule[], String[])
+explain(wf::Workflow; target::AbstractString) = explain(wf.rules, String(target))
+
+"""
+    @workflow "name" begin
+        @rule ...
+        @targets ...
+    end
+
+Build a [`Workflow`](@ref) from rule and target entries. The macro is shallow:
+entries are still ordinary [`@rule`](@ref) and [`@targets`](@ref) forms, collected
+with `push!` into a `Workflow`.
+"""
+macro workflow(name, block)
+    workflow_expr(name, block)
+end
+
+workflow_expr(name, block) = error("@workflow expects `@workflow \"name\" begin ... end`")
+function workflow_expr(name, block::Expr)
+    block.head === :block || error("@workflow expects `@workflow \"name\" begin ... end`")
+    wf = gensym(:workflow)
+    body = Any[:($wf = Workflow(name=$(esc(name))))]
+    for stmt in block.args
+        workflow_push_expr!(body, wf, stmt)
+    end
+    push!(body, wf)
+    Expr(:block, body...)
+end
+
+workflow_push_expr!(::Vector{Any}, ::Symbol, ::LineNumberNode) = nothing
+function workflow_push_expr!(body::Vector{Any}, wf::Symbol, stmt)
+    workflow_entry_ok(stmt) ||
+        error("@workflow entries must be @rule or @targets forms, got $(stmt)")
+    push!(body, :(push!($wf, $(esc(stmt)))))
+    nothing
+end
+
+workflow_entry_ok(::LineNumberNode) = true
+workflow_entry_ok(x) = false
+function workflow_entry_ok(expr::Expr)
+    expr.head === :macrocall || return false
+    expr.args[1] in (Symbol("@rule"), Symbol("@targets"))
+end
 
 # Heterogeneous push: dispatch routes each item to the right sub-vector. This
 # replaces ad-hoc add_rule!/add_target! helpers — Julia's verb-based mutation
