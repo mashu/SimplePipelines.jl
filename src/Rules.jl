@@ -37,8 +37,11 @@ struct Rule{W}
     # Inner constructor only: the default `Rule{W}(::Vector{String}, ...)` would bypass
     # `validate_rule_wildcards` when argument types match the struct fields exactly.
     function Rule(name::Symbol, inputs::AbstractVector, outputs::AbstractVector, work::W) where {W}
-        inputs_s = [String(s) for s in inputs]
-        outputs_s = [String(s) for s in outputs]
+        # Typed `String[...]` prefix is load-bearing: `inputs` is the unconstrained
+        # `AbstractVector`, so an *empty* untyped comprehension would infer `Vector{Any}`
+        # and miss the `validate_rule_wildcards(::Vector{String}, ...)` dispatch.
+        inputs_s = String[String(s) for s in inputs]
+        outputs_s = String[String(s) for s in outputs]
         validate_rule_wildcards(name, inputs_s, outputs_s)
         new{W}(name, inputs_s, outputs_s, work)
     end
