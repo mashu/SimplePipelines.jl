@@ -70,6 +70,9 @@ function handle_resourced_claim(::ExecuteClaim, step::Step, res::Resources, ctx:
     end
 end
 
+# Acquire memory/thread budget around `f()`. If `f()` throws, slots stay charged
+# until this RunContext is dropped; avoid throwing from inside `with_resources`
+# subtrees when parallel branches share one `run()` or waiters can stall.
 function with_acquired_resources(f, res::Resources, ctx::RunContext)
     mem_taken = acquire!(ctx.memory_budget, res.mem_mb)
     threads_taken = acquire!(ctx.thread_budget, res.threads)

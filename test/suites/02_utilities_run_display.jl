@@ -67,6 +67,16 @@ end
         # Touch input so it's newer than output -> not fresh
         run(`touch in.txt`)
         @test !is_fresh(step)
+
+        # Inputs only (no declared outputs): not fresh if an input disappears,
+        # even when the step hash remains in persisted state.
+        write("only_in.txt", "x")
+        step_in_only = @step lint(["only_in.txt"]) = sh"test -f only_in.txt"
+        @test !is_fresh(step_in_only)
+        run(step_in_only, verbose=false, force=true)
+        @test is_fresh(step_in_only)
+        rm("only_in.txt")
+        @test !is_fresh(step_in_only)
     end
     rm(dir; recursive=true)
 

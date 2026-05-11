@@ -127,7 +127,8 @@ Check if a step can be skipped based on Make-like freshness rules.
 # Freshness Rules
 1. **Has inputs and outputs**: Fresh if all outputs exist and are newer than all inputs.
 2. **Has only outputs**: Fresh if outputs exist and step was previously completed.
-3. **No file dependencies**: Fresh if step was previously completed (state-based tracking).
+3. **Has only inputs**: Not fresh if any input file is missing; otherwise fresh if the step was previously completed (state cannot detect edited inputs without declared outputs).
+4. **No file dependencies**: Fresh if step was previously completed (state-based tracking).
 
 State is persisted in `.pipeline_state`. Completions during a run are batched and
 written once when `run()` finishes.
@@ -138,6 +139,9 @@ is_fresh(step::Step) = is_fresh(step, RunContext())
 
 function is_fresh(step::Step, ctx::RunContext)
     has_in, has_out = !isempty(step.inputs), !isempty(step.outputs)
+    # Missing declared inputs always invalidate (including inputs-only steps that
+    # otherwise rely on state alone — they cannot run without files on disk).
+    has_in && !all(isfile, step.inputs) && return false
     has_out && !all(isfile, step.outputs) && return false
     has_in && has_out && return inputs_older_than_outputs(step)
     state_contains(ctx, step_hash(step))
