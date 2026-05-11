@@ -1,5 +1,11 @@
-# Step execution: run_safely (sole try-catch boundary), declared-path readiness checks,
-# execute(step, ctx). Declared inputs/outputs are always treated as filesystem paths.
+# Step execution: run_safely, declared-path readiness checks, execute(step, ctx).
+# Declared inputs/outputs are always treated as filesystem paths.
+#
+# run_safely: Julia has no separate "catchable" API for user code — anything that
+# runs `Base.run` or a user function can throw (InterruptException, OOM, etc.).
+# Turning those into a failed StepResult instead of unwinding the whole `run` call
+# requires exactly one try/catch in the package; the alternative is to let
+# exceptions propagate and document that contract (no StepFailure(:exception)).
 
 function run_safely(f)::RunOutcome
     try

@@ -121,7 +121,9 @@ end
 """
     Branch{C,T,F} <: AbstractNode
 
-Conditional execution based on a predicate function.
+Conditional execution: at run time, `condition()` must return a `Bool`; the
+corresponding branch runs. For a clearer call site than `Branch(() -> cond, a, b)`,
+see [`@branch`](@ref).
 """
 struct Branch{C<:Function, T<:AbstractNode, F<:AbstractNode} <: AbstractNode
     condition::C
@@ -312,7 +314,7 @@ struct StepResult{S<:Step, I, O, V} <: AbstractStepResult
 end
 StepResult(step::S, success::Bool, duration::Float64, inputs::I, outputs::O, result::V) where {S<:Step, I, O, V} = StepResult{S, I, O, V}(step, success, duration, inputs, outputs, result)
 
-"""Type-stable outcome of running a thunk: success + value, or failure + `StepFailure`. Sole exception boundary."""
+"""Type-stable outcome of running a thunk: success + value, or failure + `StepFailure` when a thrown exception was converted by [`run_safely`](@ref)."""
 struct RunOutcome{T}
     ok::Bool
     value::T

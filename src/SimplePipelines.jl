@@ -45,7 +45,7 @@ See also: [`Step`](@ref), [`Pipeline`](@ref), [`run`](@ref), [`is_fresh`](@ref).
 """
 module SimplePipelines
 
-export Step, @step, Sequence, Parallel, Pipeline, AbstractNode
+export Step, @step, @branch, Sequence, Parallel, Pipeline, AbstractNode
 export StepResult, AbstractStepResult
 export StepFailure
 export Retry, Fallback, Branch, Timeout, Force
@@ -188,6 +188,13 @@ using PrecompileTools: @setup_workload, @compile_workload
         SimplePipelines.fill_special("cp {input} {output}", ["a"], ["b"])
         # expand: lock in NamedTuple kwargs path
         expand("out/{s}.bam"; s=["A", "B"])
+        # Cold paths: NoWork, Branch, FilePath materialize
+        prerun(NoWork())
+        prerun(@branch true `true` `false`)
+        fp = tempname()
+        write(fp, "pc")
+        materialize(FilePath(fp))
+        rm(fp; force=true)
     end
     isfile(precompile_state) && rm(precompile_state)
 end

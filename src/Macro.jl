@@ -80,3 +80,23 @@ step_inputs_expr(s::String) = :([$s])
 step_inputs_expr(x) = esc(x)
 step_outputs_expr(s::String) = :([$s])
 step_outputs_expr(x) = esc(x)
+
+"""
+    @branch condition iftrue iffalse
+
+Conditional node: at run time evaluates `condition` (must yield a `Bool`) and
+runs `iftrue` or `iffalse`. Equivalent to
+`Branch(() -> condition, iftrue, iffalse)` with [`node_operand`](@ref) lifting
+for `Cmd` / `Function` leaves.
+
+# Example
+```julia
+use_fast = Ref(true)
+pipeline = @branch use_fast[] fast_step slow_step
+```
+"""
+macro branch(cond, t, f)
+    quote
+        Branch(() -> $(esc(cond)), node_operand($(esc(t))), node_operand($(esc(f))))
+    end
+end

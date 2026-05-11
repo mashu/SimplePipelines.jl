@@ -897,6 +897,17 @@ clear_state!()
         
         # show
         @test contains(sprint(show, b), "Branch")
+
+        # @branch expands to the same run-time behaviour as Branch(() -> ...)
+        bmacro = @branch true `echo macro_yes` `echo macro_no`
+        rm = run(bmacro, verbose=false, force=true)
+        @test rm[1].success
+        @test contains(rm[1].result, "macro_yes")
+        bmacro2 = @branch flag[] true_branch false_branch
+        flag[] = true
+        @test contains(run(bmacro2, verbose=false, force=true)[1].result, "true path")
+        flag[] = false
+        @test contains(run(bmacro2, verbose=false, force=true)[1].result, "false path")
     end
     
     @testset "Retry + Fallback composition" begin

@@ -230,26 +230,38 @@ function run_node(b::Branch, ctx::RunContext, forced::Bool=false, context_input=
     run_node(cond ? b.if_true : b.if_false, ctx, forced, context_input)
 end
 
-# Timeout: run the inner node on a spawned task; if the deadline expires, schedule an
-# InterruptException to the task to stop further Julia work. Subprocesses already
-# launched by Base.run cannot be killed here — the timeout is best-effort.
+# Timeout: inner node runs on a spawned task; a one-shot Timer interrupts it at the
+# deadline (InterruptException). Only one of {worker, timer} may put! on the channel.
+# Subprocesses already launched by Base.run are not reliably killed — best-effort.
 function run_node(t::Timeout, ctx::RunContext, forced::Bool=false, context_input=nothing)
     log_timeout(ctx, t.seconds)
     ch = Channel{Vector{AbstractStepResult}}(1)
-    task = @async put!(ch, run_node(t.node, ctx, forced, context_input))
-    deadline = time() + t.seconds
-    while !isready(ch) && time() < deadline
-        sleep(0.01)
+    winner = Threads.Atomic{UInt8}(0)  # 0 unset; 1 worker; 2 timer
+    worker_ref = Ref{Union{Nothing,Task}}(nothing)
+    worker = Threads.@spawn begin
+        r = run_node(t.node, ctx, forced, context_input)
+        if Threads.atomic_cas!(winner, 0x00, 0x01) === 0x00
+            put!(ch, r)
+        end
     end
-    if isready(ch)
-        return take!(ch)
+    worker_ref[] = worker
+    tim = Timer(t.seconds) do timer
+        close(timer)
+        if Threads.atomic_cas!(winner, 0x00, 0x02) === 0x00
+            w = worker_ref[]
+            w !== nothing && !istaskdone(w) && schedule(w, InterruptException(); error=true)
+            put!(ch, timeout_step_results(t))
+        end
     end
-    if !istaskdone(task)
-        schedule(task, InterruptException(); error=true)
-    end
+    out = take!(ch)
+    close(tim)
+    out
+end
+
+function timeout_step_results(t::Timeout)
     timeout_step = Step(:timeout, `true`)
-    [StepResult(timeout_step, false, t.seconds, timeout_step.inputs, timeout_step.outputs,
-                "Timeout after $(t.seconds)s")]
+    AbstractStepResult[StepResult(timeout_step, false, t.seconds, timeout_step.inputs, timeout_step.outputs,
+                                  "Timeout after $(t.seconds)s")]
 end
 
 function run_node(f::Force, ctx::RunContext, ::Bool=false, context_input=nothing)

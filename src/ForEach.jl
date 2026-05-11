@@ -49,9 +49,9 @@ ForEach(eachrow(df)) do row
 end
 ```
 """
-function ForEach(f::Function, pattern::String)
+function ForEach(f::F, pattern::String) where {F<:Function}
     contains(pattern, WILDCARD_RE) || error("ForEach pattern must contain {wildcard}: $pattern")
-    ForEach{typeof(f), String}(f, pattern)
+    ForEach{F, String}(f, pattern)
 end
 ForEach(pattern::String) = f -> ForEach(f, pattern)
 
@@ -59,7 +59,7 @@ function ForEach(f::F, items::Vector{T}) where {F<:Function, T}
     ForEach{F, Vector{T}}(f, items)
 end
 
-function ForEach(f::Function, items)
+function ForEach(f::F, items) where {F<:Function}
     vec = collect(items)
     isempty(vec) && error("ForEach requires at least one item")
     ForEach(f, vec)
