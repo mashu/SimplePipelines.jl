@@ -1,82 +1,96 @@
 # Fan-out and reduce
 
-## `ForEach` (pattern or collection)
+Use `ForEach` when the same subgraph should run many times. Use `Reduce` when
+parallel branch outputs need to become one value.
 
-Two modes:
+This is different from rules: rules start from target file names and resolve
+dependencies. `ForEach` starts from a collection or discovered files and builds a
+branch for each item.
 
-- **Collection** — apply the block to each item (like map).
-- **Pattern** — discover files by wildcard pattern and run the block per match.
+## Fan Out Over A Collection
+
+The simplest `ForEach` is like `map`, but each item becomes a pipeline branch.
 
 ```julia
 samples = ["sample_A", "sample_B", "sample_C"]
-merge_results = @step merge_results = sh"echo merge done"
+
 pipeline = ForEach(samples) do s
-    Step(Symbol("process_", s), sh("analyze $s.fastq"))
-end >> merge_results
-```
-
-**Pattern-based discovery** scans the filesystem; matching files must exist.
-
-```julia
-cd(mktempdir()) do
-    write("s1.fastq", ""); write("s2.fastq", "")
-    mkpath("fastq"); write("fastq/s1_R1.fq.gz", ""); write("fastq/s2_R1.fq.gz", "")
-    mkpath("data/p1"); write("data/p1/s1.csv", "")
-
-    ForEach("{sample}.fastq") do sample
-        sh("process $(sample).fastq")
-    end
-
-    ForEach("fastq/{sample}_R1.fq.gz") do sample
-        sh("pear $(sample)_R1 $(sample)_R2") >> sh("analyze $(sample)")
-    end
-
-    ForEach("data/{project}/{sample}.csv") do project, sample
-        sh("process $(project)/$(sample).csv")
-    end
-
-    ForEach("{id}.fastq") do id
-        sh("align $(id).fastq")
-    end >> @step merge = sh"merge *.bam"
+    @step process = sh("analyze $(s).fastq > $(s).txt")
 end
 ```
 
-## `Reduce` (combine parallel outputs)
+The block returns a step or node. It is evaluated when the pipeline runs, so the
+fan-out can reflect the current collection or filesystem.
 
-Collect outputs from parallel steps and combine them:
+## Discover Existing Files
+
+Pattern mode scans the filesystem and captures wildcard values from matching
+files.
+
+```julia
+cd(mktempdir()) do
+    mkpath("fastq")
+    write("fastq/A_R1.fq.gz", "")
+    write("fastq/B_R1.fq.gz", "")
+
+    pipeline = ForEach("fastq/{sample}_R1.fq.gz") do sample
+        @step align = sh("align fastq/$(sample)_R1.fq.gz > $(sample).bam")
+    end
+
+    run(pipeline)
+end
+```
+
+Multiple wildcards become multiple arguments:
+
+```julia
+ForEach("data/{project}/{sample}.csv") do project, sample
+    @step process = sh("process data/$(project)/$(sample).csv")
+end
+```
+
+Use pattern mode when the input files already exist and should drive the work.
+Use rules when the requested output target should drive dependency resolution.
+
+## Reduce Branch Outputs
+
+`Reduce` runs a node and gives successful branch results to one reducer
+function.
 
 ```julia
 analyze_a = @step a = sh"echo result_a"
 analyze_b = @step b = sh"echo result_b"
+
 pipeline = Reduce(analyze_a & analyze_b) do outputs
     join(outputs, "\n")
 end
-
-combine_results(outputs) = join(outputs, "\n")
-step_a = @step a = sh"echo result_a"
-step_b = @step b = sh"echo result_b"
-step_c = @step c = sh"echo result_c"
-pipeline = Reduce(combine_results, step_a & step_b & step_c)
-
-merge_outputs(outputs) = join(outputs, "\n")
-fetch = @step fetch = sh"echo data"
-analyze_a = @step a = sh"wc -c"
-analyze_b = @step b = sh"wc -l"
-report = @step report = sh"echo done"
-pipeline = fetch >> Reduce(merge_outputs, analyze_a & analyze_b) >> report
 ```
 
-The reducer receives a vector of outputs from successful parallel branches (element types depend on upstream steps).
+The reducer receives a vector. The element type depends on upstream step
+results, so keep reducers small and explicit.
 
-### Low-memory / large data
+## Large Data
 
-The runtime keeps every step's `result` alive in the per-run memo (so DAG sharing
-works correctly). To keep memory bounded:
+For large branch results, do not return big objects from every branch if the
+reducer can stream files instead. Return paths:
 
-1. Have each step write its result to a file and return a [`FilePath`](@ref) — only
-   the path travels between steps; the underlying value is freed.
-2. Let the reducer open or stream paths one at a time and return a combined path.
-3. The returned vector contains every step's result; if you only need the final
-   value, take `last(results)`.
+```julia
+branches = ForEach(["A", "B"]) do sample
+    @step write_result = () -> begin
+        path = "$(sample).txt"
+        write(path, "result for $sample")
+        FilePath(path)
+    end
+end
+```
 
-**Next:** [Running and inspecting](running-and-results.md) — `run`, results, utilities, shell + Julia together.
+Then the reducer can open each path one at a time.
+
+## What To Remember
+
+`ForEach` repeats a branch. `Reduce` combines branch results. If the work is
+file-target driven, consider rules and `@workflow` first; if it is item-driven,
+`ForEach` is usually clearer.
+
+**Next:** [Running and inspecting](running-and-results.md) explains execution,
+results, and memory behavior.

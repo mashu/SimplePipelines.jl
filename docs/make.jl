@@ -28,13 +28,14 @@ makedocs(
     pages = [
         "Home" => "index.md",
         "User guide" => [
+            "Getting started" => "guide/getting-started.md",
             "Steps and shell" => "guide/steps-and-shell.md",
             "Composing pipelines" => "guide/composition.md",
-            "Rules and diagnostics" => "guide/rules-and-diagnostics.md",
-            "Choosing operators & Workflow" => "guide/decision-guide.md",
-            "Control flow" => "guide/control-flow.md",
-            "Fan-out and reduce" => "guide/foreach-reduce.md",
             "Running and inspecting" => "guide/running-and-results.md",
+            "Rules and diagnostics" => "guide/rules-and-diagnostics.md",
+            "Fan-out and reduce" => "guide/foreach-reduce.md",
+            "Control flow" => "guide/control-flow.md",
+            "Choosing the right shape" => "guide/decision-guide.md",
         ],
         "Examples" => [
             "Basics" => "examples/basics.md",

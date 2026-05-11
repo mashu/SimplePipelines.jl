@@ -1,6 +1,7 @@
 # Examples: complex DAGs
 
-Multi-stage fork–join and a pipeline that combines several features.
+Cookbook examples for larger DAG shapes. These are not the first tutorial; they
+are here once `>>`, `&`, retry/fallback, and branching already feel familiar.
 
 **More examples:** [Basics](basics.md) · [Control flow](control-flow.md) · [Bioinformatics](bioinformatics.md)
 

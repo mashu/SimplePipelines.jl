@@ -1,132 +1,98 @@
 # Composing pipelines
 
-Build workflows by combining steps with operators. Start with **`>>`** (sequence) and **`&`** (parallel), then use pipe variants when you need finer control over how values flow between branches.
+Once steps are clear, composition should read like the workflow diagram you have
+in mind. SimplePipelines uses a few operators for this. Most pipelines only need
+two at first:
 
-## Sequential execution: `>>`
+- `>>` for "then";
+- `&` for "at the same time".
 
-The `>>` operator chains steps: each waits for the previous to complete. When the next node is a **function step**, it receives the previous step's output (or the current branch context inside `ForEach`):
+The other operators are for data-flow details once your graph has branches.
 
-```julia
-# Chain commands directly (anonymous steps)
-pipeline = sh"download data.txt" >> sh"process data.txt" >> sh"upload results.txt"
+## Run One Step After Another
 
-# Data passing: function steps receive previous output
-download(id) = "data_$(id).csv"
-process(path) = read(path, String)
-pipeline = @step dl = download >> @step proc = process
-
-# Named steps
-step_a = @step step_a = sh"download data.txt"
-step_b = @step step_b = sh"process data.txt"
-step_c = @step step_c = sh"upload results.txt"
-pipeline = step_a >> step_b >> step_c
-```
-
-## Pipe (`|>`), same input (`>>>`), and broadcast (`.>>`)
-
-When the left has **one** output, `>>`, `|>`, and `.>>` all pass that value to the next (function) step. When the left has **multiple** outputs (e.g. `ForEach`, `Parallel`), they differ:
-
-| Left side     | `>>`                | `|>`                     | `.>>`                      |
-|:--------------|:--------------------|:-------------------------|:---------------------------|
-| Single output | step(one value)     | step(one value)          | step(one value)            |
-| Multi output  | step(**last** only) | step(**vector** of all)  | step **per branch**        |
-
-- **`a |> b`** — Run `a`, then run `b` with `a`'s output(s). RHS must be a function step. Multi-branch → one call with a vector.
-- **`a >>> b`** — Run `a` then `b` with the **same** input (e.g. inside `ForEach`, both get the branch id).
-- **`a .>> b`** — Attach `b` to **each branch** of `a`. Each branch runs as `branch >> b`; you do not wait for all of `a` to finish before starting `b` on completed branches.
+Use `>>` when a later step should wait for an earlier step.
 
 ```julia
-fetch = @step fetch = `echo "content"`
-process(x) = uppercase(String(x))
-pipeline = fetch |> @step process = process
+prepare = @step prepare([] => ["data.txt"]) =
+    sh"(echo line3; echo line1; echo line2) > data.txt"
 
-ForEach([1, 2]) do id
-    @step first = (x -> "a_$(x)") >>> @step second = (x -> "b_$(x)")
-end
+sort_file = @step sort_file(["data.txt"] => ["sorted.txt"]) =
+    sh"sort data.txt > sorted.txt"
 
-ForEach(["a", "b"]) do x
-    Step(Symbol("echo_", x), `echo $x`)
-end .>> @step process = (s -> "got_" * strip(String(s)))
-```
-
-See also the [quick reference](../reference/quickref.md#sequencing-and-piping) tables for a compact summary.
-
-## Parallel execution: `&`
-
-The `&` operator groups steps to run concurrently:
-
-```julia
-parallel = sh"task_a" & sh"task_b" & sh"task_c"
-
-sample_1 = @step s1 = sh"process sample1"
-sample_2 = @step s2 = sh"process sample2"
-sample_3 = @step s3 = sh"process sample3"
-merge_results = @step merge = sh"merge outputs"
-pipeline = (sample_1 & sample_2 & sample_3) >> merge_results
-```
-
-## Complex DAGs
-
-Combine `>>` and `&` for fork–join graphs.
-
-### Diamond pattern
-
-```
-       ┌── analyze_a ──┐
- fetch─┤               ├── report
-       └── analyze_b ──┘
-```
-
-```julia
-fetch = @step fetch = sh"echo 'a,b\n1,2' > data.csv"
-analyze_a = @step a = sh"wc -l data.csv"
-analyze_b = @step b = sh"wc -c data.csv"
-report = @step report = () -> "done"
-
-pipeline = fetch >> (analyze_a & analyze_b) >> report
+pipeline = prepare >> sort_file
 run(pipeline)
 ```
 
-### Multi-stage parallel
+This shape is useful even when the shell commands already mention file names,
+because the DAG now knows ordering, freshness, and failure boundaries.
 
-```
-     ┌─ b ─┐     ┌─ e ─┐
-  a ─┤     ├─ d ─┤     ├─ g
-     └─ c ─┘     └─ f ─┘
-```
+## Fork, Then Join
 
-```julia
-a = @step a = sh"step_a"
-b = @step b = sh"step_b"
-c = @step c = sh"step_c"
-d = @step d = sh"step_d"
-e = @step e = sh"step_e"
-f = @step f = sh"step_f"
-g = @step g = sh"step_g"
+Use `&` when independent branches can run concurrently.
 
-pipeline = a >> (b & c) >> d >> (e & f) >> g
-```
-
-### Independent branches
-
-```
-  ┌─ fetch_a >> process_a ─┐
-  ├─ fetch_b >> process_b ─┼── merge
-  └─ fetch_c >> process_c ─┘
+```text
+prepare -> sort_file -> count_lines
+                    \-> count_bytes
 ```
 
 ```julia
-fetch_a = @step fetch_a = sh"fetch sample_a"
-process_a = @step process_a = sh"process sample_a"
-# ... similarly for b, c
-merge = @step merge = sh"merge results"
+count_lines = @step count_lines(["sorted.txt"] => ["lines.txt"]) =
+    sh"wc -l sorted.txt > lines.txt"
 
-branch_a = fetch_a >> process_a
-branch_b = fetch_b >> process_b
-branch_c = fetch_c >> process_c
-pipeline = (branch_a & branch_b & branch_c) >> merge
+count_bytes = @step count_bytes(["sorted.txt"] => ["bytes.txt"]) =
+    sh"wc -c sorted.txt > bytes.txt"
+
+pipeline = prepare >> sort_file >> (count_lines & count_bytes)
 ```
 
-This pattern is common for processing multiple samples independently before combining results.
+Parentheses matter: `(a & b) >> c` means both `a` and `b` must finish before
+`c` runs.
 
-**Next:** [Control flow](control-flow.md) — fallback, retry, branching, and timeouts.
+## Passing Values, Not Just Files
+
+File paths are often enough. When you use function steps, step results can also
+flow directly into the next function.
+
+```julia
+emit_path = @step emit_path = () -> "sorted.txt"
+read_text = @step read_text = path -> read(path, String)
+
+pipeline = emit_path >> read_text
+```
+
+For a single upstream result, `>>` and `|>` both pass that value to a function
+step. The difference matters when the left side has many branch results.
+
+## Advanced: Many Branch Outputs
+
+When a parallel node produces multiple results, choose the operator based on what
+the next function step should receive:
+
+- `a >> b`: pass the last branch result to `b`;
+- `a |> b`: pass a vector of all branch outputs to one function step;
+- `a .>> b`: run `b` once per branch;
+- `a >>> b`: run the second step with the same input as the first.
+
+```julia
+left = (@step a = `echo A`) & (@step b = `echo B`)
+
+collect_all = @step collect_all = xs -> join(strip.(String.(xs)), ",")
+per_branch = @step per_branch = x -> "saw " * strip(String(x))
+
+pipeline_a = left |> collect_all
+pipeline_b = left .>> per_branch
+```
+
+Use these only when you need this value-passing behavior. For file-oriented
+workflows, plain `>>` and `&` usually keep the graph easier to read. For repeated
+branches over samples or files, continue to [Fan-out and reduce](foreach-reduce.md).
+
+## What To Remember
+
+Write the DAG the way you would draw it. Start with `>>` and `&`; reach for the
+pipe variants only when a function step needs a particular value from branch
+outputs.
+
+**Next:** [Rules and diagnostics](rules-and-diagnostics.md) shows how to describe
+many file targets from patterns and inspect the result before running.

@@ -1,26 +1,20 @@
 # Examples: control flow
 
-Retry, fallback, and conditional branches.
+Cookbook examples for retry, fallback, and conditional branches. Read
+[Control flow](../guide/control-flow.md) first if you want the concepts before
+the recipes.
 
 **More examples:** [Basics](basics.md) · [Complex DAGs](complex-dags.md) · [Bioinformatics](bioinformatics.md)
 
-## 2.1 Retry and fallback
+## 2.1 Retry a flaky step
 
-**Flow (retry):** Run a step up to N times, then continue.
+**Flow:** Run a step up to N times, then continue.
 
 ```
   [fetch^3]  ──►  process
 ```
 
-**Flow (fallback):** If primary fails, run fallback.
-
-```
-   primary  ──►  (success) result
-      │
-      └──►  fallback ──►  result
-```
-
-**Goal:** Retry a flaky fetch; fall back when the primary fails; combine both.
+**Goal:** Retry a fetch before processing its output.
 
 ```julia
 using SimplePipelines
@@ -28,17 +22,46 @@ using SimplePipelines
 fetch = @step fetch = sh"echo '{\"x\":1}' > data.json"
 process = @step process = sh"wc -c data.json"
 pipeline = Retry(fetch, 3, delay=0.1) >> process
+run(pipeline)
+```
+
+## 2.2 Fallback to a backup method
+
+**Flow:** If the primary method fails, run the backup.
+
+```
+   primary  ──►  (success) result
+      │
+      └──►  fallback ──►  result
+```
+
+**Goal:** Produce `sorted.csv` even when the fast path fails.
+
+```julia
+using SimplePipelines
 
 run(@step setup = sh"(echo 'a,b'; echo '1,2') > data.csv", verbose=false)
-fast = @step fast = sh"sort data.csv > sorted.csv"
+fast = @step fast = sh"false"
 slow = @step slow = sh"cat data.csv > sorted.csv"
 pipeline = fast | slow
+run(pipeline)
+```
 
+## 2.3 Retry, then fallback
+
+**Goal:** Retry the primary method, then use the backup if every attempt fails.
+
+```julia
+using SimplePipelines
+
+run(@step setup = sh"(echo 'a,b'; echo '1,2') > data.csv", verbose=false)
+fast = @step fast = sh"false"
+slow = @step slow = sh"cat data.csv > sorted.csv"
 pipeline = Retry(fast, 3) | slow
 run(pipeline)
 ```
 
-## 2.2 Conditional branching
+## 2.4 Conditional branching
 
 **Flow:** One of two branches runs based on a condition.
 

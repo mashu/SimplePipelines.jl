@@ -1,6 +1,10 @@
 # Examples: bioinformatics
 
-Longer domain workflows. Tool names are real; runs require installed software and inputs unless you substitute `echo` placeholders (see [`examples/bioinformatics.jl`](https://github.com/mashu/SimplePipelines.jl/blob/main/examples/bioinformatics.jl) in the repo).
+Longer domain workflows. These are cookbook sketches for readers who already
+know the basic DAG operators. Tool names are real; runs require installed
+software and inputs unless you substitute `echo` placeholders (see
+[`examples/bioinformatics.jl`](https://github.com/mashu/SimplePipelines.jl/blob/main/examples/bioinformatics.jl)
+in the repo).
 
 **More examples:** [Basics](basics.md) · [Control flow](control-flow.md) · [Complex DAGs](complex-dags.md)
 

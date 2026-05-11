@@ -1,113 +1,122 @@
 # Running and inspecting
 
-## Running pipelines
+After a DAG looks right, `run` executes it and returns a vector of results. The
+printed output is for humans; the returned values are for code.
 
-Use `run(pipeline)` or `pipeline |> run`:
+## Run A Pipeline
 
 ```julia
 results = run(pipeline)
+```
 
-# Default: verbose=true prints each shell command before it runs
-results = run(pipeline)
+By default, shell commands are printed before they run. Turn that off when the
+pipeline is already familiar:
 
-results = run(pipeline, verbose=false)
+```julia
+results = run(pipeline; verbose=false)
+```
 
-run(pipeline, dry_run=true)
+To inspect structure without executing work, use `print_dag` or `dry_run`:
 
-step_a = @step a = sh"first"
-step_b = @step b = sh"second"
-p = Pipeline(step_a >> step_b, name="My Workflow")
+```julia
+print_dag(pipeline)
+run(pipeline; dry_run=true)
+```
+
+If you want a name in logs, wrap the DAG in a `Pipeline`:
+
+```julia
+p = Pipeline(pipeline; name="qc")
 run(p)
 ```
 
-### Report callback
+## Read Results
 
-Pass `report=(results; pipeline) -> …` to run a hook **after** the DAG finishes and **before** state is written. `results` is the `Vector` of [`AbstractStepResult`](@ref); `pipeline` is the [`Pipeline`](@ref) name string. Use for summaries, writing a JSON manifest, or CI notifications.
-
-```julia
-run(plan; verbose=false, report=(res; pipeline) -> @info "done" pipeline n=length(res))
-```
-
-## Checking results
+Each entry is a [`StepResult`](@ref). It tells you whether the step succeeded,
+how long it took, which files were declared, and what value the step returned.
 
 ```julia
-results = run(pipeline)
+results = run(pipeline; verbose=false)
 
-for r in results
-    if r.success
-        println("$(r.step.name): completed in $(r.duration)s")
-    else
-        println("$(r.step.name): FAILED - $(r.result)")
-    end
+if all(r -> r.success, results)
+    println("all steps completed")
+else
+    failed = filter(r -> !r.success, results)
+    println("failed steps: ", join((r.step.name for r in failed), ", "))
 end
-
-all_ok = all(r -> r.success, results)
 ```
 
-Relevant fields include `.success`, `.duration`, `.result`, `.inputs`, and `.outputs`.
-
-## Memory safety: auto-spill
-
-The package treats **disk as effectively infinite, RAM as finite**. Three defaults make a default-run pipeline memory-safe by construction:
-
-1. `jobs = min(Threads.nthreads(), 8)` — concurrent fan-out can't oversubscribe the host.
-2. `auto_spill = true` — keeps both shell *and* function step results out of RAM:
-   - **Shell steps** stream stdout straight to a tempfile in `spill_dir` while the command runs, so peak RAM is the OS pipe buffer (≈ 64 KB) rather than the full output. After the process exits, outputs below `spill_threshold_bytes` (10 MB by default) are read back as a `String` and the tempfile is deleted; outputs above the threshold stay on disk and `r.result` becomes a [`SpilledStdout`](@ref).
-   - **Function steps** are checked after they return: if `Base.summarysize(r.result) > spill_threshold_bytes`, the value is serialised to a tempfile and `r.result` is replaced with a [`SpilledValue`](@ref). Small results stay in RAM (no I/O cost).
-3. `memory_budget_mb = 50% of total RAM` — caps the *concurrent* memory of nodes wrapped in [`with_resources`](@ref).
-
-Downstream consumers call [`materialize`](@ref) to load a `SpilledValue` (round-trips via `Base.Serialization`), a `SpilledStdout` (read as `String`), or a [`FilePath`](@ref) (raw bytes by default). For CSV tables as a `DataFrame`, load [`CSV`](https://github.com/JuliaData/CSV.jl) and [`DataFrames`](https://github.com/JuliaData/DataFrames.jl) after SimplePipelines, then use [`materialize_table`](@ref)(`FilePath(path)`).
+The final result is often enough for simple pipelines:
 
 ```julia
-# Tight RAM:
-run(plan; spill_threshold_bytes=1_000_000)        # 1 MB
-
-# Pure in-memory (small data, benchmarks):
-run(plan; auto_spill=false)
-
-# Self-cleaning spill dir:
-mktempdir() do dir
-    results = run(plan; spill_dir=dir)
-    df = materialize(last(results).result)         # spilled → DataFrame
-    # …work with df…
-end                                                # spill files gone here
+last(results).result
 ```
 
-A step that already returns a `FilePath` is left alone — the runtime only spills *unwrapped* big values.
+## Report After A Run
 
-## Mixing shell and Julia
-
-Shell commands and Julia functions compose seamlessly:
+Use a `report` callback when another system needs a summary. It runs after the
+DAG finishes and before state is saved.
 
 ```julia
-prep = @step prep = () -> begin
-    raw = read("raw.csv", String)
-    cleaned = filter(line -> !isempty(strip(line)), split(raw, '\n'))
-    write("clean.csv", join(cleaned, '\n'))
-    return "Wrote $(length(cleaned)) lines"
+run(pipeline; report=(res; pipeline) -> begin
+    @info "pipeline finished" pipeline steps=length(res)
+end)
+```
+
+## Memory Safety
+
+SimplePipelines assumes disk is cheaper than RAM. By default, large captured
+outputs are spilled to files and represented by lightweight wrappers in results.
+Most users do not need to configure this.
+
+When you do need to read a spilled value, call [`materialize`](@ref):
+
+```julia
+value = materialize(last(results).result)
+```
+
+For big data, the most predictable pattern is to write files yourself and return
+[`FilePath`](@ref). Then downstream steps can load or stream that path as needed.
+
+```julia
+write_table = @step write_table = () -> begin
+    # write result.csv here
+    FilePath("result.csv")
 end
-
-external = @step tool = sh"wc -l clean.csv > result.txt"
-
-post = @step post = () -> begin
-    n = parse(Int, split(read("result.txt", String))[1])
-    return "Line count: $n"
-end
-
-pipeline = prep >> external >> post
-run(pipeline)
 ```
 
-## Utilities
+To make CSV loading convenient, load CSV/DataFrames and use
+[`materialize_table`](@ref):
 
 ```julia
-n = count_steps(pipeline)
-all_steps = steps(pipeline)
+using CSV, DataFrames
+df = materialize_table(FilePath("result.csv"))
+```
+
+You can tighten or disable spilling for special cases:
+
+```julia
+run(pipeline; spill_threshold_bytes=1_000_000)
+run(pipeline; auto_spill=false)
+```
+
+## Useful Inspection Helpers
+
+```julia
+count_steps(pipeline)
+steps(pipeline)
 print_dag(pipeline)
 ```
 
-## Where to go next
+Use these while developing a DAG; use `check` and `explain` for rule-based
+workflows.
 
-- [Examples](../examples/basics.md) — runnable patterns in order of difficulty.
-- [Quick reference](../reference/quickref.md) — one-page operator and API tables.
-- [API](../api.md) — full docstrings.
+## What To Remember
+
+Run returns data; printed logs are only a view. Keep big values on disk when you
+can, inspect the DAG before long runs, and read `StepResult` when automating.
+
+**Next:** [Rules and diagnostics](rules-and-diagnostics.md) shows how to scale
+from one explicit DAG to many pattern-generated targets.
+
+For compact syntax lookup, use the [quick reference](../reference/quickref.md).

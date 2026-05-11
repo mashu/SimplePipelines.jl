@@ -2,27 +2,41 @@
 
 *Minimal, type-stable DAG pipelines for Julia*
 
-A **step** is a shell command or Julia function. **Operators** connect steps into a graph: `>>` (order), `&` (parallel), `|>` (pipe), and others. **[`run`](@ref)** executes the graph once; each step yields a [`StepResult`](@ref) (success, duration, outputs).
+SimplePipelines is for small-to-medium workflows where the shape of the work
+should be visible in Julia code. A step can be a shell command or a Julia
+function. Operators connect steps into a DAG. `run` executes that DAG and returns
+one result per step.
 
-| Ad-hoc Julia/shell glue | Same thing as a pipeline |
-|---------------------------|----------------------------|
-| Run A, then B, then C | `a >> b >> c` |
-| Two branches, then merge | `(a & b) >> merge` |
-| Retry or alternate on failure | `step^3`, `x \| y`, `Branch(…)` |
-| Shell + Julia in one workflow | Same operators for `sh"…"` and function steps |
+The central idea is deliberately small:
 
 ```julia
-using SimplePipelines
-
-fetch     = @step fetch = sh"echo data > file.txt"
-analyze_a = @step a = sh"wc -c file.txt"
-analyze_b = @step b = sh"wc -l file.txt"
-report    = @step r = sh"echo done"
-
-fetch >> (analyze_a & analyze_b) >> report |> run
-
-run(sh"echo one" >> sh"echo two")
-run((sh"A" & sh"B") >> sh"merge")
+step_a >> step_b        # run in order
+step_a & step_b         # run branches in parallel
+run(pipeline)           # execute and collect StepResult values
 ```
 
-**[Steps and shell](guide/steps-and-shell.md)** · **[Composing pipelines](guide/composition.md)** · **[Rules and diagnostics](guide/rules-and-diagnostics.md)** · **[Choosing operators & Workflow](guide/decision-guide.md)** · **[Control flow](guide/control-flow.md)** · **[Fan-out and reduce](guide/foreach-reduce.md)** · **[Running and inspecting](guide/running-and-results.md)** · **[Examples](examples/basics.md)** · **[Quick reference](reference/quickref.md)** · **[Public API policy](reference/public-api.md)** · **[API](api.md)**
+For a complete first example, start with [Getting started](guide/getting-started.md).
+
+## Learning Paths
+
+If you are new, read the first path in order. If you already know the basics,
+jump to the shape that matches your workflow.
+
+### First Pipeline
+
+[Getting started](guide/getting-started.md) -> [Steps and shell](guide/steps-and-shell.md) -> [Composing pipelines](guide/composition.md) -> [Running and inspecting](guide/running-and-results.md)
+
+This path teaches one concrete DAG before introducing advanced features.
+
+### Pattern/Rule Workflow
+
+[Rules and diagnostics](guide/rules-and-diagnostics.md) is the entry point when
+your files look like `raw/{sample}.fq` -> `out/{sample}.bam`. It starts with
+`check(rule)` so you can see wildcard values before running anything.
+
+### Cookbook And Reference
+
+Use [Examples](examples/basics.md) for runnable recipes, and the
+[quick reference](reference/quickref.md) for compact syntax lookup.
+
+Full generated docstrings live on the [API page](api.md).

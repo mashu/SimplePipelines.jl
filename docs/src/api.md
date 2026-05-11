@@ -154,7 +154,10 @@ clear_state!
 
 ### State file format
 
-The state file uses a fixed binary layout (see `src/StateFormat.jl`) for random access and mmap.
+This section is for maintainers and advanced users. The stable user-facing API
+is `is_fresh`, `clear_state!`, and the `state_path` keyword to `run`. The binary
+layout helpers below document the current persistence internals; do not build
+workflow code against them.
 
 ```@docs
 SimplePipelines.StateFormat

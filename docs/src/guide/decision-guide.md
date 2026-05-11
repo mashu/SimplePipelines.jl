@@ -1,34 +1,68 @@
-# Choosing operators, Workflow, and resources
+# Choosing the right shape
 
-Short map from “what you need” to the DSL piece to use.
+SimplePipelines gives you two complementary ways to build a DAG. You can write
+the graph directly with operators, or you can describe file patterns with rules.
+Both end up as the same kind of runnable pipeline.
 
-## Data flow between steps
+## Start With The Shape Of Your Problem
 
-| Goal | Use |
-|:-----|:----|
-| Run A then B; B gets A’s **single** output (or last branch only if A had many) | `>>` (sequence; see [Composing pipelines](composition.md)) |
-| Run A then B; B is a **function step** receiving **all** branch outputs as one vector | `\|>` (pipe) |
-| Run A then B **once per branch** of A (each B sees one branch’s output) | `.>>` (broadcast `>>`) |
-| Run A then B; B gets the **same context** as A (e.g. same ForEach wildcard), not A’s stdout | `>>>` (same-input pipe) |
+If you have a handful of concrete steps, write them directly:
 
-When the left side has **one** successful path, `>>`, `|>`, `.>>`, and `>>>` behave the same for “what B receives” until you introduce `Parallel` / `ForEach` with multiple branches — then the table in [Composing pipelines](composition.md) applies.
+```julia
+prepare >> sort_file >> (count_lines & count_bytes)
+```
 
-## Rules vs hand-built DAG
+This is the clearest form when the filenames are fixed and the graph is small.
 
-| Situation | Prefer |
-|:----------|:-------|
-| Learn or debug one rule pattern | [`check`](@ref) on a [`@rule`](@ref), then `check(rule, "out/A.bam")` |
-| Many targets built from patterns (`data/{id}.fq` → `out/{id}.bam`), shared deps, Make-like resolve | [`@workflow`](@ref) + [`@rule`](@ref) + [`@targets`](@ref) |
-| One-off script, few steps, explicit graph in code | `>>` / `&` on [`Step`](@ref)s directly |
-| Inspect what would run without executing | [`explain`](@ref) for rule resolution, or [`print_dag`](@ref) on [`plan(wf)`](@ref) |
+If you have repeated file patterns, use rules:
 
-[`Workflow`](@ref) is a registry of rules and default target strings; `run(wf)` calls [`plan`](@ref) then the same [`run`](@ref) as a [`Pipeline`](@ref). See [Rules and diagnostics](rules-and-diagnostics.md) for the gradual `check` → `@workflow` → `explain` path.
+```julia
+@rule align("raw/{sample}.fq" => "out/{sample}.bam") =
+    "bwa mem ref.fa {input} > {output}"
+```
 
-## Memory and parallelism
+Rules are better when the interesting question is "what target do I want?", and
+the package should work backward to find dependencies.
 
-| Situation | Use |
-|:----------|:----|
-| Steps that reserve a lot of RAM or threads; cap **concurrent** use | [`with_resources`](@ref) on those nodes + `run(..., memory_budget_mb=..., thread_budget=...)` |
-| Default laptop / workstation run | Defaults (`jobs`, `memory_budget_mb`, `auto_spill`) are usually enough |
+## Use Diagnostics Before Running
 
-See [Running and inspecting](running-and-results.md) for spill behaviour and the optional `report` callback on [`run`](@ref).
+For one rule, use `check`:
+
+```julia
+check(align, "out/A.bam")
+```
+
+For a composed workflow, use `explain`:
+
+```julia
+explain(wf; target="out/A.bam")
+```
+
+Those commands are there so you can inspect wildcard values and dependency
+chains without executing shell commands.
+
+## Choose Operators Only When Needed
+
+Most explicit DAGs start with `>>` and `&`. Add the value-passing variants only
+when a function step needs a specific branch result:
+
+- use `|>` when one function should receive all branch outputs;
+- use `.>>` when the next step should run once per branch;
+- use `>>>` when two steps inside a branch should receive the same original input.
+
+The [Composing pipelines](composition.md) page shows these in context. If you
+find yourself checking that table often, the graph may be clearer as a rule-based
+workflow or a `ForEach`.
+
+## Resource Hints Are Optional
+
+The default run is conservative: fan-out is bounded, large results spill to disk,
+and declared resource hints can limit concurrent memory or thread usage. You
+only need [`with_resources`](@ref) for steps that you know are heavy:
+
+```julia
+heavy = with_resources(step; mem_mb=4_000, threads=4)
+run(heavy & other; memory_budget_mb=8_000, thread_budget=8)
+```
+
+For details on results and spill behavior, see [Running and inspecting](running-and-results.md).

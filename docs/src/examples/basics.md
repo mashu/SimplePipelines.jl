@@ -1,6 +1,8 @@
 # Examples: basics
 
-Sequential pipelines, parallelism, Julia + shell, and data flow (`>>`, `|>`, `.>>`).
+Runnable recipes for the core DAG operators. These examples assume you have read
+[Getting started](../guide/getting-started.md), or already know `@step`, `>>`,
+`&`, and `run`.
 
 **More examples:** [Control flow](control-flow.md) · [Complex DAGs](complex-dags.md) · [Bioinformatics](bioinformatics.md)
 
