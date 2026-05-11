@@ -30,14 +30,16 @@ AbstractNode
     ├── Step{F}           Single unit of work
     │                     F = Cmd | Function
     │
-    ├── Sequence{T}       Sequential execution
-    │                     T = Tuple of nodes
+    ├── Sequence          Sequential execution
+    │                     children::Vector{AbstractNode}
     │
-    └── Parallel{T}       Concurrent execution
-                          T = Tuple of nodes
+    └── Parallel          Concurrent execution
+                          children::Vector{AbstractNode}
 ```
 
-All types are **fully parametric**—the compiler knows exact types at every level.
+Leaf and wrapper nodes are parametric where it matters (`Step{F}`,
+`Retry{N}`, `StepResult{S,I,O,V}`), while wide child lists use
+`Vector{AbstractNode}` to keep large DAGs practical to compile.
 
 ## Composition Model
 
@@ -46,14 +48,16 @@ All types are **fully parametric**—the compiler knows exact types at every lev
 sh"echo a" >> (sh"echo b" & sh"echo c") >> sh"echo d"
 
 # Becomes:
-Sequence{Tuple{
-    Step{Cmd},
-    Parallel{Tuple{Step{Cmd}, Step{Cmd}}},
-    Step{Cmd}
-}}
+Sequence(AbstractNode[
+    Step{Cmd}(...),
+    Parallel(AbstractNode[Step{Cmd}(...), Step{Cmd}(...)]),
+    Step{Cmd}(...),
+])
 ```
 
-The complete structure is encoded in the type, enabling full compile-time specialization.
+The node kind still drives execution through dispatch. Child lists are stored as
+vectors so pipelines with hundreds or thousands of nodes do not create enormous
+tuple types.
 
 ## Execution Flow
 
@@ -77,17 +81,19 @@ Vector{AbstractStepResult}
 
 ## Key Design Decisions
 
-### 1. Tuples, Not Vectors
+### 1. Vector-Backed Child Lists
 
 ```julia
-# ✗ Vector: type information lost
+# Used intentionally for scalable graph shape
 Sequence(nodes::Vector{AbstractNode})
 
-# ✓ Tuple: exact types preserved
-Sequence{Tuple{Step{Cmd}, Step{Function}}}
+# Leaf/runtime payloads remain parametric
+Step{Cmd}
+StepResult{S,I,O,V}
 ```
 
-Tuples enable the compiler to generate specialized code for each node.
+This trades a small amount of dynamic dispatch at graph traversal points for
+much lower compile-time and memory pressure on wide DAGs.
 
 ### 2. Multiple Dispatch, Not Type Checks
 
@@ -107,41 +113,33 @@ run_node(seq::Sequence, v) = _run_sequence!([], seq.nodes, v)
 run_node(par::Parallel, v) = _spawn_parallel(par.nodes, v)
 ```
 
-### 3. Tuple Recursion
-
-Iterate tuples in a type-stable way:
+### 3. Bounded Parallel Traversal
 
 ```julia
-# Base case
-_run_sequence!(results, ::Tuple{}, v) = nothing
-
-# Recursive case
-function _run_sequence!(results, nodes::Tuple, v)
-    append!(results, run_node(first(nodes), v))
-    _run_sequence!(results, Base.tail(nodes), v)
-end
+tasks = [@spawn run_node(nodes[k], ctx, forced, contexts[k]) for k in rng]
+append!(results, fetch(t))
 ```
 
-The compiler unrolls this into efficient, specialized code.
+Parallel and `ForEach` traversal runs in batches controlled by `jobs`, with
+optional resource hints from `with_resources`.
 
-### 4. Verbosity as Types
+### 4. Per-Run Context
 
 ```julia
-struct Verbose end
-struct Silent end
-
-log_start(::Silent, ::Step) = nothing
-log_start(::Verbose, s::Step) = println("▶ ", step_label(s))
+ctx = RunContext(verbose=verbose, jobs=jobs, state_path=state_path)
+run_node(root, ctx, force, nothing)
 ```
 
-Dead code elimination removes printing when `verbose=false`.
+Mutable run state, logging locks, resource budgets, spill policy, and memoization
+live in one `RunContext`, so concurrent `run(...)` calls do not share scheduler
+state.
 
 ## Performance Characteristics
 
 | Aspect | Design Choice | Benefit |
 |--------|--------------|---------|
-| Node storage | Tuples | Full type info, inline storage |
-| Dispatch | Multiple dispatch | Zero runtime type checks |
-| Iteration | Recursion | Compiler unrolling |
-| Operators | `@inline` | Zero call overhead |
-| Verbosity | Singleton types | Dead code elimination |
+| Node storage | `Vector{AbstractNode}` for children | Scales to wide DAGs |
+| Dispatch | Multiple dispatch | Avoids runtime type-check trees |
+| Iteration | Bounded loops + `@spawn` | Predictable concurrency |
+| Results | Parametric `StepResult` values in `Vector{AbstractStepResult}` | Heterogeneous traces without `Any` fields |
+| State | Per-run `RunContext` | Isolates memoization and resource budgets |

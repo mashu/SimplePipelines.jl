@@ -409,6 +409,31 @@ end
     @test peak[] == 1
 end
 
+@testset "resources release after resourced node throws" begin
+    bad = with_resources(
+        Branch(() -> error("boom"), Step(:unused_true, `true`), Step(:unused_false, `true`));
+        mem_mb=1000,
+        threads=2,
+    )
+    good_ran = Threads.Atomic{Int}(0)
+    good = with_resources(
+        Step(:after_resource_failure, () -> (Threads.atomic_add!(good_ran, 1); "ok"));
+        mem_mb=1000,
+        threads=2,
+    )
+
+    results = run(bad & good, verbose=false, force=true,
+                  memory_budget_mb=1000, thread_budget=2, jobs=2)
+
+    @test good_ran[] == 1
+    @test any(r -> !r.success &&
+                   r.result isa StepFailure &&
+                   r.result.kind == :resource_exception &&
+                   occursin("boom", string(r.result)),
+              results)
+    @test any(r -> r.success && r.step.name == :after_resource_failure, results)
+end
+
 @testset "Vector-backed Sequence/Parallel scales" begin
     # 100 children must build without tuple-type blow-up.
     # Use `Step(...)` here: `@step Symbol("step_i") = ...` parses as a call, so the macro

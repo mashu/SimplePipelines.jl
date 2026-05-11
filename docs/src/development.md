@@ -110,6 +110,6 @@ end
 
 ## Type Stability Rules
 
-1. Use parametric types: `struct MyNode{T<:AbstractNode}` not `children::Vector{AbstractNode}`
-2. Use tuple recursion for heterogeneous collections
-3. Dispatch on types, don't check with `isa`
+1. Use parametric types for leaf/runtime payloads (`Step{F}`, result wrappers, node decorators).
+2. Use `Vector{AbstractNode}` for wide child collections when encoding every child in the type would hurt compile time.
+3. Dispatch on types, don't check with `isa`.

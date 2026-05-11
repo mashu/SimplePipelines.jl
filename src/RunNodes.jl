@@ -55,31 +55,52 @@ end
 # Anything else (or Step with context_input): acquire around the run unconditionally;
 # such nodes are not deduplicated by the runtime, so each visit performs work.
 function run_resourced(node::AbstractNode, res::Resources, ctx::RunContext, forced::Bool, context_input)
-    with_acquired_resources(res, ctx) do
+    outcome = with_acquired_resources(res, ctx) do
         run_node(node, ctx, forced, context_input)
     end
+    resource_outcome_results(outcome)
 end
 
 handle_resourced_claim(cached::Vector{AbstractStepResult}, ::Step, ::Resources, ::RunContext, ::Bool) = cached
 handle_resourced_claim(ch::Channel{Vector{AbstractStepResult}}, ::Step, ::Resources, ::RunContext, ::Bool) = fetch(ch)
 function handle_resourced_claim(::ExecuteClaim, step::Step, res::Resources, ctx::RunContext, forced::Bool)
-    with_acquired_resources(res, ctx) do
-        out = execute_with_freshness(step, ctx, forced, nothing)
-        publish_step!(ctx, step, out)
-        out
+    outcome = with_acquired_resources(res, ctx) do
+        execute_with_freshness(step, ctx, forced, nothing)
     end
+    out = resource_outcome_results(outcome, step)
+    publish_step!(ctx, step, out)
+    out
 end
 
-# Acquire memory/thread budget around `f()`. If `f()` throws, slots stay charged
-# until this RunContext is dropped; avoid throwing from inside `with_resources`
-# subtrees when parallel branches share one `run()` or waiters can stall.
+# Acquire memory/thread budget around `f()`. The existing run_safely boundary
+# turns unexpected throws into values, so slots are always released before the
+# caller decides how to surface the failure.
 function with_acquired_resources(f, res::Resources, ctx::RunContext)
     mem_taken = acquire!(ctx.memory_budget, res.mem_mb)
     threads_taken = acquire!(ctx.thread_budget, res.threads)
-    out = f()
+    outcome = run_safely(f)
     release!(ctx.thread_budget, threads_taken)
     release!(ctx.memory_budget, mem_taken)
-    out
+    outcome
+end
+
+resource_outcome_results(outcome::RunOutcome) =
+    outcome.ok ? outcome.value : resource_exception_results(outcome.value)
+
+resource_outcome_results(outcome::RunOutcome, step::Step) =
+    outcome.ok ? outcome.value : resource_exception_results(step, outcome.value)
+
+function resource_exception_results(err::StepFailure)
+    step = Step(:resource, `true`)
+    failure = StepFailure(:resource_exception, "Exception while running resourced node";
+                          detail=string(err))
+    AbstractStepResult[StepResult(step, false, 0.0, step.inputs, step.outputs, failure)]
+end
+
+function resource_exception_results(step::Step, err::StepFailure)
+    failure = StepFailure(:resource_exception, "Exception while running resourced step";
+                          detail=string(err))
+    AbstractStepResult[StepResult(step, false, 0.0, step.inputs, step.outputs, failure)]
 end
 
 # Leaf step. The first task to encounter `step` in a run executes it; concurrent and
