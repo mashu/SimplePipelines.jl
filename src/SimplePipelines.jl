@@ -58,7 +58,7 @@ export Resources, Resourced, with_resources
 export default_jobs, default_memory_budget_mb, default_spill_threshold_bytes
 export FilePath, SpilledValue, SpilledStdout, materialize, materialize_table
 export Rule, @rule, @targets, @workflow, resolve, NoWork, expand, Workflow, plan
-export check, explain, RuleCheck, RuleInstantiationCheck, PlanExplanation
+export check, explain, RuleCheck, RuleInstantiationCheck, RuleExplanationStep, PlanExplanation
 
 import Base: >>, &, |, ^, |>, >>>
 

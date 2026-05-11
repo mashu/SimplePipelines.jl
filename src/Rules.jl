@@ -345,6 +345,13 @@ struct RuleCheck{W}
     placeholders::Vector{String}
 end
 
+"""
+    RuleInstantiationCheck
+
+Diagnostic returned by `check(rule, target)`. It records the concrete target,
+wildcards inferred from the rule output pattern, substituted input/output paths,
+and a rendered command preview for string-template rules.
+"""
 struct RuleInstantiationCheck{W}
     rule::Rule{W}
     target::String
@@ -355,6 +362,12 @@ struct RuleInstantiationCheck{W}
     function_note::String
 end
 
+"""
+    RuleExplanationStep
+
+One resolved rule in a [`PlanExplanation`](@ref), including inferred wildcards,
+concrete paths, rendered command preview, and dependency targets.
+"""
 struct RuleExplanationStep{W}
     rule::Rule{W}
     target::String
@@ -366,6 +379,13 @@ struct RuleExplanationStep{W}
     dependencies::Vector{String}
 end
 
+"""
+    PlanExplanation
+
+Diagnostic returned by `explain(rules, target)` or `explain(workflow; target)`.
+It lists the rule chain needed to produce the requested target without running
+the pipeline.
+"""
 struct PlanExplanation
     target::String
     steps::Vector{RuleExplanationStep}

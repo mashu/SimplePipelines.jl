@@ -75,6 +75,10 @@ product, and a [`Workflow`](@ref) bundles rules + default targets behind a singl
 check
 @targets
 @workflow
+RuleCheck
+RuleInstantiationCheck
+RuleExplanationStep
+PlanExplanation
 resolve
 expand
 Workflow
