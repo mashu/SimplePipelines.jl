@@ -5,9 +5,13 @@
     @step name(inputs => outputs) = work
     @step work
 
-Create a named step with optional file dependencies. Steps are **lazy**: if the right-hand side
-is a function call (other than `sh(...)`), it is wrapped in a thunk and runs only when the
-pipeline is run via `run(pipeline)`.
+Create a named step with optional file dependencies. Concrete file paths create
+a [`Step`](@ref). File paths with `{wildcards}` create a pattern-backed template
+that can discover matching inputs or be used in a workflow.
+
+Steps are **lazy**: if the right-hand side is a function call (other than
+`sh(...)`), it is wrapped in a thunk and runs only when the pipeline is run via
+`run(pipeline)`.
 
 Use `sh"..."` for literal commands; use `sh("... " * var * " ...")` when you need interpolation
 at construction time. For commands built at run time, use `sh(cmd_func)` where `cmd_func` returns
@@ -20,6 +24,9 @@ so Julia does not interpret the dollar sign.
 @step download = sh"curl -o data.csv http://example.com"
 @step download([] => ["data.csv"]) = sh("curl -L -o " * repr(path) * " " * url)
 @step process(["input.csv"] => ["output.csv"]) = sh"sort input.csv > output.csv"
+@step filter("tsv/{sample}.tsv" => "out/{sample}.tsv") = function(input, output)
+    # read input, write output
+end
 @step call_tool([ref, bams] => [out]) = sh(() -> "bcftools mpileup -f " * repr(ref) * " " * join(repr.(bams), " "))
 @step process("path") = process_file   # function by name, receives path at run time
 @step sh"echo hello"
@@ -65,16 +72,16 @@ function step_lhs(lhs::Expr, rhs)
     step_deps(name, deps, rhs)
 end
 
-step_deps(name, deps, rhs) = :(Step($name, $(step_work_expr(rhs)), [$(esc(deps))], []))
+step_deps(name, deps, rhs) = :(step_or_rule($name, $(step_work_expr(rhs)), [$(esc(deps))], []))
 
 function step_deps(name, deps::Expr, rhs)
     if deps.head === :call && length(deps.args) >= 3 && deps.args[1] === :(=>)
         inputs = deps.args[2]
         outputs = deps.args[3]
-        return :(Step($name, $(step_work_expr(rhs)), $(step_inputs_expr(inputs)), $(step_outputs_expr(outputs))))
+        return :(step_or_rule($name, $(step_work_expr(rhs)), $(step_inputs_expr(inputs)), $(step_outputs_expr(outputs))))
     end
     inputs_expr = deps.head === :vect ? esc(deps) : :([$(esc(deps))])
-    :(Step($name, $(step_work_expr(rhs)), $inputs_expr, []))
+    :(step_or_rule($name, $(step_work_expr(rhs)), $inputs_expr, []))
 end
 step_inputs_expr(s::String) = :([$s])
 step_inputs_expr(x) = esc(x)

@@ -1,7 +1,7 @@
-# Rules and diagnostics
+# Wildcard steps and diagnostics
 
-Writing every sample by hand gets old quickly. Rules are for workflows where the
-same transformation applies to many files:
+Writing every sample by hand gets old quickly. When the same transformation
+applies to many files, write one step template with a wildcard:
 
 ```text
 raw/A.fq -> out/A.bam
@@ -9,45 +9,80 @@ raw/B.fq -> out/B.bam
 raw/C.fq -> out/C.bam
 ```
 
-Instead of listing every step, write one pattern. The wildcard in the output
-path is inferred from the target you ask for.
+The beginner-facing syntax is still `@step`. The only difference is that the
+file paths contain `{sample}`:
 
 ```julia
-align = @rule align("raw/{sample}.fq" => "out/{sample}.bam") =
+align = @step align("raw/{sample}.fq" => "out/{sample}.bam") =
     "bwa mem ref.fa {input} > {output}"
 ```
 
-Read this as: "to make `out/{sample}.bam`, use `raw/{sample}.fq` and run this
-command."
+Read this as: "for every sample, use `raw/<sample>.fq` to make
+`out/<sample>.bam`."
 
-The command is a template string. Unlike `@step sort = sh"sort data.txt"`, a
-rule does not know its concrete filenames yet. `{input}`, `{output}`, and
-`{sample}` are filled in when you ask for a target such as `out/A.bam`.
+Underneath, this is a [`Rule`](@ref): a pattern-backed step that becomes concrete
+only after wildcard values are known. You can still write `@rule` explicitly, but
+most users can start with wildcard `@step`.
 
-## Check One Rule First
+## Julia Function Templates
 
-Before composing a workflow, check the rule by itself:
+Wildcard steps are not only for shell commands. A single-input/single-output
+function can receive the concrete input and output paths:
 
 ```julia
-check(align)
+using CSV, DataFrames
+
+vj_error_filter = @step vj_error_filter("tsv/{sample}.tsv" => "out/{sample}.tsv") =
+    function(input_file, output_file)
+        df = CSV.read(input_file, DataFrame)
+        filtered_df = filter(row -> row.V_errors <= 1, df)
+        CSV.write(output_file, filtered_df, delim='\t')
+    end
 ```
 
-This answers: what wildcards does the rule know about, and which placeholders
-does the command use?
-
-Then try one concrete target:
+If matching inputs such as `tsv/A.tsv` and `tsv/B.tsv` already exist, this can run
+directly:
 
 ```julia
-check(align, "out/A.bam")
+run(vj_error_filter)
+```
+
+The template discovers matching inputs, infers `sample`, substitutes outputs, and
+runs one concrete step per sample.
+
+## Check One Template First
+
+Before running a wildcard template, check it:
+
+```julia
+check(vj_error_filter)
+```
+
+When your template has wildcard **input** paths (like `tsv/{sample}.tsv`), this
+also scans the filesystem the same way `run` would and lists concrete previews:
+resolved inputs, outputs, and (for string work) the rendered command. You do not
+need to invent `out/SOME.tsv` first unless you want that single-target view.
+
+If many files match, only the first 20 previews print by default:
+
+```julia
+check(vj_error_filter; limit=50)
+```
+
+If the template has **no** wildcard inputs (for example only `[] => "out/{x}"`),
+there is nothing to discover on disk: read the `discovery` line in the output and
+use a concrete output path:
+
+```julia
+check(vj_error_filter, "out/A.tsv")
 ```
 
 Now the abstract pattern becomes concrete:
 
 ```text
 sample  => A
-input   => raw/A.fq
-output  => out/A.bam
-command => bwa mem ref.fa raw/A.fq > out/A.bam
+input   => tsv/A.tsv
+output  => out/A.tsv
 ```
 
 Nothing runs here. This is a safe way to catch spelling mistakes like
@@ -55,15 +90,16 @@ Nothing runs here. This is a safe way to catch spelling mistakes like
 
 ## Workflow block
 
-Once individual rules look right, collect them into a workflow block. A workflow
-is just a named set of rules plus the targets you want to build.
+Direct `run(template)` is input-driven: existing files decide which samples run.
+When outputs should drive the workflow, collect templates into a workflow block
+and declare targets.
 
 ```julia
 wf = @workflow "rnaseq" begin
-    @rule source([] => "raw/{sample}.fq") =
+    @step source([] => "raw/{sample}.fq") =
         "mkdir -p raw && echo {sample} > {output}"
 
-    @rule align("raw/{sample}.fq" => "out/{sample}.bam") =
+    @step align("raw/{sample}.fq" => "out/{sample}.bam") =
         "mkdir -p out && bwa mem ref.fa {input} > {output}"
 
     @targets "out/{sample}.bam" sample=["A", "B"]
@@ -77,8 +113,8 @@ end
 # ["out/A.bam", "out/B.bam"]
 ```
 
-The workflow block keeps the beginner-facing syntax compact. Underneath, it is
-the same `Workflow` object used by `plan(wf)` and `run(wf)`.
+The workflow block keeps the beginner-facing syntax compact. Underneath, it is a
+`Workflow` object used by `plan(wf)` and `run(wf)`.
 
 ## Explain the DAG
 
@@ -101,9 +137,9 @@ run(wf)
 
 ## What To Remember
 
-Use `check` while writing one rule. Use `explain` after composing rules into a
-workflow. That keeps debugging local: first prove one pattern, then prove the
-dependency chain.
+Use `check` while writing one wildcard step. Use direct `run(template)` when
+existing inputs should drive the work. Use `@workflow` and `@targets` when
+requested outputs should drive dependency resolution.
 
 **Next:** [Fan-out and reduce](foreach-reduce.md) covers item-driven fan-out
 when a collection or discovered files should drive the branches.

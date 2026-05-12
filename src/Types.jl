@@ -60,7 +60,13 @@ is_gensym(s::Symbol) = startswith(string(s), "##")
 step_label(s::Step) = is_gensym(s.name) ? work_label(s.work) : string(s.name)
 work_label(c::Cmd) = length(c.exec) ≤ 3 ? join(c.exec, " ") : join(c.exec[1:3], " ") * "…"
 work_label(c::Base.AbstractCmd) = string(c)   # OrCmds/AndCmds/CmdRedirect render as shell pipes
-work_label(f::Function) = string(nameof(f))
+function work_label(f::Function)
+    n = nameof(f)
+    s = string(n)
+    # Anonymous closures from `function(...) ... end` get compiler names like `#24#25`.
+    startswith(s, '#') && return "anonymous function"
+    s
+end
 work_label(::Nothing) = "(no work)"
 work_label(::ShRun) = "sh(...)"
 work_label(x) = repr(x)
@@ -295,7 +301,11 @@ Base.showerror(io::IO, e::StepFailure) = isempty(e.detail) ?
     print(io, e.message, "\n", e.detail)
 
 Base.string(e::StepFailure) = sprint(showerror, e)
-Base.show(io::IO, e::StepFailure) = print(io, "StepFailure(", repr(e.kind), ", ", repr(e.message), ")")
+function Base.show(io::IO, e::StepFailure)
+    print(io, "StepFailure(", repr(e.kind), ", ", repr(e.message), ")")
+    isempty(e.detail) && return
+    print(io, "\n", e.detail)
+end
 
 """
     StepResult(step, success, duration, inputs, outputs, result)

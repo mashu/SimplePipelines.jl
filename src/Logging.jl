@@ -31,7 +31,7 @@ function log_result(ctx::RunContext, r::AbstractStepResult)
         println("Completed in $(round(r.duration, digits=2))s")
         if !r.success
             printstyled("  Error: ", color=:red)
-            println(r.result)
+            log_step_failure(stdout, r.result)
         end
     end
 end
@@ -44,6 +44,12 @@ function log_progress(ctx::RunContext, done::Int, total::Int)
         printstyled(" done", color=:light_black)
         println(left > 0 ? " ($left left)" : "")
     end
+end
+
+log_step_failure(io::IO, x) = println(io, x)
+function log_step_failure(io::IO, e::StepFailure)
+    showerror(io, e)
+    println(io)
 end
 
 const CMD_LOG_PREFIX = shell_raw"  $ "

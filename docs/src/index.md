@@ -28,11 +28,11 @@ jump to the shape that matches your workflow.
 
 This path teaches one concrete DAG before introducing advanced features.
 
-### Pattern/Rule Workflow
+### Pattern Workflow
 
 [Rules and diagnostics](guide/rules-and-diagnostics.md) is the entry point when
 your files look like `raw/{sample}.fq` -> `out/{sample}.bam`. It starts with
-`check(rule)` so you can see wildcard values before running anything.
+`check(template)` so you can see wildcard values before running anything.
 
 ### Cookbook And Reference
 

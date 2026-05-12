@@ -78,7 +78,7 @@ This example used fixed filenames. When filenames follow a pattern such as
 `raw/{sample}.fq` -> `out/{sample}.bam`, use rules and check them before running:
 
 ```julia
-align = @rule align("raw/{sample}.fq" => "out/{sample}.bam") =
+align = @step align("raw/{sample}.fq" => "out/{sample}.bam") =
     "bwa mem ref.fa {input} > {output}"
 
 check(align, "out/A.bam")

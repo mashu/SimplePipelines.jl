@@ -62,10 +62,11 @@ materialize_table
 
 ## Output-side wildcard inference
 
-Declare reusable [`Rule`](@ref)s with `{wildcard}` patterns, then call
-[`resolve`](@ref) to walk a target list backward through the rule set and build
-a runnable DAG. Rule work supports both shell templates and `(inputs, outputs,
-wildcards) -> Cmd | String | Function`.
+Declare reusable wildcard steps or [`Rule`](@ref)s with `{wildcard}` patterns,
+then call [`resolve`](@ref) to walk a target list backward through the rule set
+and build a runnable DAG. Rule work supports shell templates,
+`function(input, output)` for single-file transformations, and the advanced
+`(inputs, outputs, wildcards) -> Cmd | String | Function` builder form.
 
 [`expand`](@ref) generates concrete target lists from a template by Cartesian
 product, and a [`Workflow`](@ref) bundles rules + default targets behind a single

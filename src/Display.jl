@@ -193,7 +193,11 @@ function show_result_inline(io::IO, s::String)
     trunc = length(s) > 80 ? first(s, 80) * "…" : s
     println(io, " \"", replace(trunc, '\n' => "\\n"), "\"")
 end
-show_result_inline(io::IO, e::StepFailure) = show_result_inline(io, string(e))
+function show_result_inline(io::IO, e::StepFailure)
+    println(io)
+    showerror(io, e)
+    println(io)
+end
 show_result_inline(io::IO, _) = println(io)
 
 function print_wildcards(io::IO, wildcards::AbstractDict)
@@ -202,16 +206,44 @@ function print_wildcards(io::IO, wildcards::AbstractDict)
     println(io, join(("$(k) => $(v)" for (k, v) in pairs), ", "))
 end
 
+template_work_summary(work::AbstractString) = "shell command template (string)"
+template_work_summary(work::Function) = "Julia function"
+template_work_summary(work::Cmd) = "shell command (Cmd)"
+template_work_summary(work::Base.AbstractCmd) = "shell command"
+template_work_summary(work::ShRun) = "dynamic shell command (sh(...))"
+template_work_summary(work::AbstractNode) = "nested pipeline node"
+template_work_summary(work) = repr(typeof(work))
+
+function Base.show(io::IO, r::Rule)
+    print(io, "StepTemplate(:", r.name, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", r::Rule)
+    println(io, "StepTemplate: ", r.name)
+    println(io, "  inputs:  ", isempty(r.inputs) ? "(none)" : join(r.inputs, ", "))
+    println(io, "  outputs: ", isempty(r.outputs) ? "(none)" : join(r.outputs, ", "))
+    println(io, "  work:    ", template_work_summary(r.work))
+end
+
 function Base.show(io::IO, ::MIME"text/plain", c::RuleCheck)
-    println(io, "Rule check: ", c.rule.name)
+    println(io, "Template check: ", c.rule.name)
     println(io, "  input patterns:  ", isempty(c.rule.inputs) ? "(none)" : join(c.rule.inputs, ", "))
     println(io, "  output patterns: ", isempty(c.rule.outputs) ? "(none)" : join(c.rule.outputs, ", "))
     println(io, "  wildcards:       ", isempty(c.wildcards) ? "(none)" : join(c.wildcards, ", "))
     println(io, "  placeholders:    ", isempty(c.placeholders) ? "(none)" : join(c.placeholders, ", "))
+    isempty(c.discovery_note) || println(io, "  discovery:       ", c.discovery_note)
+    isempty(c.instantiations) && return
+    println(io, "  previews:        ", length(c.instantiations), " concrete match(es) from disk")
+    for (k, inst) in enumerate(c.instantiations)
+        println(io)
+        print(io, "  --- preview ", k, " ---")
+        println(io)
+        show(io, MIME("text/plain"), inst)
+    end
 end
 
 function Base.show(io::IO, ::MIME"text/plain", c::RuleInstantiationCheck)
-    println(io, "Rule target check: ", c.rule.name)
+    println(io, "Template target check: ", c.rule.name)
     println(io, "  target:    ", c.target)
     print(io, "  wildcards: ")
     print_wildcards(io, c.wildcards)

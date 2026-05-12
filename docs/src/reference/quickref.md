@@ -12,13 +12,15 @@ One-page lookup for syntax and APIs. Narrative explanations live in the [user gu
 | `shell_raw"..."`, `shell_raw"""..."""` | Literal shell (`\$VAR` not expanded by Julia) |
 | `@step name = () -> expr` | Julia function step |
 
-## Rules and workflows
+## Wildcard steps and workflows
 
 | Syntax | Meaning |
 |--------|---------|
+| `@step name("in/{x}" => "out/{x}") = "cmd {input} > {output}"` | Pattern-backed step template |
+| `@step name("in/{x}" => "out/{x}") = function(input, output) ... end` | Julia function template |
 | `@rule name("in/{x}" => "out/{x}") = "cmd {input} > {output}"` | Pattern rule |
-| `check(rule)` | Inspect wildcard names and templates |
-| `check(rule, "out/A")` | Test one concrete target |
+| `check(rule; limit=20)` | Inspect template + auto-preview matches from disk (wildcard inputs) |
+| `check(rule, "out/A")` | Preview one concrete output target |
 | `@targets "out/{x}" x=["A", "B"]` | Expand target pattern |
 | `@workflow "name" begin ... end` | Collect rules and targets |
 | `explain(wf; target="out/A")` | Explain rule dependency chain |

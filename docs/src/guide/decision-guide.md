@@ -1,8 +1,8 @@
 # Choosing the right shape
 
 SimplePipelines gives you two complementary ways to build a DAG. You can write
-the graph directly with operators, or you can describe file patterns with rules.
-Both end up as the same kind of runnable pipeline.
+the graph directly with operators, or you can describe repeated file patterns
+with wildcard steps. Both end up as the same kind of runnable pipeline.
 
 ## Start With The Shape Of Your Problem
 
@@ -14,19 +14,20 @@ prepare >> sort_file >> (count_lines & count_bytes)
 
 This is the clearest form when the filenames are fixed and the graph is small.
 
-If you have repeated file patterns, use rules:
+If you have repeated file patterns, use a wildcard step:
 
 ```julia
-@rule align("raw/{sample}.fq" => "out/{sample}.bam") =
+align = @step align("raw/{sample}.fq" => "out/{sample}.bam") =
     "bwa mem ref.fa {input} > {output}"
 ```
 
-Rules are better when the interesting question is "what target do I want?", and
-the package should work backward to find dependencies.
+Wildcard steps are better when the interesting question is "what target do I
+want?", and the package should work backward to find dependencies. The underlying
+object is a `Rule`, so advanced code can still use `@rule` directly.
 
 ## Use Diagnostics Before Running
 
-For one rule, use `check`:
+For one wildcard step, use `check`:
 
 ```julia
 check(align, "out/A.bam")

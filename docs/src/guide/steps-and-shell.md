@@ -48,15 +48,15 @@ align = @step align = sh(() -> "bwa mem ref.fa reads_$(sample_ref[]).fq > out.sa
 Use `shell_raw"..."` when the shell script itself contains `$VAR` and Julia
 should not try to interpolate it.
 
-Rule work looks different on purpose:
+Wildcard file paths create a pattern-backed step template:
 
 ```julia
-@rule align("raw/{sample}.fq" => "out/{sample}.bam") =
+@step align("raw/{sample}.fq" => "out/{sample}.bam") =
     "bwa mem ref.fa {input} > {output}"
 ```
 
-That string is a rule template, not a `Cmd`. It is rendered later, when a
-concrete target provides wildcard values. Rules are covered in
+That string is a template, not a `Cmd`. It is rendered later, when concrete
+wildcard values are known. Wildcard steps are covered in
 [Rules and diagnostics](rules-and-diagnostics.md).
 
 ## Julia functions
