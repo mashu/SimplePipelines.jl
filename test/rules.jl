@@ -112,7 +112,7 @@ end
         write("B.fq", "line\n")
         r = quiet(Workflow(gunzip, count; targets="B.count"))
         @test r.success && labels(r) == ["count[x=B]"]
-        # a newer input rebuilds an existing target (regression: existing targets were never rebuilt)
+        # a newer input rebuilds an existing target
         copyrule = @rule cp("src/{x}.txt" => "dst/{x}.txt") = "cp {input} {output}"
         mkpath("src"); write("src/A.txt", "old")
         quiet(copyrule; targets="dst/A.txt")

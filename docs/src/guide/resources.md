@@ -133,6 +133,9 @@ step runs it.
   but belong to no step.
 - Several `run`s at the same time in one Julia session share the guard but not
   their budgets.
+- Julia's own exit on Ctrl-C or SIGTERM can get stuck when the signal arrives while
+  Julia is compiling (a limitation of Julia). The commands are killed all the same,
+  and a second Ctrl-C ends Julia.
 - The guard is one small Julia process per Julia session: it starts in about 0.4 s
   with the first `run`, uses about 120 MiB of its own memory (about 210 MB resident,
   most of it shared with Julia's libraries), and stops with Julia.

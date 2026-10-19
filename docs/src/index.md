@@ -59,5 +59,4 @@ run again.
 5. [Resource limits and safety](guide/resources.md): how the pipeline keeps your
    computer responsive, and what to declare.
 
-The [quick reference](reference/quickref.md) fits the whole API on one page. If you
-are upgrading from 0.3, read the [migration notes](reference/migration.md).
+The [quick reference](reference/quickref.md) fits the whole API on one page.

@@ -122,6 +122,10 @@ tagged_seconds(n) = "$n.$(getpid())"
 
 cleanup(processes...) = foreach(p -> process_running(p) && kill(p, 9), processes)
 
+"""Wait until the guard has scanned /proc since it registered step `id`'s session: the first
+sample that lists the step may come from a tick that scanned before the registration."""
+watched(tg::TestGuard, id) = all(_ -> !isempty(guard_line(tg, l -> startswith(l, "sample") && occursin(" $id:", l))), 1:2)
+
 """Usage of step `id` in a `sample` line, or -1 when it is not listed."""
 function sample_usage(fields, id)
     for f in fields[6:end]
@@ -574,6 +578,20 @@ const STUBBORN = `sh -c 'trap "" TERM; while :; do sleep 0.1; done'`
             cleanup(p)
         end
 
+        @testset "kill_sessions!: members that leave the session's group while it is killed" begin
+            # forks a child every millisecond; each child moves to a group of its own at once, so
+            # children forked while /proc is scanned are in no group the scan saw
+            p = spawn_session(`perl -e 'for (1..1000) { if (!fork) { setpgrp(0, 0); sleep 40; exit } select(undef, undef, undef, 0.001) } sleep 40'`)
+            sid = getpid(p)
+            procs = GD.ProcInfo[]
+            members() = (GD.scan_processes!(procs, UInt8[], String[]); count(q -> q.sid == sid, procs))
+            @test timedwait(() -> members() > 100, 10.0; pollint=0.01) === :ok
+            GD.kill_sessions!(Int32[sid])
+            @test exits_within(p, 5.0)
+            @test timedwait(() -> members() == 0, 2.0) === :ok
+            cleanup(p)
+        end
+
         @testset "guard process: limits, leftovers, adoption, timeouts" begin
             tg = start_test_guard()
             ready = split(guard_line(tg, "ready"; timeout=60))
@@ -677,7 +695,7 @@ const STUBBORN = `sh -c 'trap "" TERM; while :; do sleep 0.1; done'`
             @test process_running(tg.process) && process_running(stubborn)
             kill(tg.process, 2)
             sleep(0.02)
-            kill(tg.process, 2)                                # used to end the guard before its cleanup
+            kill(tg.process, 2)                                # must not end the guard before its cleanup
             @test guard_line(tg, "bye") == "bye interrupt"
             @test exits_within(stubborn, 3.0)                  # SIGKILL after the grace
             @test exits_within(tg.process, 10.0)
@@ -713,11 +731,20 @@ const STUBBORN = `sh -c 'trap "" TERM; while :; do sleep 0.1; done'`
             @test sort(gone) == sort(["gone $i none 0 0 0" for i in 1:100])
             @test time() - started < 5.0
 
-            # a member that calls setsid after its parent exited is still the step's
+            # a member that calls setsid after its parent exited is still the step's: the leader's
+            # child forks the member and exits; the member leaves on `go`, the leader on `leave`
             seconds = tagged_seconds(35)
+            go, leave = tempname(), tempname()
             send_line(tg, "step 101 1 0 0 0 0 setsid later")
-            leader = spawn_session(`perl -MPOSIX -e "exit if fork; select(undef, undef, undef, 0.4); POSIX::setsid(); exec 'sleep', '$seconds'"`)
+            script = raw"""if (!fork) { exit if fork; select(undef, undef, undef, 0.02) until -e $ARGV[0];
+                            POSIX::setsid(); exec 'sleep', $ARGV[1] }
+                            select(undef, undef, undef, 0.02) until -e $ARGV[2]"""
+            leader = spawn_session(`perl -MPOSIX -e $script $go $seconds $leave`)
             send_line(tg, "sess 101 $(getpid(leader))")
+            @test watched(tg, 101)
+            touch(go)
+            @test timedwait(() -> command_running(["sleep", seconds]), 5.0) === :ok
+            touch(leave)
             @test exits_within(leader, 5.0)
             send_line(tg, "done 101")
             line = guard_line(tg, "gone 101")
@@ -726,9 +753,12 @@ const STUBBORN = `sh -c 'trap "" TERM; while :; do sleep 0.1; done'`
 
             # an orphan inside a session a member created is still the step's after that member exits
             seconds = tagged_seconds(36)
+            go = tempname()
             send_line(tg, "step 102 1 0 0 0 0 orphan in adopted session")
-            leader = spawn_session(`sh -c "setsid sh -c 'sleep 0.5; (sleep $seconds &); exit 0' & sleep 1.5"`)
+            leader = spawn_session(`sh -c "setsid sh -c 'until [ -e $go ]; do sleep 0.02; done; (sleep $seconds &); exit 0' & wait"`)
             send_line(tg, "sess 102 $(getpid(leader))")
+            @test watched(tg, 102)
+            touch(go)
             @test exits_within(leader, 5.0)
             send_line(tg, "done 102")
             @test split(guard_line(tg, "gone 102"))[3] == "leftover"

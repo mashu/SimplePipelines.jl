@@ -16,7 +16,7 @@
         @test !r.success && r[1].result.kind === :process_failed && occursin("was not found", r[1].result.message)
         # commands do not read the terminal
         @test quiet(Step(:stdin, sh"cat")).value == ""
-        # commands that exit instantly never fail spuriously (regression: getpid race)
+        # commands that exit instantly never fail spuriously
         fast = Parallel([Step(Symbol("f$i"), sh"true") for i in 1:40])
         @test all(_ -> quiet(fast; jobs=40).success, 1:10)
     end
@@ -35,7 +35,7 @@ end
 
 @testset "function steps and data flow" begin
     in_tempdir() do _
-        # a zero-argument function after any step (regression: used to throw MethodError)
+        # a zero-argument function after any step
         r = quiet(sh"echo hi" >> (@step done = () -> "ok"))
         @test r.success && r.value == "ok"
         # one-argument functions receive the upstream value
@@ -66,7 +66,7 @@ end
         @test r.success
         @test r.value == ["a\n", "b\n"]
         @test sort(labels(r)) == ["e[a]", "e[b]", "gen"]
-        # values are never swapped for disk wrappers (regression: auto-spill changed types)
+        # values reach the next step unchanged
         big = collect(1:3_000_000)
         r = quiet((@step big = () -> big) >> (@step total = v -> sum(v)))
         @test r.value == sum(big)
@@ -125,7 +125,7 @@ end
         make() = @step idx([] => "ref.idx") = "sleep 0.2; echo idx >> {output}"
         r = quiet(make() & make() & make())
         @test countlines("ref.idx") == 1 && length(r) == 1
-        # shared sub-DAGs are not re-traversed (regression: exponential time)
+        # shared sub-DAGs are traversed once
         node = Step(:root, () -> 1)
         for i in 1:24
             node = (node >> Step(Symbol("l$i"), x -> x)) & (node >> Step(Symbol("r$i"), x -> x))
