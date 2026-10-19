@@ -35,10 +35,12 @@ run again.
   exist, are newer than its inputs, *and* were made by the same command. Edit a
   command and the affected steps rerun. Outputs of a failed step are removed, so a
   half-written file never looks finished.
-- **Safe on your machine.** At most `jobs` CPU threads are busy, however deeply the
-  pipeline is nested; steps declare `threads` and `mem_mb`. Command output streams
-  through bounded buffers. Timeouts and Ctrl-C stop running commands, including
-  their child processes.
+- **It cannot freeze your computer.** A resource guard measures every command and
+  terminates one that exceeds its `mem_mb` or `timeout`. When memory runs low, new
+  steps wait, and the pipeline's own commands are stopped and queued again before
+  the system starts swapping. Steps leave no processes behind, and Ctrl-C, a closed
+  terminal or a crash of Julia kill everything the pipeline started. Container and
+  cluster (cgroup) limits are respected.
 - **Errors you can act on.** Shell commands run with `bash -e -o pipefail`, so a
   failure inside a pipe fails the step. Typos in wildcards and unknown placeholders
   are caught when the rule is defined. When a target cannot be built, you get the
@@ -53,7 +55,9 @@ run again.
    building blocks.
 3. [Wildcard rules and workflows](guide/rules.md): the part that saves the most code
    in bioinformatics.
-4. [Running, freshness and resources](guide/running.md): what `run` and `check` do.
+4. [Running and freshness](guide/running.md): what `run` and `check` do.
+5. [Resource limits and safety](guide/resources.md): how the pipeline keeps your
+   computer responsive, and what to declare.
 
 The [quick reference](reference/quickref.md) fits the whole API on one page. If you
 are upgrading from 0.3, read the [migration notes](reference/migration.md).

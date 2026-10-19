@@ -31,9 +31,13 @@ freshness model and one way to report errors.
 | `results.jl` | `StepFailure`, `StepResult`, `RunResult`, `Outcome`, `run_safely` |
 | `resolve.jl` | rule resolution and pattern tracing; `plan` |
 | `state.jl` | freshness and the recipe file |
-| `scheduler.jl` | admission control (`Pool`) and process termination (`Watchdog`) |
-| `execute.jl` | running one step: processes, function calls, output checks |
-| `runtime.jl` | `run_node`/`exec` for every node type, memoization |
+| `guard.jl`, `procfs.jl`, `policy.jl` | the resource guard process: `/proc` and cgroup readers, `decide`, `guard_main` |
+| `scheduler.jl` | `Need`, `Grant`, admission control (`Pool`), `Watchdog` (Timeout deadlines) |
+| `link.jl` | the driver's side of the guard: starting it, the protocol, interrupts, guard loss |
+| `runtime.jl` | `Runtime`, run lifecycle, memoization, recording |
+| `commands.jl` | running one step's work: rendering at launch, spawning, outcomes |
+| `exec_step.jl` | `exec(::Step)`: freshness, admission, eviction and requeue, results |
+| `exec_nodes.jl` | `exec` for composite and lazy nodes |
 | `logging.jl`, `display.jl` | progress output, `show`, `print_dag` |
 | `run.jl` | `run` and `check` |
 
@@ -70,24 +74,58 @@ attempt.
 `exec(::Step)`:
 
 1. `staleness` decides whether the step must run, under the runtime lock.
-2. In `check` mode, the step is recorded as planned and its outputs added to the
-   pending set.
-3. Otherwise the step acquires resources, `perform` creates the output directories,
-   checks the inputs, runs the work and checks the outputs, and the step releases
-   its resources.
-4. `finish!` records the result, updates the recipe state, and removes partial
-   outputs when the step failed.
+2. `need` computes the step's `Need`: threads (at most `jobs`), the memory limit
+   (declared or inherited `mem_mb`, lowered to the run's budget), the admission
+   charge (the limit, or 256 MiB) and the timeout.
+3. In `check` mode, the step's template is rendered to catch errors, and the step
+   is recorded as planned and its outputs added to the pending set.
+4. Otherwise the step acquires a `Grant`; `perform` renders the template from the
+   grant, creates the output directories, checks the inputs, runs the work and
+   checks the outputs, and the step releases the grant.
+5. A command the guard stopped to free memory comes back as `Evicted`: the step is
+   queued again with a charge based on what it used, and its third attempt runs
+   alone. Otherwise `finish!` records the result, updates the recipe state, and
+   removes partial outputs when the step failed.
 
 Commands run with `run(...; wait=false)` and stream stdout and stderr through
-pipes. Readers keep at most 32 MiB of stdout and the last 16 KiB of stderr. Plain
-commands are started in their own process group, so a timeout or an interrupt can
-terminate the shell together with everything it started.
+pipes. Readers keep at most 32 MiB of stdout and the last 16 KiB of stderr. Every
+leaf of a command starts in its own session (`setsid`) with the thread variables set.
+Its leader pids are read while holding the iolock, so a command that exits at once
+cannot be reaped before it is registered, and Ctrl-C is deferred meanwhile.
+
+## The resource guard
+
+Enforcement cannot live in the Julia process that runs the pipeline: a busy function
+step, the garbage collector or a single thread would delay it, and processes would
+outlive Julia when it is killed. The guard is a separate Julia process (`-O0`, one
+thread), one per Julia session, started by the first `run`. It shares the session's
+process group, so Ctrl-C and SIGTERM reach it; it ignores SIGHUP and kills everything
+when its stdin closes, which is how it notices that Julia died.
+
+The driver writes one line per event (`run`, `step`, `sess`, `done`, `term`,
+`endrun`) and a reader task handles the guard's lines (`ready`, `sample`, `gone`,
+`warn`, `bye`). Each tick (0.5 s, 0.1 s near a limit) the guard scans `/proc`,
+attributes processes to steps by session (and setsid'd children by parent), sums
+`RssAnon + RssShmem + VmSwap` per step, and reads available memory through every
+cgroup level. The pure function `decide` turns that view into terminations:
+per-step limits and deadlines, eviction under pressure (two samples, never a lone
+step, victims that exceed their charge first), immediate kills at the critical
+level, and leftover processes once a step's leaders have exited. A step is reported
+`gone` only when none of its processes is left.
+
+Samples feed the `Pool`: admission requires free CPU slots, the budget, and
+`charge ≤ available − 2·reserve − unused charges of running steps`. A stale sample or
+a paused guard stops admission; waiting longer than 120 s with nothing running
+refuses the waiters instead of hanging. The guard fails closed: if it cannot start
+or exits, the driver kills the commands itself and stops the run.
 
 ### Errors
 
 User code runs inside `run_safely`, the package's single `try`/`catch`. It turns
-exceptions into failed outcomes carrying a `StepFailure`, and it rethrows
-interrupts after terminating running commands. Every other function reports
+exceptions into failed outcomes carrying a `StepFailure`, and on Ctrl-C it calls
+`interrupt_all!` (refuse waiters, wake memo waiters, save state, kill every command)
+before rethrowing. The guard has no exception boundary at all: an error ends it, and
+the run stops. Locked sections defer Ctrl-C (`with_lock`) instead of using `finally`. Every other function reports
 problems through return values: `Unresolved` in resolution, `Outcome(false, …)`
 during execution.
 
@@ -122,7 +160,7 @@ The package loads in about 0.2 s, and a first `run` adds about 0.1 s.
   ForEach, control flow, display) during precompilation.
 
 Per-step overhead is about 30 µs for a Julia function. A shell step costs what
-starting bash costs (a few ms).
+starting bash costs (a few ms), plus about 1 ms for the guard's round trip.
 
 ## Conventions
 

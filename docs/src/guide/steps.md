@@ -121,16 +121,30 @@ Steps without outputs always run: there is nothing on disk to be up to date.
 
 ## Resources
 
-`threads` and `mem_mb` tell the scheduler what a step needs:
+`threads`, `mem_mb` (MiB) and `timeout` (seconds) tell the scheduler what a step
+needs, and they are limits while it runs:
 
 ```julia
-@step sort_bam("aln.bam" => "sorted.bam"; threads=4, mem_mb=8000) =
-    "samtools sort -@ {threads} -m 2G -o {output} {input}"
+@step sort_bam("aln.bam" => "sorted.bam"; threads=4, mem_mb=8000, timeout=3600) =
+    "samtools sort -@ {threads} -m 1500M -o {output} {input}"
 ```
 
-A step occupies `threads` of the `jobs` CPU slots given to [`run`](@ref), and its
-memory counts against `mem_mb`. See [resources](running.md#Resources).
-[`with_resources`](@ref) sets defaults for every step inside a node that does not
-declare its own.
+A step occupies `threads` of the `jobs` CPU slots given to [`run`](@ref) and starts
+only when its `mem_mb` is free. A command that uses more memory than its `mem_mb`, or
+runs longer than its `timeout`, is terminated. `{threads}` and `{mem_mb}` are filled
+in when the step starts. [`with_resources`](@ref) sets defaults for every step inside
+a node that does not declare its own. See
+[Resource limits and safety](resources.md).
+
+## Julia code in a separate process
+
+Julia functions run inside your Julia session, where they cannot be limited or
+stopped. For heavy Julia work, run a script with [`julia`](@ref): it gets its own
+process, limited like any command.
+
+```julia
+@step counts("reads.tsv" => "counts.tsv"; threads=4, mem_mb=8000) =
+    julia("scripts/count.jl {input} {output}")
+```
 
 **Next:** [Composing pipelines](composition.md).

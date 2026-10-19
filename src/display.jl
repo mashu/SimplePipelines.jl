@@ -32,6 +32,7 @@ function resources_list(r::Resources)
     parts = String[]
     r.threads > 0 && push!(parts, "threads=$(r.threads)")
     r.mem_mb > 0 && push!(parts, "mem_mb=$(r.mem_mb)")
+    r.timeout > 0 && push!(parts, "timeout=$(r.timeout)")
     join(parts, ", ")
 end
 resources_text(r::Resources) = (list = resources_list(r); isempty(list) ? "" : "; " * list)
@@ -66,6 +67,7 @@ function Base.show(io::IO, ::MIME"text/plain", r::Rule)
     println(io)
 end
 rule_work_text(t::String) = "\$ " * shorten(replace(t, '\n' => "; "), 120)
+rule_work_text(j::JuliaScript) = "\$ julia " * shorten(j.template, 120)
 rule_work_text(f::Function) = "julia: " * work_label(f)
 rule_work_text(c::Base.AbstractCmd) = "\$ " * command_text(c)
 

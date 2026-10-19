@@ -33,8 +33,10 @@ run(trim >> align >> calls)      # every sample found in raw/, then one joint ca
 - **Correct incremental builds**: steps are skipped only when outputs are newer than
   inputs *and* were made by the same command. Partial outputs of failed steps are
   removed.
-- **Safe on your machine**: a global CPU and memory budget for the whole pipeline,
-  bounded output buffers, and timeouts that terminate the whole process tree.
+- **Cannot freeze your computer**: a resource guard terminates commands that exceed
+  their `mem_mb` or `timeout`, pauses and requeues work before memory runs out, and
+  kills everything on Ctrl-C, a closed terminal or a crash. CPU and memory budgets
+  follow container and cluster limits.
 - **Clear errors**: `bash -e -o pipefail`, typo checks when a rule is defined, and
   an explanation of why a target cannot be built.
 - **Fast**: loads in about 0.2 s, with little compilation on the first run.

@@ -34,7 +34,7 @@ RuleInput(g::Gather) = RuleInput(Pattern(g.pattern), true)
 RuleInput(x) = throw(ArgumentError("rule inputs must be paths or gather(...), got $(summary(x))"))
 
 """
-    Rule(name, inputs, outputs, work; threads=0, mem_mb=0)
+    Rule(name, inputs, outputs, work; threads=0, mem_mb=0, timeout=0)
 
 A step template whose paths contain `{wildcards}`. Usually built with
 [`@rule`](@ref) or with [`@step`](@ref) when the paths contain wildcards.
@@ -44,7 +44,10 @@ A step template whose paths contain `{wildcards}`. Usually built with
   (non-gather) input wildcard must appear in the outputs.
 - `work`: a shell template (`String` or `sh"..."`) with placeholders `{input}`,
   `{output}`, `{input[i]}`, `{output[i]}`, `{threads}`, `{mem_mb}` and `{wildcard}`
-  (`{{x}}` is a literal `{x}`), or a function called as `f(inputs..., outputs...)`.
+  (`{{x}}` is a literal `{x}`), [`julia`](@ref)`("script.jl {input} {output}")` with the
+  same placeholders, or a function called as `f(inputs..., outputs...)`.
+- `threads`, `mem_mb` (MiB) and `timeout` (seconds): limits of every step the rule
+  makes, as for [`Step`](@ref).
 
 A rule produces nothing by itself: use it in a [`Workflow`](@ref), [`run`](@ref) it,
 or compose rules with `>>`/`&` (which merges them into one Workflow).
@@ -53,14 +56,14 @@ struct Rule
     name::Symbol
     inputs::Vector{RuleInput}
     outputs::Vector{Pattern}
-    work::Union{String,Function,Base.AbstractCmd}
+    work::Union{String,JuliaScript,Function,Base.AbstractCmd}
     resources::Resources
 end
 
-function Rule(name::Symbol, inputs, outputs, work; threads::Integer=0, mem_mb::Integer=0)
+function Rule(name::Symbol, inputs, outputs, work; threads::Integer=0, mem_mb::Integer=0, timeout::Real=0)
     ins = RuleInput[RuleInput(x) for x in input_list(inputs)]
     outs = Pattern[Pattern(x) for x in path_list(outputs)]
-    rule = Rule(name, ins, outs, rule_work(work), Resources(; threads, mem_mb))
+    rule = Rule(name, ins, outs, rule_work(work), Resources(; threads, mem_mb, timeout))
     validate(rule)
     rule
 end
@@ -72,6 +75,7 @@ input_list(x) = throw(ArgumentError("rule inputs must be paths or gather(...), g
 rule_work(s::AbstractString) = String(s)
 rule_work(s::Shell) = s.script
 rule_work(f::Function) = f
+rule_work(j::JuliaScript) = j
 rule_work(c::Base.AbstractCmd) = c
 rule_work(w) = throw(ArgumentError(
     "rule work must be a shell template (String or sh\"...\"), a Cmd or a function; got $(summary(w))"))
@@ -104,12 +108,11 @@ function validate(r::Rule)
 end
 
 validate_template(r::Rule, ::Union{Function,Base.AbstractCmd}) = nothing
+validate_template(r::Rule, j::JuliaScript) = validate_template(r, j.template)
 function validate_template(r::Rule, template::String)
     groups = [[i.pattern.text] for i in r.inputs]
     outputs = [o.text for o in r.outputs]
-    wildcards = Dict(n => n for n in rule_wildcards(r))
-    render(template, TemplateContext(groups, outputs, wildcards, 1, 0))
-    nothing
+    validate_template(template, TemplateContext(groups, outputs, Dict(n => n for n in rule_wildcards(r))))
 end
 
 rule_error(r::Rule, msg) = throw(ArgumentError("rule `$(r.name)` $msg"))

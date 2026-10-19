@@ -33,24 +33,26 @@ function load_records(path::AbstractString)
     end
 end
 
-"""Write this run's changes, merged with whatever is on disk now, atomically."""
-function save_state!(st::State)
-    isempty(st.changes) && return nothing
-    merged = load_records(st.path)
-    for (path, recipe) in st.changes
-        apply_change!(merged, path, recipe)
+"""The changes recorded since the last save; the state forgets them (call under the run's lock)."""
+take_changes!(st::State) = (changes = copy(st.changes); empty!(st.changes); changes)
+
+"""Write `changes`, merged with whatever is on disk now, atomically."""
+function save_state(path::String, changes::Dict{String,Union{UInt64,Nothing}})
+    isempty(changes) && return nothing
+    merged = load_records(path)
+    for (output, recipe) in changes
+        apply_change!(merged, output, recipe)
     end
-    dir = dirname(st.path)
+    dir = dirname(path)
     isempty(dir) || mkpath(dir)
-    tmp = string(st.path, ".", getpid(), ".tmp")
+    tmp = string(path, ".", getpid(), ".tmp")
     open(tmp, "w") do io
         println(io, STATE_HEADER)
-        for (path, recipe) in sort!(collect(merged); by=first)
-            occursin('\n', path) || println(io, string(recipe; base=16, pad=16), '\t', path)
+        for (output, recipe) in sort!(collect(merged); by=first)
+            occursin('\n', output) || println(io, string(recipe; base=16, pad=16), '\t', output)
         end
     end
-    mv(tmp, st.path; force=true)
-    empty!(st.changes)
+    mv(tmp, path; force=true)
     nothing
 end
 apply_change!(records, path, recipe::UInt64) = (records[path] = recipe)

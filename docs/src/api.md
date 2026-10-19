@@ -16,6 +16,7 @@ Step
 @sh_str
 sh
 SimplePipelines.Shell
+julia
 with_resources
 ```
 

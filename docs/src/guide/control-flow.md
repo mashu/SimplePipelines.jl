@@ -64,4 +64,4 @@ Force(step)                  # run even if up to date
 run(pipeline; force=true)    # the same, for everything
 ```
 
-**Next:** [Running, freshness and resources](running.md).
+**Next:** [Running and freshness](running.md).

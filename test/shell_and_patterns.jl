@@ -58,12 +58,13 @@ end
 end
 
 @testset "shell templates" begin
-    ctx = SP.TemplateContext([["a.fq"], ["b 1.fq", "b2.fq"]], ["out.bam"], Dict("sample" => "S 1"), 4, 100)
-    @test SP.render("tool {input} > {output}", ctx) == "tool a.fq 'b 1.fq' b2.fq > out.bam"
-    @test SP.render("{input[2]} {output[1]} -t {threads} -m {mem_mb}", ctx) == "'b 1.fq' b2.fq out.bam -t 4 -m 100"
-    @test SP.render("--rg {sample}", ctx) == "--rg 'S 1'"
-    @test SP.render("awk '{{print}}' \${HOME} {x y}", ctx) == "awk '{print}' \${HOME} {x y}"
-    @test_throws ErrorException SP.render("awk '{print}'", ctx)
-    @test_throws ErrorException SP.render("{input[3]}", ctx)
-    @test_throws ErrorException SP.render("{threads[1]}", ctx)
+    ctx = SP.TemplateContext([["a.fq"], ["b 1.fq", "b2.fq"]], ["out.bam"], Dict("sample" => "S 1"))
+    @test SP.render("tool {input} > {output}", ctx, 1, 0) == "tool a.fq 'b 1.fq' b2.fq > out.bam"
+    @test SP.render("{input[2]} {output[1]} -t {threads} -m {mem_mb}", ctx, 4, 100) == "'b 1.fq' b2.fq out.bam -t 4 -m 100"
+    @test SP.render("--rg {sample}", ctx, 1, 0) == "--rg 'S 1'"
+    @test SP.render("awk '{{print}}' \${HOME} {x y}", ctx, 1, 0) == "awk '{print}' \${HOME} {x y}"
+    @test_throws SP.TemplateError SP.render("awk '{print}'", ctx, 1, 0)
+    @test_throws SP.TemplateError SP.render("{input[3]}", ctx, 1, 0)
+    @test_throws SP.TemplateError SP.render("{threads[1]}", ctx, 1, 0)
+    @test_throws SP.TemplateError SP.render("-m {mem_mb}", ctx, 1, 0)     # no mem_mb declared
 end

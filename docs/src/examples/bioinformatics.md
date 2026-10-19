@@ -26,7 +26,7 @@ trim = @rule trim(["raw/{s}_R1.fq.gz", "raw/{s}_R2.fq.gz"] =>
 align = @rule align(["trim/{s}_R1.fq.gz", "trim/{s}_R2.fq.gz", REF * ".bwt"] => "bam/{s}.bam";
                     threads=8, mem_mb=16_000) =
     "bwa mem -t {threads} -R '@RG\\tID:{s}\\tSM:{s}' $REF {input[1]} {input[2]} | " *
-    "samtools sort -@ {threads} -o {output}"
+    "samtools sort -@ 4 -m 1500M -o {output}"
 
 markdup = @rule markdup("bam/{s}.bam" => "dedup/{s}.bam"; threads=4) =
     "samtools markdup -@ {threads} {input} {output}"
@@ -52,8 +52,10 @@ What this saves you:
   `R1` is left out;
 - the reference is indexed once, before any alignment;
 - `call` waits for every sample and reruns when a sample is added;
-- at most 32 threads and 96 GB of declared memory are in use at any time, and
-  samples are finished a few at a time;
+- at most 32 threads and 96 000 MiB of memory are in use at any time, samples are
+  finished a few at a time, and an alignment that grows beyond its 16 000 MiB is
+  stopped instead of freezing the machine (`bwa` plus `samtools sort`'s 4 × 1500 MiB
+  stay well inside it);
 - a failed alignment removes its partial BAM, and `bwa | samtools` fails if either
   tool fails.
 

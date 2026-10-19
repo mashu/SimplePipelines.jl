@@ -26,7 +26,8 @@ makedocs(
             "Wildcard rules and workflows" => "guide/rules.md",
             "Fan-out with ForEach" => "guide/foreach.md",
             "Control flow" => "guide/control-flow.md",
-            "Running, freshness and resources" => "guide/running.md",
+            "Running and freshness" => "guide/running.md",
+            "Resource limits and safety" => "guide/resources.md",
         ],
         "Examples" => [
             "Basics" => "examples/basics.md",

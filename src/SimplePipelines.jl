@@ -24,7 +24,7 @@ See [`@step`](@ref), [`@rule`](@ref), [`Workflow`](@ref), [`run`](@ref) and [`ch
 module SimplePipelines
 
 export AbstractNode, Step, Sequence, Parallel, Retry, Fallback, Branch, Timeout, Force, ForEach, Pipeline
-export @step, @branch, @sh_str, sh, with_resources
+export @step, @branch, @sh_str, sh, julia, with_resources
 export Rule, @rule, gather, Workflow, @workflow, expand, discover, plan
 export check, StepResult, StepFailure, RunResult
 export print_dag, steps, count_steps, is_fresh, clear_state!
@@ -38,14 +38,34 @@ include("macros.jl")
 include("results.jl")
 include("resolve.jl")
 include("state.jl")
+include("guard.jl")         # the resource guard process; also procfs.jl and policy.jl
 include("scheduler.jl")
-include("execute.jl")
+include("link.jl")
 include("runtime.jl")
+include("commands.jl")
+include("exec_step.jl")
+include("exec_nodes.jl")
 include("logging.jl")
 include("run.jl")
 include("display.jl")
 
+function __init__()
+    @atomic CURRENT.link = nothing      # a guard belongs to the process that started it
+    atexit(kill_at_exit)
+end
+
 using PrecompileTools: @setup_workload, @compile_workload
+
+# The guard process runs this package's compiled code (see `guard_command`), so its loop
+# must be in the package image too; otherwise every guard would compile it on start.
+function precompile_guard(::G) where {G<:GuardState}
+    for (f, types) in ((run_guard, (G,)), (read_commands!, (G,)), (handle_command!, (G, String, Float64)),
+                       (guard_tick!, (G, Float64)), (send_sample!, (G,)), (guard_exit!, (G,)))
+        precompile(f, types)
+    end
+end
+precompile(guard_main, ())
+precompile_guard(GuardState(Sys.islinux() ? ProcfsBackend() : GroupBackend(), memory_source(""), GUARD_TICK))
 
 @setup_workload begin
     @compile_workload begin
@@ -84,6 +104,7 @@ using PrecompileTools: @setup_workload, @compile_workload
                 expand("out/{s}.txt"; s=["A", "B"])
             end
         end
+        stop_guard!()
     end
 end
 

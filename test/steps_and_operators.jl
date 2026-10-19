@@ -5,20 +5,22 @@
     @test Step(`echo c`).work == `echo c`
     f = () -> 1
     @test Step(:f, f).work === f
-    # path form: templates are rendered and functions bound to paths
+    # path form: templates keep their paths (rendered when the step starts) and
+    # functions are bound to paths
     t = Step(:t, "sort {input} > {output}", ["in.txt"], ["out.txt"])
-    @test t.work == sh"sort in.txt > out.txt"
+    @test SP.command_text(t.work) == "sort in.txt > out.txt"
     g = (i, o) -> nothing
     c = Step(:c, g, "in.txt", "out.txt")
     @test c.work isa SP.Call && c.work.args == ("in.txt", "out.txt")
-    @test Step(:r, "x -t {threads}", String[], String[]; threads=4).work.script == "x -t 4"
+    @test SP.command_text(Step(:r, "x -t {threads}", String[], String[]; threads=4).work) == "x -t {threads}"
     @test Step(:r, sh"echo", [], []).inputs == String[]
     # invalid work fails at construction, not at run time
     @test_throws ArgumentError Step(:bad, 42)
     @test_throws ArgumentError Step(:bad, sh"a" >> sh"b")
     @test_throws ArgumentError Step(:bad, "x", [1], [])
     @test_throws ArgumentError Step(:bad, "x"; threads=-1)
-    @test_throws ErrorException Step(:bad, "awk '{print}' {input}", ["a"], [])
+    @test_throws SP.TemplateError Step(:bad, "awk '{print}' {input}", ["a"], [])
+    @test_throws ArgumentError Step(:bad, "x"; timeout=-1)
 end
 
 @testset "@step forms" begin
@@ -26,11 +28,11 @@ end
     @test a.name === :a
     @test (@step sh"echo anon").work == sh"echo anon"
     b = @step b("in.txt" => "out.txt") = "cp {input} {output}"
-    @test b.inputs == ["in.txt"] && b.outputs == ["out.txt"] && b.work == sh"cp in.txt out.txt"
+    @test b.inputs == ["in.txt"] && b.outputs == ["out.txt"] && SP.command_text(b.work) == "cp in.txt out.txt"
     c = @step c(["a", "b"] => ["c"]; threads=2, mem_mb=10) = "cat {input} > {output} # {threads}"
-    @test c.resources == SP.Resources(2, 10) && c.work.script == "cat a b > c # 2"
-    d = @step d(; threads=3) = "x -t {threads}"
-    @test d.work.script == "x -t 3"
+    @test c.resources == SP.Resources(threads=2, mem_mb=10) && SP.command_text(c.work) == "cat a b > c # {threads}"
+    d = @step d(; threads=3, timeout=2.5) = "x -t {threads}"
+    @test d.resources.timeout == 2.5
     e = @step e("only_in.txt") = sh"test -f only_in.txt"
     @test e.inputs == ["only_in.txt"] && isempty(e.outputs)
     e2 = @step e2("x.txt", "y.txt") = sh"true"

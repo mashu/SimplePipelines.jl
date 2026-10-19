@@ -12,7 +12,7 @@ dag_text(x; expand=true) = sprint(io -> print_dag(io, x; expand))
     s = @step bam(["r1.fq", "r2.fq"] => "a.bam"; threads=4) = "bwa mem -t {threads} {input} > {output}"
     text = plain(s)
     @test occursin("← r1.fq, r2.fq", text) && occursin("→ a.bam", text)
-    @test occursin("\$ bwa mem -t 4 r1.fq r2.fq > a.bam", text) && occursin("threads=4", text)
+    @test occursin("\$ bwa mem -t {threads} r1.fq r2.fq > a.bam", text) && occursin("threads=4", text)
     r = @rule align("raw/{s}.fq" => "bam/{s}.bam") = "bwa mem {input} > {output}"
     @test occursin("Rule align", plain(r)) && occursin("raw/{s}.fq", plain(r))
     wf = Workflow(r; name="w")

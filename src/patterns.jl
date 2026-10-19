@@ -205,41 +205,59 @@ expansion_values(v) = [string(x) for x in v]
 const TEMPLATE_TOKEN = r"\{\{(\w+(?:\[\d+\])?)\}\}|(?<!\$)\{(\w+)(?:\[(\d+)\])?\}"
 const RESERVED_NAMES = ("input", "output", "threads", "mem_mb")
 
-"""Values available to a shell template: one input group per declared input."""
+"""A template placeholder that cannot be filled."""
+struct TemplateError <: Exception
+    message::String
+end
+Base.showerror(io::IO, e::TemplateError) = print(io, e.message)
+template_error(parts...) = throw(TemplateError(string(parts...)))
+
+"""Paths and wildcard values available to a template: one input group per declared input."""
 struct TemplateContext
     inputs::Vector{Vector{String}}
     outputs::Vector{String}
     wildcards::Dict{String,String}
-    threads::Int
-    mem_mb::Int
 end
+TemplateContext() = TemplateContext(Vector{String}[], String[], Dict{String,String}())
 
-"""Fill the placeholders of a shell template. Paths and wildcard values are shell-quoted when needed."""
-render(template::AbstractString, ctx::TemplateContext) =
-    replace(template, TEMPLATE_TOKEN => token -> render_token(match(TEMPLATE_TOKEN, token), ctx, template))
+"""
+Fill the placeholders of a template. `{threads}` and `{mem_mb}` come from the resources the
+step was granted when it starts (`mem_mb = 0`: none declared, so `{mem_mb}` is an error).
+Paths and wildcard values are shell-quoted when needed.
+"""
+render(template::AbstractString, ctx::TemplateContext, threads::Int, mem_mb::Int) =
+    replace(template, TEMPLATE_TOKEN => token ->
+        render_token(match(TEMPLATE_TOKEN, token), ctx, threads, mem_mb, template))
 
-function render_token(m::RegexMatch, ctx::TemplateContext, template)
+"""Render with stand-in resources, to reject unknown placeholders when a step is defined."""
+validate_template(template::AbstractString, ctx::TemplateContext) = (render(template, ctx, 1, 1); nothing)
+
+"""The template as displayed before it runs: paths filled in, `{threads}` and `{mem_mb}` kept."""
+preview(template::AbstractString, ctx::TemplateContext) = render(template, ctx, -1, -1)
+
+function render_token(m::RegexMatch, ctx::TemplateContext, threads::Int, mem_mb::Int, template)
     escaped = m.captures[1]
     escaped === nothing || return string("{", escaped, "}")
-    placeholder(String(m.captures[2]), m.captures[3], ctx, template)
+    placeholder(String(m.captures[2]), m.captures[3], ctx, threads, mem_mb, template)
 end
 
-function placeholder(name::String, index, ctx::TemplateContext, template)
+function placeholder(name::String, index, ctx::TemplateContext, threads::Int, mem_mb::Int, template)
     name == "input" && return paths_text(ctx.inputs, index, name, template)
     name == "output" && return paths_text([[o] for o in ctx.outputs], index, name, template)
-    index === nothing || error("only {input[i]} and {output[i]} take an index; got {$name[$index]} in: $template")
-    name == "threads" && return string(ctx.threads)
-    name == "mem_mb" && return string(ctx.mem_mb)
+    index === nothing || template_error("only {input[i]} and {output[i]} take an index; got {$name[$index]} in: $template")
+    name == "threads" && return threads < 0 ? "{threads}" : string(threads)
+    name == "mem_mb" && return mem_mb < 0 ? "{mem_mb}" : mem_mb > 0 ? string(mem_mb) : template_error(
+        "uses {mem_mb} but declares no mem_mb; declare mem_mb on the step or with with_resources")
     haskey(ctx.wildcards, name) && return shell_quote(ctx.wildcards[name])
     known = join(("{$n}" for n in [collect(RESERVED_NAMES); sort!(collect(keys(ctx.wildcards)))]), ", ")
-    error("unknown placeholder {$name} in: $template\nAvailable: $known. ",
-          "Write {{$name}} for a literal {$name}.")
+    template_error("unknown placeholder {$name} in: $template\nAvailable: $known. ",
+                   "Write {{$name}} for a literal {$name}.")
 end
 
 paths_text(groups, ::Nothing, name, template) = join((shell_quote(p) for g in groups for p in g), " ")
 
 function paths_text(groups, index::AbstractString, name, template)
     i = parse(Int, index)
-    1 <= i <= length(groups) || error("{$name[$i]} is out of range: there are $(length(groups)) $(name)s in: $template")
+    1 <= i <= length(groups) || template_error("{$name[$i]} is out of range: there are $(length(groups)) $(name)s in: $template")
     join((shell_quote(p) for p in groups[i]), " ")
 end

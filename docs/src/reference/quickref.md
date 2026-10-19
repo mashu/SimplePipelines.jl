@@ -9,13 +9,15 @@
 | `@step name = () -> expr` | Julia function |
 | `@step name = f(args)` | call deferred until the step runs |
 | `@step name(in => out) = "tool {input} > {output}"` | declared paths and a template |
-| `@step name([a, b] => [c]; threads=4, mem_mb=8000) = ...` | several paths, resources |
+| `@step name([a, b] => [c]; threads=4, mem_mb=8000, timeout=600) = ...` | several paths, limits (MiB, seconds) |
+| `@step name(in => out) = julia("script.jl {input} {output}")` | Julia script in a separate, limited process |
 | `@step name(in => out) = (i, o) -> ...` | function receiving the paths |
 | `@step name(in) = ...` | inputs only |
-| `Step(name, work, inputs, outputs; threads, mem_mb)` | constructor form |
+| `Step(name, work, inputs, outputs; threads, mem_mb, timeout)` | constructor form |
 
 Placeholders: `{input}`, `{output}`, `{input[i]}`, `{output[i]}`, `{threads}`,
-`{mem_mb}`, `{wildcard}`; `{{word}}` is a literal `{word}`.
+`{mem_mb}`, `{wildcard}`; `{{word}}` is a literal `{word}`. `{threads}` and `{mem_mb}`
+are filled in when the step starts, with what it was granted.
 
 ## Composition
 
@@ -28,7 +30,7 @@ Placeholders: `{input}`, `{output}`, `{input[i]}`, `{output[i]}`, `{threads}`,
 | `Branch(cond, a, b)`, `@branch cond a b` | conditional | |
 | `Timeout(a, seconds)` | deadline; kills commands | |
 | `Force(a)` | ignore freshness | |
-| `with_resources(a; threads, mem_mb)` | default resources | |
+| `with_resources(a; threads, mem_mb, timeout)` | default limits | |
 | `ForEach(items) do x ... end` | one branch per item | vector |
 | `ForEach("dir/{w}.ext") do w ... end` | one branch per file | vector |
 | `Sequence(nodes...)`, `Parallel(nodes...)` | function forms | |
@@ -53,10 +55,10 @@ Placeholders: `{input}`, `{output}`, `{input[i]}`, `{output[i]}`, `{threads}`,
 
 | call | meaning |
 |:-----|:--------|
-| `run(x; jobs, mem_mb, force, verbose, state_path)` | run; returns a [`RunResult`](@ref) |
+| `run(x; jobs, mem_mb, min_free_mb, nice, guard, force, verbose, state_path)` | run; returns a [`RunResult`](@ref) |
 | `check(x; ...)` | what would run and why; runs nothing |
 | `print_dag(x)` | tree with paths and commands |
 | `success(r)`, `r.value`, `r[i]` | overall success, pipeline value, step results |
-| `r[i].label`, `.status`, `.result`, `.duration` | per-step fields |
+| `r[i].label`, `.status`, `.result`, `.duration`, `.peak_mb` | per-step fields |
 | `steps(x)`, `count_steps(x)` | steps of a node |
 | `is_fresh(step)`, `clear_state!()` | freshness state |

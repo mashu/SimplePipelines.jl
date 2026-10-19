@@ -154,17 +154,19 @@ function rule_step(rule::Rule, wildcards, draft::Draft)
     outputs = [substitute(p, wildcards) for p in rule.outputs]
     inputs = reduce(vcat, draft.groups; init=String[])
     res = rule.resources
-    ctx = TemplateContext(draft.groups, outputs, wildcards, max(res.threads, 1), res.mem_mb)
+    ctx = TemplateContext(draft.groups, outputs, wildcards)
     labels = [k => wildcards[k] for k in rule_wildcards(rule)]
     recipe = fingerprint((recipe_source(rule.work), (string(k, "=", v) for (k, v) in labels)..., inputs...))
     Step(rule.name, instance_work(rule.work, ctx, draft), inputs, outputs, res, labels, recipe)
 end
 
-instance_work(template::String, ctx, _) = Shell(render(template, ctx))
+instance_work(template::String, ctx, _) = Template(template, ctx)
+instance_work(j::JuliaScript, ctx, _) = JuliaScript(j.template, ctx)
 instance_work(f::Function, ctx, draft) = Call(f, (draft.args..., ctx.outputs...))
 instance_work(c::Base.AbstractCmd, _, _) = c
 
 recipe_source(template::String) = template
+recipe_source(j::JuliaScript) = "julia " * j.template
 recipe_source(::Function) = "julia"
 recipe_source(c::Base.AbstractCmd) = string(c)
 

@@ -9,8 +9,8 @@
     @test_throws ArgumentError @rule bad2("in/{a}" => ["out/{a}", "out/{a}_{b}"]) = "x"
     @test_throws ArgumentError @rule bad3("in/{input}" => "out/{input}") = "x"
     @test_throws ArgumentError @rule bad4([] => []) = "x"
-    @test_throws ErrorException @rule bad5("in/{s}" => "out/{s}") = "awk '{print}' {input}"
-    @test_throws ErrorException @rule bad6("in/{s}" => "out/{s}") = "tool {input[2]}"
+    @test_throws SP.TemplateError @rule bad5("in/{s}" => "out/{s}") = "awk '{print}' {input}"
+    @test_throws SP.TemplateError @rule bad6("in/{s}" => "out/{s}") = "tool {input[2]}"
     @test_throws ArgumentError @rule bad7("in/{s}" => "out/{s}") = 42
     # gather may introduce wildcards that the outputs lack
     m = @rule merge(gather("bam/{s}.bam") => "all.vcf") = "cat {input} > {output}"

@@ -4,18 +4,20 @@
 
 """
     @step name = work
-    @step name(inputs => outputs; threads=0, mem_mb=0) = work
+    @step name(inputs => outputs; threads=0, mem_mb=0, timeout=0) = work
     @step name(inputs) = work
     @step work
 
 Create a named [`Step`](@ref). When a path contains a `{wildcard}`, the result is a
 [`Rule`](@ref) (a step template) instead.
 
-`work` is a shell command (`sh"..."`, a `String` template, a `Cmd`) or a function.
-A function call on the right-hand side is deferred until the step runs
+`work` is a shell command (`sh"..."`, a `String` template, a `Cmd`), Julia code in a
+separate process ([`julia`](@ref)`("script.jl ...")`) or a function. A function call
+on the right-hand side is deferred until the step runs
 (`@step load = read_table("x.csv")`), except for command builders (`sh(...)`,
-`string(...)`, `*`, `Cmd(...)`, `pipeline(...)`). A function that returns a command
-has that command run.
+`string(...)`, `*`, `Cmd(...)`, `pipeline(...)`, `julia(...)`). A function that
+returns a command has that command run. `threads`, `mem_mb` (MiB) and `timeout`
+(seconds) are limits; see [`Step`](@ref).
 
 ```julia
 @step hello = sh"echo hello"
@@ -44,7 +46,7 @@ end
 step_lhs(lhs, rhs) = error("@step expects `name = work` or `name(inputs => outputs) = work`, got `$lhs`")
 
 """
-    @rule name(inputs => outputs; threads=0, mem_mb=0) = work
+    @rule name(inputs => outputs; threads=0, mem_mb=0, timeout=0) = work
 
 Create a [`Rule`](@ref): a step template with `{wildcard}` patterns.
 
@@ -101,7 +103,7 @@ single_io(a::Expr) = is_pair(a) ? (esc(a.args[2]), esc(a.args[3])) : (esc(a), :(
 is_pair(a::Expr) = a.head === :call && length(a.args) == 3 && a.args[1] === :(=>)
 
 # Calls that build commands run immediately; any other call is deferred to run time.
-const EAGER_CALLS = (:sh, :Shell, :string, :*, :Cmd, :pipeline)
+const EAGER_CALLS = (:sh, :Shell, :string, :*, :Cmd, :pipeline, :julia)
 
 function work_expr(rhs)
     body = plain_rhs(rhs, "@step")

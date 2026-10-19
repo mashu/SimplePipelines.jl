@@ -57,4 +57,20 @@ edits.
   throws.
 - **The operators do not change Base behaviour any more.** `` `a` & `b` `` is Base's
   `AndCmds` again. Use `sh"a" & sh"b"`, or wrap commands in steps.
+- **Resources are limits.** `mem_mb` (MiB) and the new `timeout` are enforced by a
+  resource guard process: a command that uses more memory or runs longer is
+  terminated. Steps also wait for free memory, and the pipeline's commands are
+  stopped and requeued before the computer runs out of memory. `run(...; guard=false)`
+  turns this off. See [Resource limits and safety](../guide/resources.md).
+- **`mem_mb` defaults** to 80% of the memory the process may use (it was half of the
+  RAM), and steps without `mem_mb` are charged 256 MiB. `jobs` defaults to the CPUs
+  the process may use, which respects container and cluster limits.
+- **`{threads}` and `{mem_mb}` are filled in when a step starts**, from what it was
+  granted; a `mem_mb` above the run's budget is lowered to it. `{mem_mb}` in a step
+  that declares no `mem_mb` is an error.
+- **Commands must not leave processes behind.** A step whose command exits while its
+  background jobs still run fails, and the jobs are terminated; end such scripts with
+  `wait`.
+- **Commands run at `nice` 10** and see `OMP_NUM_THREADS` and similar variables set
+  to their `threads`.
 - **Julia 1.10** is the minimum version.

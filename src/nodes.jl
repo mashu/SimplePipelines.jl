@@ -12,19 +12,21 @@ nodes built by `>>`, `&`, `|` and `^`, [`ForEach`](@ref) and [`Workflow`](@ref).
 abstract type AbstractNode end
 
 """
-Resources a step asks the scheduler for: CPU `threads` and peak memory `mem_mb`.
-Zero means "not declared": one thread and no memory charge, unless an enclosing
-[`with_resources`](@ref) provides a default.
+What a step may use: CPU `threads`, memory `mem_mb` (MiB) and run time `timeout`
+(seconds). Zero means "not declared": one thread, no memory limit and no time limit,
+unless an enclosing [`with_resources`](@ref) provides a default.
 """
 struct Resources
     threads::Int
     mem_mb::Int
+    timeout::Float64
 end
 
-function Resources(; threads::Integer=0, mem_mb::Integer=0)
+function Resources(; threads::Integer=0, mem_mb::Integer=0, timeout::Real=0)
     threads >= 0 || throw(ArgumentError("threads must be ≥ 0, got $threads"))
     mem_mb >= 0 || throw(ArgumentError("mem_mb must be ≥ 0, got $mem_mb"))
-    Resources(Int(threads), Int(mem_mb))
+    timeout >= 0 || throw(ArgumentError("timeout must be ≥ 0 seconds, got $timeout"))
+    Resources(Int(threads), Int(mem_mb), Float64(timeout))
 end
 
 """Function work bound to its arguments, e.g. the declared paths of a step."""
@@ -34,10 +36,41 @@ struct Call
 end
 (c::Call)() = c.f(c.args...)
 
+"""A shell template, rendered when the step starts so `{threads}`/`{mem_mb}` match the grant."""
+struct Template
+    script::String
+    ctx::TemplateContext
+end
+
+"""Julia arguments run in a separate Julia process; see [`julia`](@ref)."""
+struct JuliaScript
+    template::String
+    ctx::TemplateContext
+end
+
+"""
+    julia(arguments)
+
+Work that runs Julia code in a separate process, so it can be limited, measured and
+terminated like any command (Julia functions run inside this process and cannot be).
+`arguments` are the arguments of `julia`, with the same placeholders as shell
+templates; the process is started with this Julia, the active project,
+`--threads={threads}` and, when the step declares `mem_mb`, a matching
+`--heap-size-hint`. Your own flags come last and take precedence.
+
+```julia
+@step counts("reads.tsv" => "counts.tsv"; threads=4, mem_mb=8000) =
+    julia("scripts/count.jl {input} {output}")
+```
+
+In the script, the paths are in `ARGS`.
+"""
+julia(arguments::AbstractString) = JuliaScript(String(arguments), TemplateContext())
+
 """
     Step(work)
-    Step(name::Symbol, work; threads=0, mem_mb=0)
-    Step(name::Symbol, work, inputs, outputs; threads=0, mem_mb=0)
+    Step(name::Symbol, work; threads=0, mem_mb=0, timeout=0)
+    Step(name::Symbol, work, inputs, outputs; threads=0, mem_mb=0, timeout=0)
 
 One unit of work. Usually built with [`@step`](@ref).
 
@@ -45,7 +78,11 @@ One unit of work. Usually built with [`@step`](@ref).
 
 - a shell command: `sh"..."` or a `String` (run with `bash -e -o pipefail`);
 - a `Cmd` (backticks);
-- a Julia function.
+- [`julia`](@ref)`("script.jl ...")`: Julia code in a separate, limited process;
+- a Julia function (runs inside this Julia process).
+
+`threads`, `mem_mb` (MiB) and `timeout` (seconds) are limits: a command that uses more
+memory or runs longer is terminated, and steps only start when their resources fit.
 
 With declared `inputs`/`outputs` (the path form), a shell template may use
 `{input}`, `{output}`, `{input[i]}`, `{output[i]}`, `{threads}` and `{mem_mb}`, and a
@@ -59,7 +96,7 @@ created before the step runs, and outputs left behind by a failed run are remove
 """
 struct Step <: AbstractNode
     name::Symbol
-    work::Union{Shell,Base.AbstractCmd,Function,Call,Nothing}
+    work::Union{Shell,Template,JuliaScript,Base.AbstractCmd,Function,Call,Nothing}
     inputs::Vector{String}
     outputs::Vector{String}
     resources::Resources
@@ -69,19 +106,17 @@ end
 
 Step(work) = Step(gensym(:step), work)
 
-function Step(name::Symbol, work; threads::Integer=0, mem_mb::Integer=0)
+function Step(name::Symbol, work; threads::Integer=0, mem_mb::Integer=0, timeout::Real=0)
     w, source = prepare_work(work)
-    Step(name, w, String[], String[], Resources(; threads, mem_mb), Pair{String,String}[],
+    Step(name, w, String[], String[], Resources(; threads, mem_mb, timeout), Pair{String,String}[],
          fingerprint((source,)))
 end
 
-function Step(name::Symbol, work, inputs, outputs; threads::Integer=0, mem_mb::Integer=0)
+function Step(name::Symbol, work, inputs, outputs; threads::Integer=0, mem_mb::Integer=0, timeout::Real=0)
     ins, outs = path_list(inputs), path_list(outputs)
-    resources = Resources(; threads, mem_mb)
-    ctx = TemplateContext([[i] for i in ins], outs, Dict{String,String}(),
-                          max(resources.threads, 1), resources.mem_mb)
-    w, source = prepare_work(work, ctx)
-    Step(name, w, ins, outs, resources, Pair{String,String}[], fingerprint((source, ins...)))
+    w, source = prepare_work(work, TemplateContext([[i] for i in ins], outs, Dict{String,String}()))
+    Step(name, w, ins, outs, Resources(; threads, mem_mb, timeout), Pair{String,String}[],
+         fingerprint((source, ins...)))
 end
 
 """A step with no work, used to report failures of composite nodes."""
@@ -99,19 +134,25 @@ prepare_work(w::AbstractString) = (Shell(String(w)), String(w))
 prepare_work(w::Shell) = (w, w.script)
 prepare_work(w::Base.AbstractCmd) = (w, string(w))
 prepare_work(f::Function) = (f, "julia")
+prepare_work(j::JuliaScript) = (validated(j), "julia " * j.template)
 prepare_work(::AbstractNode) = throw(ArgumentError(
     "a pipeline node cannot be the work of a step; compose nodes directly with >> and &"))
 prepare_work(w) = throw(ArgumentError(
     "step work must be a shell command (sh\"...\" or a String), a Cmd or a function; got " *
     "$(summary(w)). To run Julia code when the pipeline runs, write `() -> expr`."))
 
-# Path form: shell templates are rendered, functions are bound to the paths.
-prepare_work(w::AbstractString, ctx::TemplateContext) = (Shell(render(w, ctx)), String(w))
-prepare_work(w::Shell, ctx::TemplateContext) = (Shell(render(w.script, ctx)), w.script)
+# Path form: shell templates keep their paths and are rendered when the step starts;
+# functions are bound to the paths.
+prepare_work(w::AbstractString, ctx::TemplateContext) = (validated(Template(String(w), ctx)), String(w))
+prepare_work(w::Shell, ctx::TemplateContext) = (validated(Template(w.script, ctx)), w.script)
+prepare_work(j::JuliaScript, ctx::TemplateContext) = (validated(JuliaScript(j.template, ctx)), "julia " * j.template)
 prepare_work(f::Function, ctx::TemplateContext) =
     isempty(ctx.inputs) && isempty(ctx.outputs) ? (f, "julia") :
     (Call(f, (Iterators.flatten(ctx.inputs)..., ctx.outputs...)), "julia")
 prepare_work(w, ::TemplateContext) = prepare_work(w)
+
+validated(t::Template) = (validate_template(t.script, t.ctx); t)
+validated(j::JuliaScript) = (validate_template(j.template, j.ctx); j)
 
 const FNV_OFFSET = 0xcbf29ce484222325
 const FNV_PRIME = 0x00000100000001b3
@@ -141,6 +182,8 @@ end
 shorten(s::AbstractString, n::Int=60) = length(s) <= n ? String(s) : first(s, n - 1) * "…"
 
 work_label(s::Shell) = shorten(s.script)
+work_label(t::Template) = shorten(t.script)
+work_label(j::JuliaScript) = shorten("julia " * j.template)
 work_label(c::Cmd) = shorten(join(c.exec, " "))
 work_label(c::Base.AbstractCmd) = shorten(string(c))
 work_label(c::Call) = work_label(c.f)
@@ -256,14 +299,14 @@ struct Resourced <: AbstractNode
     resources::Resources
 end
 """
-    with_resources(node; threads=0, mem_mb=0)
+    with_resources(node; threads=0, mem_mb=0, timeout=0)
 
-Default resources for every step inside `node` that does not declare its own. The
-scheduler only starts a step when its threads and memory fit the budgets given to
-[`run`](@ref) (`jobs` and `mem_mb`).
+Default resources for every step inside `node` that does not declare its own:
+`threads`, `mem_mb` (a limit in MiB) and `timeout` (seconds). See
+[Resource limits](@ref "Resource limits and safety") for how they are enforced.
 """
-with_resources(node; threads::Integer=0, mem_mb::Integer=0) =
-    Resourced(as_node(node), Resources(; threads, mem_mb))
+with_resources(node; threads::Integer=0, mem_mb::Integer=0, timeout::Real=0) =
+    Resourced(as_node(node), Resources(; threads, mem_mb, timeout))
 
 """
     ForEach(items) do item ... end
