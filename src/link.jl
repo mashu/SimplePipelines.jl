@@ -14,8 +14,9 @@
 
 @nospecialize   # see runtime.jl
 
-const GUARD_WAIT = 30.0             # seconds to wait for `ready`, and for `gone` after `done`
+const GUARD_WAIT = 30.0             # seconds to wait for `ready`; a guard silent this long is lost
 const GUARD_STDERR_TAIL = 16 * 1024
+const GUARD_SUPPORTED = !Sys.iswindows()
 
 """How a command ended, from the guard's `gone` line (`kind` :none when it ended by itself)."""
 struct Gone
@@ -39,15 +40,20 @@ const TERMINATED = Dict{Int,Symbol}()            # without the guard: why a comm
 remember_sessions!(id::Int, sids::Vector{Int32}) = (with_lock(setindex!, SESSIONS_LOCK, SESSIONS, sids, id); nothing)
 forget_sessions!(id::Int) = with_lock(pop!, SESSIONS_LOCK, SESSIONS, id, Int32[])
 sessions_of(id::Int) = with_lock(get, SESSIONS_LOCK, SESSIONS, id, Int32[])
-all_sessions() = with_lock(collect_sessions, SESSIONS_LOCK, SESSIONS)
-collect_sessions(d::Dict{Int,Vector{Int32}}) = reduce(vcat, values(d); init=Int32[])
+
+"""Every remembered session, forgotten at once: they are about to be killed, and their pids may be reused."""
+take_all_sessions!() = with_lock(take_sessions!, SESSIONS_LOCK, SESSIONS)
+take_sessions!(d::Dict{Int,Vector{Int32}}) = (sids = reduce(vcat, values(d); init=Int32[]); empty!(d); sids)
+
+"""Kill the sessions and every process in them (and their setsid'd children)."""
+kill_all!(sids::Vector{Int32}) = (GUARD_SUPPORTED && !isempty(sids) && kill_sessions!(sids); nothing)
 
 """atexit hook: kill every command still running (script-mode Ctrl-C, SIGTERM, `exit`)."""
 function kill_at_exit()
     trylock(SESSIONS_LOCK) || return    # busy: the guard sees EOF and kills them
-    sids = collect_sessions(SESSIONS)
+    sids = take_sessions!(SESSIONS)
     unlock(SESSIONS_LOCK)
-    kill_sessions!(sids)
+    kill_all!(sids)
 end
 
 #==============================================================================#
@@ -62,6 +68,7 @@ mutable struct GuardLink
     const lock::ReentrantLock
     const replies::Dict{Int,Channel{Gone}}
     @atomic sample::GuardSample
+    @atomic heard::Float64          # when the last line from the guard was read
     @atomic ended::Symbol           # :none while it runs; then :interrupt, :stopped or :closed
 end
 
@@ -89,7 +96,7 @@ const GUARD_OPTIONS = Ref(GuardOptions(0.5, ""))
 """The live guard, started when there is none; NO_GUARD when `guard` is false."""
 function connect(guard::Bool)
     guard || return NO_GUARD
-    Sys.iswindows() && throw(ArgumentError(
+    GUARD_SUPPORTED || throw(ArgumentError(
         "the resource guard does not support Windows; pass guard=false to run without memory limits, timeouts or cleanup"))
     lock(live_link, LINK_LOCK)
 end
@@ -106,8 +113,9 @@ end
 The guard runs this package's precompiled code: loading it takes a fraction of a second,
 where compiling guard.jl from source takes seconds. The child gets this process's
 flags, project and load path, so it finds the same precompiled package. While the
-package is being precompiled, or when its cache is stale (its source was edited), the
-guard compiles guard.jl on its own instead.
+package is being precompiled, when its cache is stale (its source was edited), or when
+the active project resolves to another copy of it, the guard compiles guard.jl on its
+own instead.
 """
 function guard_command(o::GuardOptions)
     options = ["--interval=$(o.interval)"]
@@ -115,7 +123,11 @@ function guard_command(o::GuardOptions)
     precompiled() ? package_guard(options) : script_guard(options)
 end
 
-precompiled() = ccall(:jl_generating_output, Cint, ()) == 0 && Base.isprecompiled(Base.PkgId(@__MODULE__))
+function precompiled()
+    id = Base.PkgId(@__MODULE__)
+    ccall(:jl_generating_output, Cint, ()) == 0 && Base.locate_package(id) == pathof(@__MODULE__) &&
+        Base.isprecompiled(id)
+end
 
 function package_guard(options::Vector{String})
     project = Base.active_project()
@@ -146,7 +158,7 @@ function start_guard(o::GuardOptions)
               "memory protection; pass guard=false to run without it (no memory limits, timeouts or cleanup).")
     end
     link = GuardLink(process, Int32(int_field(words, 2)), int_field(words, 4) == 1, tail, ReentrantLock(),
-                     Dict{Int,Channel{Gone}}(), parse_sample(split(first_sample, ' ')), :none)
+                     Dict{Int,Channel{Gone}}(), parse_sample(split(first_sample, ' ')), time(), :none)
     Threads.@spawn :interactive watch_guard(link)
     link
 end
@@ -201,38 +213,60 @@ begin_run!(::NoGuard, ::Int, ::Int, ::Int) = nothing
 end_run!(link::GuardLink, run::Int) = send!(link, "endrun $run\n")
 end_run!(::NoGuard, ::Int) = nothing
 
-"""Tell the guard about a started command: its limits and the sessions of its leaders."""
-function register!(link::GuardLink, g::Grant, run::Int, n::Need, deadline_ms::Int, label::String, sids::Vector{Int32})
+"""
+The guard's `step` line for a command: its limits and label. Built before the command
+is spawned, so nothing can fail between spawning and registering it.
+"""
+step_line(id::Int, run::Int, n::Need, deadline_ms::Int, label::String) =
+    string("step ", id, ' ', run, ' ', n.limit_mb, ' ', n.charge_mb, ' ', milliseconds(n.timeout), ' ',
+           deadline_ms, ' ', replace(label, r"[\r\n]" => ' '), '\n')
+
+milliseconds(seconds::Float64) = round(Int, 1000min(seconds, 2.0^31))
+
+"""Tell the guard about a started command: its `step` line and the sessions of its leaders."""
+function register!(link::GuardLink, id::Int, line::String, sids::Vector{Int32})
     reply = Channel{Gone}(Inf)
-    with_lock(setindex!, link.lock, link.replies, reply, g.id)
+    with_lock(setindex!, link.lock, link.replies, reply, id)
     ended = @atomic link.ended
-    ended === :none || (kill_sessions!(sids); put!(reply, Gone(ended === :interrupt ? :interrupt : :stopped)); return nothing)
-    io = IOBuffer()
-    println(io, "step ", g.id, ' ', run, ' ', n.limit_mb, ' ', n.charge_mb, ' ', round(Int, 1000n.timeout), ' ',
-            deadline_ms, ' ', replace(label, r"[\r\n]" => ' '))
-    foreach(sid -> println(io, "sess ", g.id, ' ', sid), sids)
-    send!(link, String(take!(io)))
+    ended === :none || (kill_all!(sids); put!(reply, Gone(ended === :interrupt ? :interrupt : :stopped)); return nothing)
+    send!(link, line * join(("sess $id $sid\n" for sid in sids)))
 end
-register!(::NoGuard, ::Grant, ::Int, ::Need, ::Int, ::String, ::Vector{Int32}) = nothing
+register!(::NoGuard, ::Int, ::String, ::Vector{Int32}) = nothing
 
 """
-After the command's leaders exited: wait until the guard reports the step gone, which
-happens once no process of it is left (leftovers are terminated first).
+Wait until the guard reports the command gone: once its leaders have exited (we then
+send `done`) and no process of it is left; leftovers are terminated first. A command
+stuck in uninterruptible I/O is reported without waiting for its leaders.
 """
-function finish_step!(link::GuardLink, id::Int)
+function finish_step!(link::GuardLink, id::Int, process::Base.AbstractPipe)
     reply = with_lock(get, link.lock, link.replies, id, Channel{Gone}(1))
-    send!(link, "done $id\n")
-    timer = Timer(_ -> put!(reply, Gone(:lost)), GUARD_WAIT)
-    gone = take!(reply)
-    close(timer)
+    @async (wait(process); send!(link, "done $id\n"))
+    gone = await_gone(link, reply)
     gone.kind === :lost && guard_lost!(link, "it did not answer for $(round(Int, GUARD_WAIT)) s")
     with_lock(delete!, link.lock, link.replies, id)
     forget_sessions!(id)
     gone.kind === :lost ? Gone(:stopped) : gone
 end
 
-function finish_step!(::NoGuard, id::Int)
-    foreach(kill_group, forget_sessions!(id))         # nothing the step started outlives it
+"""
+The guard's reply. Its samples, every tick, are its heartbeat: it counts as lost only
+after GUARD_WAIT seconds without a line, so time this process spends busy (and not
+reading) does not count against it.
+"""
+function await_gone(link::GuardLink, reply::Channel{Gone})
+    while true
+        timer = Timer(_ -> put!(reply, Gone(:check)), GUARD_WAIT)
+        gone = take!(reply)
+        close(timer)
+        gone.kind === :check || return gone
+        yield()                                     # a starved reader catches up first
+        process_exited(link.process) || time() - (@atomic link.heard) >= GUARD_WAIT && return Gone(:lost)
+    end
+end
+
+function finish_step!(::NoGuard, id::Int, process::Base.AbstractPipe)
+    wait(process)
+    kill_all!(forget_sessions!(id))                 # nothing the step started outlives it
     Gone(with_lock(pop!, SESSIONS_LOCK, TERMINATED, id, :none))
 end
 
@@ -240,18 +274,21 @@ end
 terminate!(link::GuardLink, id::Int, reason::Symbol) = send!(link, "term $id $reason\n")
 function terminate!(::NoGuard, id::Int, reason::Symbol)
     with_lock(setindex!, SESSIONS_LOCK, TERMINATED, reason, id)
-    foreach(kill_group, sessions_of(id))
+    kill_all!(sessions_of(id))
 end
-
-kill_group(sid::Int32) = (sid > 1 && ccall(:kill, Cint, (Cint, Cint), -sid, 9); nothing)
 
 #==============================================================================#
 # Messages from the guard
 #==============================================================================#
 
-"""Reader task: dispatch the guard's lines until it exits."""
+"""
+Reader task: dispatch the guard's lines until it exits. It defers Ctrl-C, so an
+interrupt goes to the task that is computing (in the REPL, the user's) instead of to
+this one, which is woken by every sample; the guard reports a group-wide Ctrl-C itself.
+"""
 function watch_guard(link::GuardLink)
-    read = run_safely(Call(read_guard, (link,)); interrupted=interrupt_all!)
+    Base.sigatomic_begin()
+    read = run_safely(Call(read_guard, (link,)))
     read.ok || guard_lost!(link, "reading from it failed: " * read.value.message)
 end
 
@@ -259,6 +296,7 @@ function read_guard(link::GuardLink)
     while true
         line = readline(link.process)
         isempty(line) && eof(link.process) && break
+        @atomic link.heard = time()
         words = split(line, ' ')
         message!(Val(Symbol(words[1])), link, words)
     end
@@ -270,7 +308,10 @@ message!(::Val{:gone}, link::GuardLink, words) =
     deliver!(link, int_field(words, 2), Gone(Symbol(field(words, 3)), int_field(words, 4), int_field(words, 5),
                                              field(words, 6) == "1", join(words[min(7, end + 1):end], ' ')))
 message!(::Val{:warn}, ::GuardLink, words) = guard_warning(join(words[2:end], ' '))
-message!(::Val{:bye}, ::GuardLink, _) = interrupt_all!()    # the guard got Ctrl-C or SIGTERM
+# The guard got Ctrl-C (it ignores SIGTERM on Linux; a script's own exit kills the steps).
+# A script exits from the same Ctrl-C: give it a moment, so that nothing runs (or
+# compiles) here while Julia shuts down.
+message!(::Val{:bye}, ::GuardLink, _) = (sleep(0.3); interrupt_all!())
 message!(::Val, ::GuardLink, _) = nothing
 
 field(words, i::Int) = i <= length(words) ? words[i] : ""
@@ -279,10 +320,11 @@ int_field(words, i::Int) = something(tryparse(Int, field(words, i)), 0)
 function parse_sample(words)
     usage = Dict{Int,Int}()
     for pair in words[min(6, end + 1):end]
-        id, mb = split(pair, ':'; limit=2)..., ""
-        usage[something(tryparse(Int, id), 0)] = something(tryparse(Int, mb), 0)
+        colon = findfirst(':', pair)
+        colon === nothing && continue
+        usage[something(tryparse(Int, pair[1:colon-1]), 0)] = something(tryparse(Int, pair[colon+1:end]), 0)
     end
-    GuardSample(int_field(words, 2), int_field(words, 3), field(words, 4) == "1", Symbol(field(words, 5)), usage)
+    GuardSample(int_field(words, 2), int_field(words, 3), field(words, 4) == "1", usage)
 end
 
 function deliver!(link::GuardLink, id::Int, gone::Gone)
@@ -302,7 +344,7 @@ function guard_lost!(link::GuardLink, reason::String)
     (@atomicreplace link.ended :none => :stopped).success || return nothing
     kill(link.process, Base.SIGKILL)
     ids = with_lock(collect ∘ keys, link.lock, link.replies)
-    kill_sessions!(reduce(vcat, map(sessions_of, ids); init=Int32[]))
+    kill_all!(reduce(vcat, map(forget_sessions!, ids); init=Int32[]))
     tail = strip(fetch(link.errors))
     failure = StepFailure(:stopped, "stopped: the resource guard exited unexpectedly")
     for rt in active_runs()
@@ -318,18 +360,17 @@ Ctrl-C (here or in the guard): stop every run of this process, kill every comman
 directly and drop the guard (the next `run` starts a new one). Safe to call repeatedly.
 """
 function interrupt_all!()
+    link = @atomic CURRENT.link
+    ended = link !== nothing && (@atomicreplace link.ended :none => :interrupt).success  # nothing registers now
     failure = StepFailure(:stopped, "stopped: the run was interrupted")
     for rt in active_runs()
         rt.interrupted[] = true
         stop_run!(rt, failure)
-        run_safely(Call(save_run_state!, (rt,)))
+        abandon_run!(rt)
     end
-    kill_sessions!(all_sessions())
-    link = @atomic CURRENT.link
-    link === nothing && return nothing
-    (@atomicreplace link.ended :none => :interrupt).success || return nothing
-    kill(link.process, Base.SIGKILL)
-    resolve_replies!(link, Gone(:interrupt))
+    kill_all!(take_all_sessions!())
+    ended && (kill(link.process, Base.SIGKILL); resolve_replies!(link, Gone(:interrupt)))
+    foreach(rt -> run_safely(Call(save_run_state!, (rt,))), active_runs())
 end
 
 @specialize

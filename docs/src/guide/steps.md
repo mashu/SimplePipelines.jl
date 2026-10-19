@@ -130,8 +130,9 @@ needs, and they are limits while it runs:
 ```
 
 A step occupies `threads` of the `jobs` CPU slots given to [`run`](@ref) and starts
-only when its `mem_mb` is free. A command that uses more memory than its `mem_mb`, or
-runs longer than its `timeout`, is terminated. `{threads}` and `{mem_mb}` are filled
+when its `mem_mb` fits in the free memory. A command that uses more memory than its
+`mem_mb`, or runs longer than its `timeout`, is terminated (a Julia function cannot
+be; see [`julia`](@ref) below). `{threads}` and `{mem_mb}` are filled
 in when the step starts. [`with_resources`](@ref) sets defaults for every step inside
 a node that does not declare its own. See
 [Resource limits and safety](resources.md).

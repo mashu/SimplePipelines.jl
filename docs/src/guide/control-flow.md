@@ -55,7 +55,11 @@ If the node is not done in time, the timeout fails with kind `:timed_out`. Comma
 still running are terminated, together with everything they started (a shell, a
 pipe of tools, their children). Steps inside the node that have not started yet are
 not started. A Julia function that is already running cannot be stopped safely;
-the pipeline stops waiting for it.
+the pipeline stops waiting for it and gives its CPU slots and memory charge to other
+steps (the function keeps running in the background until it returns).
+
+A step's own `timeout` (`@step s(; timeout=600) = ...`) does the same for its
+command, without a `Timeout` node.
 
 ## Force
 

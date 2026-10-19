@@ -51,7 +51,7 @@ end
                  lock(() -> push!(order, p), lk)
                  SP.release!(pool, g)
              end for p in (3, 1, 2)]
-    sleep(0.3)                                          # all three are queued
+    @test timedwait(() -> length(pool.queue) == 3, 10) === :ok     # all three are queued
     SP.release!(pool, first_grant)
     foreach(wait, tasks)
     @test order == [1, 2, 3]
@@ -76,7 +76,7 @@ end
 
 # Pool unit tests: memory admission with samples injected by hand.
 need_of(charge; threads=1, exclusive=false) = SP.Need(threads, charge, 0, 0, :none, 0.0, exclusive)
-sample_of(available, reserve; paused=false, usage=Dict{Int,Int}()) = SP.GuardSample(available, reserve, paused, :ok, usage)
+sample_of(available, reserve; paused=false, usage=Dict{Int,Int}()) = SP.GuardSample(available, reserve, paused, usage)
 admit(pool, n; watchdog=SP.Watchdog()) = Threads.@spawn SP.acquire!(pool, [0], n, watchdog)
 settled(task) = timedwait(() -> istaskdone(task), 2.0) === :ok
 

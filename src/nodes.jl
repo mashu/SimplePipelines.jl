@@ -25,7 +25,7 @@ end
 function Resources(; threads::Integer=0, mem_mb::Integer=0, timeout::Real=0)
     threads >= 0 || throw(ArgumentError("threads must be ≥ 0, got $threads"))
     mem_mb >= 0 || throw(ArgumentError("mem_mb must be ≥ 0, got $mem_mb"))
-    timeout >= 0 || throw(ArgumentError("timeout must be ≥ 0 seconds, got $timeout"))
+    0 <= timeout < Inf || throw(ArgumentError("timeout must be a finite number of seconds ≥ 0 (0 = none), got $timeout"))
     Resources(Int(threads), Int(mem_mb), Float64(timeout))
 end
 
@@ -83,6 +83,8 @@ One unit of work. Usually built with [`@step`](@ref).
 
 `threads`, `mem_mb` (MiB) and `timeout` (seconds) are limits: a command that uses more
 memory or runs longer is terminated, and steps only start when their resources fit.
+A Julia function runs inside this process and cannot be limited or stopped; use
+[`julia`](@ref) for heavy Julia code.
 
 With declared `inputs`/`outputs` (the path form), a shell template may use
 `{input}`, `{output}`, `{input[i]}`, `{output[i]}`, `{threads}` and `{mem_mb}`, and a
@@ -278,7 +280,7 @@ struct Timeout <: AbstractNode
     node::AbstractNode
     seconds::Float64
     function Timeout(node, seconds::Real)
-        seconds > 0 || throw(ArgumentError("Timeout needs a positive number of seconds"))
+        0 < seconds < Inf || throw(ArgumentError("Timeout needs a positive, finite number of seconds, got $seconds"))
         new(as_node(node), seconds)
     end
 end

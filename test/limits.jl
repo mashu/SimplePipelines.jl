@@ -32,9 +32,22 @@ SP.restart_guard!(; interval=0.05)
         undeclared = Step(:u, "echo {mem_mb}", String[], String[])
         @test quiet(undeclared)[1].result.kind === :template
         @test check(undeclared; verbose=false)[1].result.kind === :template
-        # without the guard, steps still run (and the run says what is not enforced)
+        # nested with_resources: the inner one sets threads, the outer one still gives mem_mb
+        r = quiet(with_resources(with_resources(Step(:n, "echo {threads} {mem_mb}", String[], String[]); threads=2);
+                                 mem_mb=300); jobs=4)
+        @test r.value == "2 300\n"
+        @test_throws ArgumentError Step(:inf, sh"true"; timeout=Inf)
+        @test_throws ArgumentError Timeout(sh"true", Inf)
+        # a missing program fails before anything starts, and the message does not list the environment
+        r = quiet(Step(:typo, pipeline(`sleep 316`, `nonexistent_tool_xyz`)))
+        @test r[1].result.kind === :process_failed && occursin("nonexistent_tool_xyz` was not found", r[1].result.message)
+        @test !occursin("THREADS", r[1].result.message) && !alive("sleep 316")
+        # without the guard, steps still run (and the run says what is not enforced), and
+        # the end of a step still cleans up, including children in their own process group
         r, text = logged(() -> run(sh"echo free"; guard=false))
         @test r.value == "free\n" && occursin("without the resource guard", text)
+        t = @elapsed r = quiet(@step(pg = "timeout 25 sleep 319 & echo hi"); guard=false)
+        @test r.value == "hi\n" && t < 5 && !alive("sleep 319")
     end
 end
 
@@ -70,6 +83,15 @@ end
         r = quiet(Timeout(Step(:t, sh"timeout 30 sleep 302; echo x"), 0.5))
         sleep(0.5)
         @test !r.success && !alive("sleep 302")
+        # Julia code abandoned by a Timeout keeps running, but gives its slot back
+        t = @elapsed r = quiet(Fallback(Timeout(Step(:stuck, () -> (sleep(20); 1)), 0.5), Step(:cached, () -> 2)); jobs=1)
+        @test r.success && r.value == 2 && t < 5
+        # a daemon that escapes the step but keeps its output open does not hang the run
+        if Sys.islinux() && Sys.which("setsid") !== nothing
+            t = @elapsed r = quiet(@step d = "setsid -f sleep 318; echo done")
+            @test r[1].result.kind === :process_failed && t < 5
+            run(ignorestatus(`pkill -x -f "sleep 318"`))
+        end
     end
 end
 
@@ -130,11 +152,14 @@ end
 
 @testset "a lost guard stops the run" begin
     in_tempdir() do _
-        task = Threads.@spawn logged(() -> run(Step(:s, "touch s_started; sleep 303") >> Step(:after, sh"true")))
+        task = Threads.@spawn logged(() -> run(Retry(Step(:s, "touch s_started; sleep 303"), 2) >> Step(:after, sh"true") &
+                                               Step(:f, () -> (sleep(2); 1))))
         @test timedwait(() -> isfile("s_started"), 20) === :ok
         ccall(:kill, Cint, (Cint, Cint), (@atomic SP.CURRENT.link).pid, 9)
+        @test timedwait(() -> istaskdone(task), 20) === :ok
         r, text = fetch(task)
         @test !r.success && r[1].result.kind === :stopped && occursin("exited unexpectedly", text)
+        @test !occursin("retry", text)
         sleep(0.3)
         @test !alive("sleep 303")
         @test quiet(sh"echo again").value == "again\n"          # the next run starts a new guard
@@ -153,25 +178,31 @@ end
     in_tempdir() do dir
         body = "run(Step(:s, \"touch started; sleep 309\"); verbose=false)\nwrite(\"finished\", \"\")\n"
         # Ctrl-C, SIGTERM and a closed terminal reach the whole group; SIGKILL only Julia
-        for (signal, group) in ((2, true), (15, true), (1, true), (9, false))
+        for (signal, group, threads) in ((2, true, "1"), (2, true, "4"), (15, true, "4"), (1, true, "1"), (9, false, "1"))
             rm("started"; force=true)
-            p = start_driver(dir, body)
+            p = start_driver(dir, body; threads)
             @test timedwait(() -> isfile("started"), 300) === :ok
             sleep(0.3)
             ccall(:kill, Cint, (Cint, Cint), group ? -getpid(p) : getpid(p), signal)
             @test timedwait(() -> process_exited(p), 20) === :ok
+            process_exited(p) || kill(p, 9)
             sleep(0.5)
             @test !alive("sleep 309")
             @test !isfile("finished")
         end
-        # REPL-like: Ctrl-C makes run throw InterruptException promptly
+        # REPL-like: a terminal's Ctrl-C reaches the whole process group and makes run throw
+        # InterruptException promptly, even while a Julia function step is still computing
+        repl = "Base.exit_on_sigint(false)\n" *
+               "run(Step(:s, \"touch started; sleep 309\") & Step(:f, () -> sleep(60)); verbose=false)\n" *
+               "write(\"finished\", \"\")\n"
         for threads in ("1", "2,1")
             rm("started"; force=true)
-            p = start_driver(dir, "Base.exit_on_sigint(false)\n" * body; threads)
+            p = start_driver(dir, repl; threads)
             @test timedwait(() -> isfile("started"), 300) === :ok
             sleep(0.3)
             ccall(:kill, Cint, (Cint, Cint), -getpid(p), 2)
             @test timedwait(() -> process_exited(p), 10) === :ok
+            process_exited(p) || kill(p, 9)
             sleep(0.5)
             @test !alive("sleep 309") && !isfile("finished")
             @test occursin("InterruptException", read(joinpath(dir, "stderr.txt"), String))

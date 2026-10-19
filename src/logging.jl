@@ -46,7 +46,7 @@ peak_text(::Nothing) = ""
 peak_text(mb::Int) = mb > 0 ? ", peak " * memory_text(mb) : ""
 memory_text(mb::Int) = mb < 1024 ? "$mb MiB" : "$(round(mb / 1024; digits=1)) GiB"
 
-log_retry(rt::Runtime, attempt, max) = log_line(rt, "↻ ", :yellow, "retry: attempt $attempt of $max")
+log_retry(rt::Runtime, attempt, max, hint::String) = log_line(rt, "↻ ", :yellow, "retry: attempt $attempt of $max$hint")
 log_fallback(rt::Runtime) = log_line(rt, "↯ ", :yellow, "failed; running the fallback")
 log_branch(rt::Runtime, choice::Bool) = log_line(rt, "? ", :blue, "branch condition is $choice")
 log_workflow(rt::Runtime, wf::Workflow, p::WorkflowPlan) =
@@ -64,7 +64,7 @@ log_evicted(rt::Runtime, label::String, e::Evicted, next::Need, attempt::Int) =
 
 log_clamped(rt::Runtime, label::String, n::Need, budget::Int) =
     log_line(rt, "⚠ ", :yellow, "$label declares mem_mb = $(n.declared_mb) but run(mem_mb = $budget) allows " *
-        "$budget; running it with mem_mb = $(n.limit_mb)")
+        "$budget; it runs with mem_mb = $(n.limit_mb)")
 
 log_paused(rt::Runtime, s::GuardSample) =
     log_line(rt, "⏸ ", :yellow, "waiting for memory: $(s.available_mb) MiB free, steps start again above " *
@@ -74,9 +74,9 @@ log_thread_override(rt::Runtime, label::String, settings::Vector{String}, thread
     log_line(rt, "⚠ ", :yellow, "$label: $(join(settings, ", ")) set by the command was replaced by " *
         "threads=$threads; declare threads instead")
 
-log_function_memory(rt::Runtime) =
-    log_line(rt, "ℹ ", :blue, "mem_mb of Julia function steps is reserved but not enforced (they run inside " *
-        "this Julia process); use julia(\"…\") to limit Julia code")
+log_function_limits(rt::Runtime) =
+    log_line(rt, "ℹ ", :blue, "mem_mb and timeout of Julia function steps are not enforced (they run inside " *
+        "this Julia process); use julia(\"…\") to limit Julia code, or a Timeout to stop waiting for it")
 
 log_protection(rt::Runtime, ::NoGuard) = log_line(rt, "⚠ ", :yellow,
     "running without the resource guard: memory limits, timeouts and cleanup are not enforced")

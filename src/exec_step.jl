@@ -26,10 +26,13 @@ end
 
 function exec(step::Step, rt::Runtime, scope::Scope, input)
     label = step_label(step, scope.tag)
-    reason = with_lock(staleness, rt.lock, step, rt.state, scope.forced, rt.pending)
+    rec = with_lock(recorded, rt.lock, rt.state, rt.pending, step)
+    checked = run_safely(Call(staleness, (step, rec, scope.forced)); interrupted=interrupt_all!)
+    checked.ok || return fail!(rt, step, label, checked.value, 0.0)     # e.g. an unreadable path
+    reason = checked.value
     reason === nothing && return skip!(rt, step, label)
     n = need(step, scope, rt.pool)
-    n.source === :clamped && log_clamped(rt, label, n, rt.pool.budget_mb)
+    n.source === :clamped && first_note!(rt, Symbol("clamped ", step.name)) && log_clamped(rt, label, n, rt.pool.budget_mb)
     rt.planning && return plan!(rt, step, label, reason, n)
     attempt!(rt, step, label, scope, input, n, 1)
 end
@@ -40,10 +43,13 @@ attempt!(rt::Runtime, step::Step, label::String, scope::Scope, input, n::Need, k
 admitted(r::Refusal, rt::Runtime, step::Step, label::String, _...) = fail!(rt, step, label, r.failure, 0.0)
 
 function admitted(g::Grant, rt::Runtime, step::Step, label::String, scope::Scope, input, n::Need, k::Int)
-    in_process(step.work) && n.limit_mb > 0 && first_note!(rt, :function_memory) && log_function_memory(rt)
+    in_process(step.work) && (n.limit_mb > 0 || n.timeout > 0) && first_note!(rt, :function_limits) &&
+        log_function_limits(rt)
     started = time()
+    hold!(scope.watchdog, g)                # an expiring Timeout frees it if it abandons this step
     out = unwrap(run_safely(Call(perform, (step, Launch(label, n, g, scope.watchdog, rt), input));
                             interrupted=interrupt_all!))
+    unhold!(scope.watchdog, g)
     release!(rt.pool, g)                    # before finish!, which does I/O
     conclude(out, rt, step, label, scope, input, n, k, started, g.peak_mb)
 end
@@ -63,7 +69,7 @@ conclude(e::Evicted, rt, step, label, scope, input, n, k, started, _) =
 
 """Queue an evicted step again, charged for what it really used; the last attempt runs alone."""
 function requeue(e::Evicted, rt::Runtime, step::Step, label::String, scope::Scope, input, n::Need, k::Int, started)
-    discard_outputs(step, started)
+    discard(step, started)
     charge = n.limit_mb > 0 ? n.limit_mb : max(cld(3n.charge_mb, 2), cld(6e.peak_mb, 5))
     next = Need(n.threads, charge, n.limit_mb, n.declared_mb, n.source, n.timeout, k + 1 == MAX_ATTEMPTS)
     log_evicted(rt, label, e, next, k + 1)
@@ -89,17 +95,19 @@ end
 function plan!(rt::Runtime, step::Step, label::String, reason::String, n::Need)
     rendered = run_safely(Call(launch_work, (step.work, n)))
     rendered.ok || return fail!(rt, step, label, rendered.value, 0.0)
-    missing_input = with_lock(unavailable_input, rt.lock, step, rt.pending)
-    missing_input === nothing || return fail!(rt, step, label, StepFailure(:missing_input,
-        "missing input $missing_input, and no earlier step produces it"), 0.0)
+    rebuilt = with_lock(recorded, rt.lock, rt.state, rt.pending, step).pending
+    absent = run_safely(Call(unavailable_input, (step, rebuilt)))
+    absent.ok || return fail!(rt, step, label, absent.value, 0.0)
+    absent.value === nothing || return fail!(rt, step, label, StepFailure(:missing_input,
+        "missing input $(absent.value), and no earlier step produces it"), 0.0)
     with_lock(union!, rt.lock, rt.pending, step.outputs)
     record!(rt, StepResult(step, label, :planned, 0.0, reason))
     succeeded(isempty(step.outputs) ? nothing : step.outputs)
 end
 
-function unavailable_input(step::Step, pending::Set{String})
-    for i in step.inputs
-        i in pending || ispath(i) || return i
+function unavailable_input(step::Step, rebuilt::Vector{Bool})
+    for (i, later) in zip(step.inputs, rebuilt)
+        later || ispath(i) || return i
     end
     nothing
 end
@@ -114,11 +122,14 @@ end
 """Record the outcome of a step that ran; failed steps lose the outputs they wrote."""
 function finish!(rt::Runtime, step::Step, label::String, out::Outcome, started::Float64, peak::Union{Nothing,Int})
     duration = time() - started
-    out.ok || return fail!(rt, step, label, with_removed(out.value, discard_outputs(step, started)), duration, peak)
+    out.ok || return fail!(rt, step, label, with_removed(out.value, discard(step, started)), duration, peak)
     with_lock(remember!, rt.lock, rt.state, step)
     record!(rt, StepResult(step, label, :done, duration, out.value, peak))
     out
 end
+
+"""Remove the outputs a failed attempt wrote; a file that cannot be removed is left as it is."""
+discard(step::Step, started::Float64) = (removed = run_safely(Call(discard_outputs, (step, started))); removed.ok ? removed.value : String[])
 
 with_removed(f::StepFailure, removed::Vector{String}) = isempty(removed) ? f :
     StepFailure(f.kind, f.message; detail=join(filter(!isempty, [f.detail; "removed incomplete output: " .* removed]), "\n"))

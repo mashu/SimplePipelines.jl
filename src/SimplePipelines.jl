@@ -58,14 +58,16 @@ using PrecompileTools: @setup_workload, @compile_workload
 
 # The guard process runs this package's compiled code (see `guard_command`), so its loop
 # must be in the package image too; otherwise every guard would compile it on start.
-function precompile_guard(::G) where {G<:GuardState}
-    for (f, types) in ((run_guard, (G,)), (read_commands!, (G,)), (handle_command!, (G, String, Float64)),
-                       (guard_tick!, (G, Float64)), (send_sample!, (G,)), (guard_exit!, (G,)))
-        precompile(f, types)
-    end
+function precompile_guard(g::G) where {G<:GuardState}
+    compile_guard(g)
+    foreach(f -> precompile(f, (G,)), (run_guard, serve!, read_commands!))
 end
 precompile(guard_main, ())
 precompile_guard(GuardState(Sys.islinux() ? ProcfsBackend() : GroupBackend(), memory_source(""), GUARD_TICK))
+# Interrupt and shutdown paths run while Julia may be exiting: nothing there should compile.
+foreach(f -> precompile(f, ()), (interrupt_all!, kill_at_exit, take_all_sessions!))
+precompile(kill_all!, (Vector{Int32},))
+precompile(guard_lost!, (GuardLink, String))
 
 @setup_workload begin
     @compile_workload begin

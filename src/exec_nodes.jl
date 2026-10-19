@@ -36,8 +36,8 @@ end
 function exec(r::Retry, rt::Runtime, scope::Scope, input)
     out = run_node(r.node, rt, scope, input)
     for attempt in 2:r.max_attempts
-        (out.ok || rt.planning) && return out
-        log_retry(rt, attempt, r.max_attempts)
+        (out.ok || rt.planning || stopped(rt)) && return out
+        log_retry(rt, attempt, r.max_attempts, retry_hint(r.node, rt))
         r.delay > 0 && sleep(r.delay)
         forget_failures!(rt)
         out = run_node(r.node, rt, scope, input)
@@ -45,9 +45,20 @@ function exec(r::Retry, rt::Runtime, scope::Scope, input)
     out
 end
 
+"""A note for the retry line when the step's last attempt hit a limit that a retry does not raise."""
+retry_hint(step::Step, rt::Runtime) = failure_hint(with_lock(last_result, rt.lock, rt.results, step))
+retry_hint(::AbstractNode, ::Runtime) = ""
+last_result(results::Vector{StepResult}, step::Step) = (i = findlast(r -> r.step === step, results); i === nothing ? nothing : results[i])
+failure_hint(r::StepResult) = failure_hint(r.result)
+failure_hint(f::StepFailure) = kind_hint(Val(f.kind))
+failure_hint(_) = ""
+kind_hint(::Val{:memory_limit}) = " with the same mem_mb; the last attempt exceeded it"
+kind_hint(::Val{:timed_out}) = " with the same timeout; the last attempt exceeded it"
+kind_hint(::Val) = ""
+
 function exec(f::Fallback, rt::Runtime, scope::Scope, input)
     out = run_node(f.primary, rt, scope, input)
-    (out.ok || rt.planning) && return out
+    (out.ok || rt.planning || stopped(rt)) && return out
     log_fallback(rt)
     run_node(f.fallback, rt, scope, input)
 end
@@ -66,12 +77,12 @@ end
 take_branch(choice, _, rt::Runtime, _, _) = node_failed!(rt, :branch, "branch condition",
     StepFailure(:exception, "a Branch condition must return a Bool, got $(summary(choice))"))
 
-const ABANDON_AFTER = 6.0     # seconds an expired Timeout waits for its node: the guard's TERM grace + 1
+const ABANDON_AFTER = 6.0     # seconds an expired Timeout waits for its commands: the guard's TERM grace + 1
 
 # At the deadline the node's commands are terminated (the guard also enforces the
 # deadline on its own) and its steps that have not started never start. The node then
-# gets a moment to report its stopped steps; Julia code still running after that is
-# abandoned.
+# gets a moment to report its stopped commands; Julia code still running is abandoned,
+# and the resources it holds are given back.
 function exec(t::Timeout, rt::Runtime, scope::Scope, input)
     rt.planning && return run_node(t.node, rt, scope, input)
     watchdog = Watchdog(scope.watchdog, t.seconds)
@@ -81,7 +92,8 @@ function exec(t::Timeout, rt::Runtime, scope::Scope, input)
     bind(first_done, task)          # a Ctrl-C inside the node reaches take! as an exception
     timed_out, out = wait_first(first_done, t.seconds, () -> expire!(watchdog, rt))
     timed_out || return out
-    wait_first(first_done, ABANDON_AFTER, () -> nothing)
+    timedwait(() -> isready(first_done) || !running_commands(watchdog), ABANDON_AFTER; pollint=0.05)
+    foreach(g -> release!(rt.pool, g), abandon!(watchdog))
     node_failed!(rt, :timeout, "timeout", StepFailure(:timed_out, "did not finish within $(t.seconds) s"))
 end
 
@@ -103,7 +115,12 @@ exec(f::Force, rt::Runtime, s::Scope, input) =
     run_node(f.node, rt, Scope(true, s.resources, s.watchdog, s.priority, s.tag), input)
 
 exec(r::Resourced, rt::Runtime, s::Scope, input) =
-    run_node(r.node, rt, Scope(s.forced, r.resources, s.watchdog, s.priority, s.tag), input)
+    run_node(r.node, rt, Scope(s.forced, inherit(r.resources, s.resources), s.watchdog, s.priority, s.tag), input)
+
+"""Defaults of a nested with_resources: what it sets, and the enclosing defaults for the rest."""
+inherit(inner::Resources, outer::Resources) =
+    Resources(pick(inner.threads, outer.threads), pick(inner.mem_mb, outer.mem_mb), pick(inner.timeout, outer.timeout))
+pick(inner, outer) = inner > 0 ? inner : outer
 
 #==============================================================================#
 # Lazy nodes: expanded when they run

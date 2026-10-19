@@ -11,10 +11,12 @@ const WARN_INTERVAL = 30.0
 const DRIVER_SIGINT_AFTER = 2.0     # of critical with nothing of ours left to kill
 const DRIVER_SIGKILL_AFTER = 2.0    # after that SIGINT, if still critical
 const PSI_CRITICAL = 20.0           # `full avg10`, on two consecutive samples
+const PSI_SETTLE = 10.0             # avg10 averages over 10 s: after a kill made for PSI alone, wait this long
 const MEMORY_GRACE = 1.0
 const TIMEOUT_GRACE = 5.0
 const LEFTOVER_GRACE = 1.0
 const INTERRUPT_GRACE = 1.0
+const MAX_MB = 1 << 40              # larger inputs are clamped, so sums and multiples cannot overflow
 
 """One tracked step as the policy sees it."""
 struct StepView
@@ -49,6 +51,7 @@ struct PolicyView
     critical_since::Float64       # 0 = not critical
     driver_sigint_at::Float64     # 0 = not sent
     last_warn::Float64
+    last_psi_kill::Float64        # the last kill made because of PSI alone
 end
 
 """Terminate step `id` because of `kind`: SIGTERM, then SIGKILL after `grace` (0 = SIGKILL now).
@@ -71,6 +74,7 @@ struct PolicyResult
     critical_since::Float64
     driver_sigint_at::Float64
     last_warn::Float64
+    last_psi_kill::Float64
     warning::String               # "" = none
 end
 
@@ -85,12 +89,15 @@ growth rate, capped at 10% of the total."""
 effective_reserve(min_free::Int, growth::Float64, total::Int) =
     min_free + round(Int, clamp(growth, 0.0, 0.1 * total))
 
-"""The largest positive growth rate (MiB/s) between consecutive `(time, usage)` samples."""
-function growth_rate(history::Vector{Tuple{Float64,Int}})
+"""The pipeline's growth rate in MiB/s: the largest rate, between consecutive `(time, usage U,
+available A)` samples, at which U rose and A fell alike. Forked copy-on-write children raise the
+status sums behind U without allocating anything, so A does not fall; other programs' memory does
+not raise U."""
+function growth_rate(history::Vector{Tuple{Float64,Int,Int}})
     rate = 0.0
     for i in 2:length(history)
-        dt = history[i][1] - history[i-1][1]
-        dt > 0 && (rate = max(rate, (history[i][2] - history[i-1][2]) / dt))
+        (t0, u0, a0), (t1, u1, a1) = history[i-1], history[i]
+        t1 > t0 && (rate = max(rate, min(u1 - u0, a0 - a1) / (t1 - t0)))
     end
     rate
 end
@@ -116,7 +123,8 @@ function decide(v::PolicyView, now::Float64)
     a_eff = v.available + dying_usage(v.steps, now)                      # A'
     low_count = v.memory && a_eff < v.reserve ? v.low_count + 1 : 0
     psi_count = v.memory && v.psi >= PSI_CRITICAL ? v.psi_count + 1 : 0
-    critical = v.memory && (2v.available < v.reserve || (psi_count >= 2 && v.available < 2v.reserve))
+    psi_critical = v.memory && psi_count >= 2 && v.available < 2v.reserve       # thrashing
+    critical = psi_critical || (v.memory && 2v.available < v.reserve)
     level = v.memory ? memory_level(v.available, v.reserve, low_count, critical) : :ok
     nlive = count(has_members, v.steps)
 
@@ -128,11 +136,20 @@ function decide(v::PolicyView, now::Float64)
     candidates = [s for s in v.steps
                   if has_members(s) && !is_terminating(s) && s.usage >= VICTIM_FLOOR_MB && !(s.id in termed)]
     # what steps terminated just now use counts as freed, like a dying victim's
-    deficit = v.reserve - a_eff - sum((s.usage for s in v.steps if s.id in termed); init=0)
+    freed = a_eff + sum((s.usage for s in v.steps if s.id in termed); init=0)
+    deficit = v.reserve - freed
 
-    warning, last_warn = "", v.last_warn
+    warning, last_warn, last_psi_kill = "", v.last_warn, v.last_psi_kill
     if critical
-        for victim in critical_victims(candidates, deficit)
+        victims = critical_victims(candidates, deficit)
+        # Thrashing with A' ≥ R_eff: free memory up to 2·R_eff, where it would stop counting as
+        # critical, one victim at a time, since avg10 shows the effect of a kill only slowly.
+        if isempty(victims) && psi_critical && !isempty(candidates) && 2v.reserve > freed &&
+           now - v.last_psi_kill >= PSI_SETTLE
+            push!(victims, candidates[victim_index(candidates, 2v.reserve - freed)])
+            last_psi_kill = now
+        end
+        for victim in victims
             push!(terms, Term(victim.id, :critical, 0.0, nlive == 1))
         end
     elseif low_count >= 2 && deficit > 0
@@ -149,7 +166,7 @@ function decide(v::PolicyView, now::Float64)
                 if is_terminating(s) && has_members(s) && (critical || now - s.killed_at >= s.grace)]
     critical_since, driver, sigint_at = driver_last_resort(v, now, critical, isempty(candidates))
     PolicyResult(terms, kill_now, driver, level, paused_at(level, v.paused), low_count, psi_count,
-                 critical_since, sigint_at, last_warn, warning)
+                 critical_since, sigint_at, last_warn, last_psi_kill, warning)
 end
 
 # Rules for one live, not yet terminating step: deadlines, its own limit, leftovers.

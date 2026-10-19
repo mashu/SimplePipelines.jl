@@ -20,9 +20,9 @@ test_step(id; members=1, usage=0, charge=usage, limit=0, started=Float64(id), st
 
 test_view(steps; memory=true, available=10_000, total=10_000, min_free=500, reserve=500, psi=0.0,
           driver_growth=0, paused=false, low_count=0, psi_count=0, critical_since=0.0, driver_sigint_at=0.0,
-          last_warn=-Inf) =
+          last_warn=-Inf, last_psi_kill=-Inf) =
     GD.PolicyView(collect(GD.StepView, steps), memory, available, total, min_free, reserve, psi, driver_growth,
-                  paused, low_count, psi_count, critical_since, driver_sigint_at, last_warn)
+                  paused, low_count, psi_count, critical_since, driver_sigint_at, last_warn, last_psi_kill)
 
 term_ids(r) = [t.id for t in r.terms]
 
@@ -59,7 +59,7 @@ struct TestGuard
 end
 
 """Start the real guard process as the driver does, with a fast tick. `main` replaces the entry
-point, to run the fallback for systems without procfs."""
+point: to run the fallback for systems without procfs, or a guard with a bug."""
 function start_test_guard(options::String...; main="guard_main()")
     julia = joinpath(Sys.BINDIR, Base.julia_exename())
     source = joinpath(@__DIR__, "..", "src", "guard.jl")
@@ -130,12 +130,22 @@ function sample_usage(fields, id)
     -1
 end
 
+"""Every live process, from /proc."""
+function all_processes()
+    procs = GD.ProcInfo[]
+    GD.scan_processes!(procs, UInt8[], String[]) || error("cannot list /proc")
+    procs
+end
+
 """Whether a process whose command line is exactly `args` exists."""
 function command_running(args::Vector{String})
     buf = UInt8[]
     want = join(args, '\0') * '\0'
-    any(p -> GD.read_text(buf, "/proc/$(p.pid)/cmdline") == want, GD.scan_processes!(GD.ProcInfo[], buf))
+    any(p -> GD.read_text(buf, "/proc/$(p.pid)/cmdline") == want, all_processes())
 end
+
+"""A command that ignores SIGTERM, so only SIGKILL ends it."""
+const STUBBORN = `sh -c 'trap "" TERM; while :; do sleep 0.1; done'`
 
 # ---------------------------------------------------------------------------------------------
 
@@ -207,6 +217,10 @@ end
             @test GD.read_text(buf, joinpath(dir, "missing")) == ""
             @test GD.write_file(joinpath(dir, "big"), "x") && read(big, String)[1] == 'x'
             @test !GD.write_file(joinpath(dir, "nodir", "f"), "x")
+            write(joinpath(dir, "small"), "")
+            names = ["stale"]
+            @test GD.list_directory!(names, dir) && sort(names) == ["big", "small"]
+            @test !GD.list_directory!(names, joinpath(dir, "missing")) && isempty(names)   # no exception
         end
     end
 
@@ -397,6 +411,23 @@ end
         @test GD.decide(test_view([]; available=1200, psi=25.0, psi_count=5), 1.0).level === :tight
     end
 
+    @testset "decide: PSI alone kills one victim, then lets avg10 settle" begin
+        steps = [test_step(1; usage=300), test_step(2; usage=300)]
+        # A' ≥ R_eff, so the A rules ask for nothing; A < 2·R_eff with PSI ≥ 20 twice is thrashing
+        r = GD.decide(test_view(steps; available=900, psi=25.0, psi_count=1), 20.0)
+        @test r.level === :critical && r.terms == [GD.Term(2, :critical, 0.0, false)] && r.last_psi_kill == 20.0
+        r = GD.decide(test_view(steps; available=900, psi=25.0, psi_count=5, last_psi_kill=20.0), 25.0)
+        @test r.level === :critical && isempty(r.terms) && r.last_psi_kill == 20.0
+        @test term_ids(GD.decide(test_view(steps; available=900, psi=25.0, psi_count=5, last_psi_kill=20.0), 30.0)) == [2]
+        # a victim still dying already brings A' to 2·R_eff
+        dying = test_step(3; usage=300, killed_at=29.5, usage_at_kill=300)
+        r = GD.decide(test_view([steps; dying]; available=900, psi=25.0, psi_count=5), 30.0)
+        @test isempty(r.terms) && r.kill_now == [3]
+        # a lone step is killed too, and the driver is told
+        @test GD.decide(test_view([test_step(1; usage=80)]; available=1500, reserve=1000, psi=25.0, psi_count=1), 1.0).terms ==
+              [GD.Term(1, :critical, 0.0, true)]
+    end
+
     @testset "decide: outside pressure warns at most every 30 s and evicts nothing" begin
         steps = [test_step(1; usage=100), test_step(2; usage=50)]
         r = GD.decide(test_view(steps; available=300, low_count=1), 100.0)
@@ -445,8 +476,14 @@ end
         @test GD.auto_min_free(1000) == 256
         @test GD.auto_min_free(13679) == 684
         @test GD.auto_min_free(100_000) == 2048
-        @test GD.growth_rate([(0.0, 100), (0.5, 300), (1.0, 250), (1.1, 300)]) ≈ 500.0
-        @test GD.growth_rate([(0.0, 100)]) == 0.0
+        # U and A move together: the pipeline really grows
+        @test GD.growth_rate([(0.0, 100, 5000), (0.5, 300, 4800), (1.0, 250, 4850), (1.1, 300, 4800)]) ≈ 500.0
+        @test GD.growth_rate([(0.0, 100, 5000)]) == 0.0
+        @test GD.growth_rate([(0.0, 100, 5000), (0.5, 400, 4900)]) ≈ 200.0     # only what A confirms
+        # copy-on-write children raise the status sums, but available memory does not move
+        @test GD.growth_rate([(0.0, 100, 5000), (1.0, 1600, 5000)]) == 0.0
+        # U rose, and later other programs took memory: neither alone is the pipeline growing
+        @test GD.growth_rate([(0.0, 100, 8000), (0.5, 300, 8000), (1.0, 300, 450)]) == 0.0
         @test GD.effective_reserve(500, 300.0, 10_000) == 800
         @test GD.effective_reserve(500, 5000.0, 10_000) == 1500                 # capped at 10% T
         @test GD.effective_reserve(500, -50.0, 10_000) == 500
@@ -464,9 +501,13 @@ end
         @test 1 <= GD.effective_cpus() <= Sys.CPU_THREADS
         if !Sys.iswindows()
             p = spawn_session(`sleep 31.25`)
-            @test GD.kill_sessions!(Int32[getpid(p)]) === nothing
+            sid = getpid(p)
+            @test GD.kill_sessions!(Int32[sid]) === nothing
             @test exits_within(p, 5.0) && p.termsignal == 9
             @test GD.kill_sessions!(Int32[0, 1, -1]) === nothing           # refused, harmless
+            # never this process's own session, group or pid, whatever the caller passes
+            @test !GD.foreign_session(GD.own_sid()) && !GD.foreign_session(GD.own_pgrp())
+            @test !GD.foreign_session(getpid()) && !GD.foreign_session(1) && GD.foreign_session(sid)
         end
     end
 
@@ -512,13 +553,25 @@ end
     if Sys.islinux()
         @testset "process readers" begin
             buf = UInt8[]
-            procs = GD.scan_processes!(GD.ProcInfo[], buf)
+            procs = GD.ProcInfo[]
+            @test GD.scan_processes!(procs, buf, String[])
             me = procs[findfirst(p -> p.pid == getpid(), procs)]
             @test me.ppid == ccall(:getppid, Cint, ()) && me.sid == ccall(:getsid, Cint, (Cint,), 0)
             @test GD.process_usage_kb(buf, getpid()) > 1000
             @test GD.process_pss_kb(buf, getpid()) > 1000
             @test GD.process_comm(buf, getpid()) == "julia"
             @test GD.process_usage_kb(buf, typemax(Int32)) == 0
+        end
+
+        @testset "kill_sessions!: orphans in sessions that descendants created" begin
+            seconds = tagged_seconds(34)
+            # the inner shell calls setsid; its background sleep is orphaned inside that session
+            p = spawn_session(`sh -c "setsid sh -c '(sleep $seconds &); sleep 30' & wait"`)
+            @test timedwait(() -> command_running(["sleep", seconds]), 5.0) === :ok
+            GD.kill_sessions!(Int32[getpid(p)])
+            @test exits_within(p, 5.0)
+            @test timedwait(() -> !command_running(["sleep", seconds]), 2.0) === :ok
+            cleanup(p)
         end
 
         @testset "guard process: limits, leftovers, adoption, timeouts" begin
@@ -610,45 +663,103 @@ end
             cleanup(sleeper)
         end
 
-        @testset "guard process: $name says bye and kills tracked steps" for (name, signal) in (("SIGTERM", 15), ("SIGINT", 2))
+        @testset "guard process: SIGTERM and SIGHUP are ignored; a double Ctrl-C says bye and kills" begin
             tg = start_test_guard()
+            @test !isempty(guard_line(tg, "ready"; timeout=60))
+            send_line(tg, "run 1 0 0")
+            send_line(tg, "step 1 1 0 0 0 0 stubborn")
+            stubborn = spawn_session(STUBBORN)
+            send_line(tg, "sess 1 $(getpid(stubborn))")
+            @test !isempty(guard_line(tg, l -> startswith(l, "sample") && occursin(" 1:", l)))
+            kill(tg.process, 1)
+            kill(tg.process, 15)
+            sleep(0.3)
+            @test process_running(tg.process) && process_running(stubborn)
+            kill(tg.process, 2)
+            sleep(0.02)
+            kill(tg.process, 2)                                # used to end the guard before its cleanup
+            @test guard_line(tg, "bye") == "bye interrupt"
+            @test exits_within(stubborn, 3.0)                  # SIGKILL after the grace
+            @test exits_within(tg.process, 10.0)
+            cleanup(stubborn)
+        end
+
+        @testset "guard process: a bug kills tracked steps and sends no bye" begin
+            boom = "mutable struct Boom; n::Int; end; " *
+                   "sample_memory!(b::Boom, ::Float64) = (b.n += 1) > 20 ? error(\"boom\") : MemorySample(8000, 10000, -1.0); " *
+                   "measures_memory(::Boom) = true; has_psi(::Boom) = false; " *
+                   "run_guard(GuardState(ProcfsBackend(), Boom(0), 0.05))"
+            tg = start_test_guard(; main=boom)
             @test !isempty(guard_line(tg, "ready"; timeout=60))
             send_line(tg, "run 1 0 0")
             send_line(tg, "step 1 1 0 0 0 0 sleeper")
             sleeper = spawn_session(`sleep 30`)
             send_line(tg, "sess 1 $(getpid(sleeper))")
-            @test !isempty(guard_line(tg, l -> startswith(l, "sample") && occursin(" 1:", l)))
-            kill(tg.process, 1)                                # SIGHUP is ignored
-            sleep(0.3)
-            @test process_running(tg.process) && process_running(sleeper)
-            kill(tg.process, signal)
-            @test guard_line(tg, "bye") == "bye interrupt"
-            @test exits_within(sleeper, 3.0)
-            @test exits_within(tg.process, 10.0)
+            @test exits_within(sleeper, 10.0) && sleeper.termsignal == 9
+            @test exits_within(tg.process, 10.0) && tg.process.exitcode == 1
+            @test guard_line(tg, "bye"; timeout=0.5) == ""
+            @test occursin("boom", read(tg.errors, String))
             cleanup(sleeper)
+        end
+
+        @testset "guard process: a burst of done lines; members that leave their session" begin
+            tg = start_test_guard()
+            @test !isempty(guard_line(tg, "ready"; timeout=60))
+            send_line(tg, "run 1 0 0")
+            send_line(tg, join(("step $i 1 0 0 0 0 quick" for i in 1:100), '\n'))
+            started = time()
+            send_line(tg, join(("done $i" for i in 1:100), '\n'))
+            gone = [guard_line(tg, "gone") for _ in 1:100]
+            @test sort(gone) == sort(["gone $i none 0 0 0" for i in 1:100])
+            @test time() - started < 5.0
+
+            # a member that calls setsid after its parent exited is still the step's
+            seconds = tagged_seconds(35)
+            send_line(tg, "step 101 1 0 0 0 0 setsid later")
+            leader = spawn_session(`perl -MPOSIX -e "exit if fork; select(undef, undef, undef, 0.4); POSIX::setsid(); exec 'sleep', '$seconds'"`)
+            send_line(tg, "sess 101 $(getpid(leader))")
+            @test exits_within(leader, 5.0)
+            send_line(tg, "done 101")
+            line = guard_line(tg, "gone 101")
+            @test split(line)[3] == "leftover" && occursin(" sleep", line)
+            @test !command_running(["sleep", seconds])
+
+            # an orphan inside a session a member created is still the step's after that member exits
+            seconds = tagged_seconds(36)
+            send_line(tg, "step 102 1 0 0 0 0 orphan in adopted session")
+            leader = spawn_session(`sh -c "setsid sh -c 'sleep 0.5; (sleep $seconds &); exit 0' & sleep 1.5"`)
+            send_line(tg, "sess 102 $(getpid(leader))")
+            @test exits_within(leader, 5.0)
+            send_line(tg, "done 102")
+            @test split(guard_line(tg, "gone 102"))[3] == "leftover"
+            @test !command_running(["sleep", seconds])
+            cleanup(leader)
+            stop_test_guard(tg)
         end
 
         @testset "guard process: memory pressure evicts the youngest; critical kills a lone step" begin
             mktempdir() do dir
                 fake = joinpath(dir, "memory")
-                set_memory(available) = (write(fake * ".new", "$available 10000 0.00\n"); mv(fake * ".new", fake; force=true))
+                set_memory(available, psi=0.0) = (write(fake * ".new", "$available 10000 $psi\n"); mv(fake * ".new", fake; force=true))
                 set_memory(8000)
                 tg = start_test_guard("--fake-memory=$fake")
                 ready = split(guard_line(tg, "ready"; timeout=60))
                 @test ready[3] == "10000" && ready[4] == "1" && ready[5] == "1"
                 send_line(tg, "run 1 0 0")
-                touch50 = `perl -e '$x = "a" x (50 * 2**20); sleep 30'`        # about 100 MiB resident
+                touch100 = `perl -e '$x = "a" x (100 * 2**20); sleep 30'`       # at least 100 MiB resident
                 send_line(tg, "step 1 1 0 200 0 0 first")
-                first = spawn_session(touch50)
+                first = spawn_session(touch100)
                 send_line(tg, "sess 1 $(getpid(first))")
                 sleep(0.1)
                 send_line(tg, "step 2 1 0 200 0 0 second")
-                second = spawn_session(touch50)
+                second = spawn_session(touch100)
                 send_line(tg, "sess 2 $(getpid(second))")
-                # both measured, and the growth term has decayed back near R = 5% of 10000
+                # both measured near R = 5% of 10000; then let them finish allocating, since growth
+                # in the tick where A falls would rightly raise R_eff
                 settled(l) = (f = split(l); f[1] == "sample" && GD.parse_int(f[3]) < 600 &&
                               sample_usage(f, 1) >= 64 && sample_usage(f, 2) >= 64)
                 @test !isempty(guard_line(tg, settled; timeout=10))
+                sleep(1.0)
                 set_memory(450)                    # pressure (A < R_eff), not critical (A ≥ R_eff/2)
                 @test exits_within(second, 5.0)
                 send_line(tg, "done 2")
@@ -661,7 +772,19 @@ end
                 send_line(tg, "done 1")
                 gone = split(guard_line(tg, "gone 1"))
                 @test gone[3] == "critical" && gone[6] == "1"
-                cleanup(first, second)
+                # thrashing: A' ≥ R_eff but PSI full avg10 ≥ 20 twice with A < 2·R_eff
+                set_memory(8000)
+                send_line(tg, "step 3 1 0 200 0 0 third")
+                third = spawn_session(touch100)
+                send_line(tg, "sess 3 $(getpid(third))")
+                @test !isempty(guard_line(tg, l -> (f = split(l); f[1] == "sample" && sample_usage(f, 3) >= 64); timeout=10))
+                sleep(1.0)
+                set_memory(900, 25.0)
+                @test exits_within(third, 5.0) && third.termsignal == 9
+                send_line(tg, "done 3")
+                gone = split(guard_line(tg, "gone 3"))
+                @test gone[3] == "critical" && gone[6] == "1"
+                cleanup(first, second, third)
                 stop_test_guard(tg)
             end
         end

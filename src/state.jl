@@ -79,24 +79,31 @@ function adopt!(st::State, step::Step)
 end
 
 """
-Why `step` has to run, or `nothing` when it is up to date. `pending` holds paths that
-an earlier step in the same check will rebuild.
+What the run knows about a step's paths, read under the run's lock: the recipe recorded
+for each output (the step's own when there is no record) and which inputs an earlier
+planned step will rebuild. The filesystem is checked afterwards, outside the lock.
 """
-function staleness(step::Step, st::State, forced::Bool, pending::Set{String})
+struct Recorded
+    recipes::Vector{UInt64}
+    pending::Vector{Bool}
+end
+recorded(st::State, pending::Set{String}, step::Step) =
+    Recorded([get(st.records, o, step.recipe) for o in step.outputs], [i in pending for i in step.inputs])
+
+"""Why `step` has to run, or `nothing` when it is up to date. Reads the filesystem (may throw)."""
+function staleness(step::Step, rec::Recorded, forced::Bool)
     forced && return "forced"
     isempty(step.outputs) && return "no declared outputs"
     for o in step.outputs
         ispath(o) || return "missing output $o"
     end
     oldest = minimum(mtime, step.outputs)
-    for i in step.inputs
-        i in pending && return "input $i will be rebuilt"
+    for (i, rebuilt) in zip(step.inputs, rec.pending)
+        rebuilt && return "input $i will be rebuilt"
         ispath(i) || return "missing input $i"
         mtime(i) > oldest && return "input $i is newer than the outputs"
     end
-    for o in step.outputs
-        get(st.records, o, step.recipe) == step.recipe || return "command or inputs changed since the last run"
-    end
+    all(==(step.recipe), rec.recipes) || return "command or inputs changed since the last run"
     nothing
 end
 
@@ -107,7 +114,7 @@ Whether `step` would be skipped as up to date. Only steps with declared outputs 
 be up to date; see [`Step`](@ref) for the rules.
 """
 is_fresh(step::Step; state_path::AbstractString=STATE_FILE) =
-    staleness(step, State(state_path), false, Set{String}()) === nothing
+    staleness(step, recorded(State(state_path), Set{String}(), step), false) === nothing
 
 """
     clear_state!(state_path=".pipeline_state")

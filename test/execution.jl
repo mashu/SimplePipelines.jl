@@ -13,7 +13,7 @@
         @test r[1].result.message == "command exited with code 7"
         @test occursin("oops", r[1].result.detail)
         r = quiet(Step(:nope, `this-command-does-not-exist-123`))
-        @test !r.success && r[1].result.kind === :exception
+        @test !r.success && r[1].result.kind === :process_failed && occursin("was not found", r[1].result.message)
         # commands do not read the terminal
         @test quiet(Step(:stdin, sh"cat")).value == ""
         # commands that exit instantly never fail spuriously (regression: getpid race)

@@ -72,11 +72,12 @@ mutable struct Watchdog
     const deadline::Float64         # absolute time(); Inf at the root
     const seconds::Float64
     const steps::Vector{Int}        # grant ids of commands running under it
+    const grants::Vector{Grant}     # grants of steps running under it, freed if it abandons them
     const parent::Union{Nothing,Watchdog}
 end
-Watchdog() = Watchdog(ReentrantLock(), false, Inf, 0.0, Int[], nothing)
+Watchdog() = Watchdog(ReentrantLock(), false, Inf, 0.0, Int[], Grant[], nothing)
 Watchdog(parent::Watchdog, seconds::Float64) =
-    Watchdog(ReentrantLock(), false, time() + seconds, seconds, Int[], parent)
+    Watchdog(ReentrantLock(), false, time() + seconds, seconds, Int[], Grant[], parent)
 
 expired(::Nothing) = false
 expired(w::Watchdog) = (@atomic w.expired) || expired(w.parent)
@@ -91,7 +92,7 @@ end
 """Milliseconds until the earliest enclosing deadline; 0 when there is none."""
 remaining_ms(w::Watchdog) = milliseconds_left(tightest(w))
 milliseconds_left(::Nothing) = 0
-milliseconds_left(t::Watchdog) = max(1, round(Int, (t.deadline - time()) * 1000))
+milliseconds_left(t::Watchdog) = max(1, milliseconds(t.deadline - time()))
 
 """Register command `id` with `w` and its parents; true when one of them has already expired."""
 watch!(::Nothing, ::Int) = false
@@ -101,6 +102,20 @@ add_step!(w::Watchdog, id::Int) = (push!(w.steps, id); @atomic w.expired)
 unwatch!(::Nothing, ::Int) = nothing
 unwatch!(w::Watchdog, id::Int) = (with_lock(remove_step!, w.lock, w, id); unwatch!(w.parent, id))
 remove_step!(w::Watchdog, id::Int) = (filter!(!=(id), w.steps); nothing)
+
+"""Record that a step holding `g` runs under `w` and its parents."""
+hold!(::Nothing, ::Grant) = nothing
+hold!(w::Watchdog, g::Grant) = (with_lock(push!, w.lock, w.grants, g); hold!(w.parent, g))
+
+unhold!(::Nothing, ::Grant) = nothing
+unhold!(w::Watchdog, g::Grant) = (with_lock(remove_grant!, w.lock, w.grants, g); unhold!(w.parent, g))
+remove_grant!(grants::Vector{Grant}, g::Grant) = (filter!(x -> x !== g, grants); nothing)
+
+"""The grants of steps still running under an expired `w`: they are given back to the pool."""
+abandon!(w::Watchdog) = with_lock(take_grants!, w.lock, w.grants)
+take_grants!(grants::Vector{Grant}) = (taken = copy(grants); empty!(grants); taken)
+
+running_commands(w::Watchdog) = with_lock(!isempty, w.lock, w.steps)
 
 """Mark `w` expired and return the commands that were running under it."""
 mark_expired!(w::Watchdog) = with_lock(expire_steps!, w.lock, w)
@@ -123,10 +138,9 @@ struct GuardSample
     available_mb::Int
     reserve_mb::Int                 # min_free_mb in effect
     paused::Bool                    # the guard says: start nothing new
-    level::Symbol                   # :ok, :tight, :low, :pressure or :critical
     usage::Dict{Int,Int}            # grant id => memory use of its command
 end
-GuardSample() = GuardSample(0, 0, false, :ok, Dict{Int,Int}())
+GuardSample() = GuardSample(0, 0, false, Dict{Int,Int}())
 
 mutable struct Pool
     const lock::ReentrantLock
@@ -239,6 +253,7 @@ function refuse_waiters!(pool::Pool, pred, failure::StepFailure)
         notify(w.ready)
     end
     filter!(w -> w.outcome === nothing, pool.queue)
+    dispatch!(pool, time())             # steps queued behind a refused one may fit now
 end
 
 """Refuse every waiter now and every step that asks later."""
@@ -262,7 +277,7 @@ function apply_sample!(pool::Pool, s::GuardSample, now::Float64)
     for g in pool.held
         g.usage_mb = get(s.usage, g.id, 0)
     end
-    stuck = pool.gated && s.paused && !isempty(pool.queue) && !any(g -> haskey(s.usage, g.id), pool.held)
+    stuck = pool.gated && s.paused && !isempty(pool.queue) && idle(pool)
     pool.starved_since = stuck ? (pool.starved_since == 0 ? now : pool.starved_since) : 0.0
     stuck && now - pool.starved_since >= MEMORY_WAIT_LIMIT &&
         refuse_waiters!(pool, Returns(true), memory_refusal(pool))
@@ -274,8 +289,8 @@ function apply_sample!(pool::Pool, s::GuardSample, now::Float64)
 end
 
 memory_refusal(pool::Pool) = StepFailure(:out_of_memory,
-    "not started: less than $(2pool.reserve_mb) MiB of memory was free for $(round(Int, MEMORY_WAIT_LIMIT)) s " *
-    "while no other step was running (available $(pool.available_mb) MiB); other programs are using the " *
-    "memory. Free memory or lower min_free_mb.")
+    "not started: free memory stayed below $(3pool.reserve_mb) MiB for $(round(Int, MEMORY_WAIT_LIMIT)) s while " *
+    "nothing else of this pipeline was running (available $(pool.available_mb) MiB); other programs are using " *
+    "the memory. Free memory, or lower min_free_mb.")
 
 @specialize

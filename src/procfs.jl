@@ -48,6 +48,31 @@ function read_text(buf::Vector{UInt8}, path::String)
     n > 0 ? String(buf[1:n]) : ""
 end
 
+"""An entry as libuv's `uv_fs_scandir_next` returns it (`uv_dirent_t`)."""
+struct DirEntry
+    name::Ptr{UInt8}
+    kind::Cint
+end
+
+"""Replace `names` with the entries of directory `path`. False when it cannot be listed (for example
+at the file descriptor limit), where `readdir` would throw."""
+function list_directory!(names::Vector{String}, path::String)
+    empty!(names)
+    valid_path(path) || return false
+    req = Libc.malloc(ccall(:uv_req_size, Csize_t, (Cint,), Base.UV_FS))
+    req == C_NULL && return false
+    n = ccall(:uv_fs_scandir, Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Cstring, Cint, Ptr{Cvoid}), C_NULL, req, path, 0, C_NULL)
+    if n >= 0
+        entry = Ref(DirEntry(C_NULL, 0))
+        while ccall(:uv_fs_scandir_next, Cint, (Ptr{Cvoid}, Ptr{DirEntry}), req, entry) == 0
+            push!(names, unsafe_string(entry[].name))
+        end
+    end
+    ccall(:uv_fs_req_cleanup, Cvoid, (Ptr{Cvoid},), req)
+    Libc.free(req)
+    n >= 0
+end
+
 """Write `text` to an existing file such as /proc/<pid>/oom_score_adj; false when that fails."""
 function write_file(path::String, text::String)
     valid_path(path) || return false
@@ -195,17 +220,20 @@ process_alive(p::ProcInfo) =
 
 all_digits(name::String) = !isempty(name) && all(isdigit_byte, codeunits(name))
 
-"""Fill `procs` with every live (not zombie or dead) process found in /proc."""
-function scan_processes!(procs::Vector{ProcInfo}, buf::Vector{UInt8})
+"""Fill `procs` with every live (not zombie or dead) process found in /proc (`names` is scratch
+space). False when /proc cannot be listed: `procs` is then empty, which must not be read as "no
+process is running"."""
+function scan_processes!(procs::Vector{ProcInfo}, buf::Vector{UInt8}, names::Vector{String})
     empty!(procs)
-    for name in readdir("/proc"; sort=false)
+    list_directory!(names, "/proc") || return false
+    for name in names
         all_digits(name) || continue
         n = read_file!(buf, string("/proc/", name, "/stat"))
         n > 0 || continue
         p = parse_stat(buf, n)
         process_alive(p) && push!(procs, p)
     end
-    procs
+    true
 end
 
 """Non-reclaimable memory from /proc/<pid>/status, in kB: RssAnon + RssShmem + VmSwap.
@@ -627,35 +655,45 @@ function effective_cpus()
     quota > 0 ? clamp(quota, 1, cpus) : cpus
 end
 
-"""SIGKILL every process of the sessions `sids`: on Linux each member found in /proc and its
-descendants (setsid'd ones included), each of their process groups and each session's group;
-elsewhere the session leaders' groups. Never throws; used by the driver's atexit and guard-lost paths."""
+"""Whether `sid` can be a session some other process created: never init's, nor this process's own
+session, process group or pid (a stale or bogus id must not take down the caller or its shell)."""
+foreign_session(sid::Integer) = sid > 1 && sid != getpid() && sid != own_pgrp() && sid != own_sid()
+
+"""SIGKILL every process of the sessions `sids`: each session's group, and on Linux every member
+found in /proc with its descendants, the sessions that setsid'd descendants lead, and all of their
+process groups. Sessions that are not foreign are skipped. Never throws; used by the driver's
+atexit and guard-lost paths."""
 function kill_sessions!(sids::AbstractVector{Int32})
     Sys.iswindows() && return nothing
-    Sys.islinux() && kill_session_processes!(sids)
-    for sid in sids
-        send_signal(-Int(sid), SIGNAL_KILL)
+    targets = filter(foreign_session, sids)
+    # Found before anything is killed: a killed parent's children are reparented, and lost.
+    doomed = Sys.islinux() ? session_processes(targets) : ProcInfo[]
+    for sid in targets
+        send_signal(-Int(sid), SIGNAL_KILL)     # needs no file descriptor, unlike the scan
     end
-    nothing
-end
-
-function kill_session_processes!(sids::AbstractVector{Int32})
-    procs = scan_processes!(ProcInfo[], Vector{UInt8}(undef, 4096))
-    doomed = Set{Int32}(p.pid for p in procs if p.sid > 1 && p.sid in sids)
-    grown = true
-    while grown
-        grown = false
-        for p in procs
-            if !(p.pid in doomed) && p.ppid in doomed
-                push!(doomed, p.pid)
-                grown = true
-            end
-        end
-    end
-    for p in procs
-        p.pid in doomed || continue
+    for p in doomed
         send_signal(p.pid, SIGNAL_KILL)
         send_signal(-Int(p.pgrp), SIGNAL_KILL)
     end
     nothing
+end
+
+"""The processes of the sessions `sids` with their descendants and everything in the sessions
+those lead, from one scan of /proc (none when /proc cannot be listed)."""
+function session_processes(sids::Vector{Int32})
+    procs = ProcInfo[]
+    scan_processes!(procs, Vector{UInt8}(undef, 4096), String[]) || return procs
+    sessions = Set{Int32}(sids)
+    doomed = Set{Int32}()
+    grown = true
+    while grown
+        grown = false
+        for p in procs
+            !(p.pid in doomed) && (p.sid in sessions || p.ppid in doomed) || continue
+            push!(doomed, p.pid)
+            p.pid == p.sid && foreign_session(p.sid) && push!(sessions, p.sid)   # it called setsid
+            grown = true
+        end
+    end
+    filter!(p -> p.pid in doomed, procs)
 end

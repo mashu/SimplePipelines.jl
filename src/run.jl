@@ -27,8 +27,10 @@ the overall `success`, and the pipeline's `value`.
   stopped and queued again before the computer starts swapping.
 - `nice`: scheduling priority of the commands (0–19, default 10), so the computer stays
   responsive.
-- `guard`: enforce limits with the resource guard (default). `guard=false` runs without
-  memory limits, timeouts or cleanup.
+- `guard`: enforce limits with the resource guard (default, except on Windows where it
+  is not available). `guard=false` does not enforce memory limits, step timeouts or
+  memory pressure, and cannot clean up if Julia is killed; `Timeout` nodes and the
+  cleanup at the end of each step still work.
 - `force`: run every step even when it is up to date.
 - `verbose`: print progress.
 - `state_path`: where recipes of built outputs are remembered.
@@ -65,14 +67,14 @@ retarget(wf::Workflow, targets, filter) =
 
 function execute(p::Pipeline, planning::Bool; verbose::Bool=true, force::Bool=false,
                  jobs::Integer=default_jobs(), mem_mb::Integer=default_budget(), min_free_mb::Integer=0,
-                 nice::Integer=10, guard::Bool=true, state_path::AbstractString=STATE_FILE)
+                 nice::Integer=10, guard::Bool=GUARD_SUPPORTED, state_path::AbstractString=STATE_FILE)
     link = planning ? NO_GUARD : connect(guard)
     rt = Runtime(; verbose, planning, jobs, mem_mb, min_free_mb, nice, state_path, link)
     scope = Scope(force, Resources(), rt.root, Int[], "")
     log_header(rt, p.name)
     open_run!(rt)
     started = time()
-    out = run_safely(Call(run_node, (p.root, rt, scope, nothing)); interrupted=() -> (interrupt_all!(); close_run!(rt)))
+    out = run_safely(Call(run_root, (p.root, rt, scope)); interrupted=() -> (interrupt_all!(); close_run!(rt)))
     close_run!(rt)
     rt.interrupted[] && throw(InterruptException())    # Ctrl-C reached only the guard
     top = out.ok ? out.value : internal_error!(rt, out.value)

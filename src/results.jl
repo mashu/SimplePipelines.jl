@@ -57,9 +57,12 @@ function run_safely(f; interrupted=() -> nothing)
     end
 end
 
-caught(e::InterruptException, _, interrupted) = (interrupted(); throw(e))
-# A Ctrl-C that lands in a spawned task reaches its parent wrapped by `fetch`.
-caught(e::TaskFailedException, backtrace, interrupted) = caught(e.task.result, backtrace, interrupted)
+# rethrow keeps one InterruptException however many levels it passes.
+caught(::InterruptException, _, interrupted) = (interrupted(); rethrow())
+# A Ctrl-C that lands in a spawned task reaches its parent wrapped by `fetch`/`take!`.
+caught(e::TaskFailedException, backtrace, interrupted) = from_task(e.task.result, backtrace, interrupted)
+from_task(e::InterruptException, _, interrupted) = (interrupted(); throw(e))
+from_task(e, backtrace, interrupted) = caught(e, backtrace, interrupted)
 caught(e::TemplateError, _, _) = Outcome(false, StepFailure(:template, e.message))
 caught(e, backtrace, _) = Outcome(false, StepFailure(:exception, sprint(showerror, e);
                                                      detail=stack_text(backtrace)))

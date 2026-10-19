@@ -42,6 +42,7 @@ struct Runtime
     notes::Set{Symbol}                   # one-time messages already shown
     log_lock::ReentrantLock
     interrupted::Threads.Atomic{Bool}
+    result::Channel{Outcome}             # the root's outcome, or FAILED when the run is stopped
 end
 
 function Runtime(; verbose::Bool, planning::Bool, jobs::Integer, mem_mb::Integer, min_free_mb::Integer,
@@ -51,7 +52,7 @@ function Runtime(; verbose::Bool, planning::Bool, jobs::Integer, mem_mb::Integer
     pool = Pool(jobs, mem_mb, measures(link), latest_sample(link))
     Runtime(Threads.atomic_add!(RUN_IDS, 1) + 1, verbose, planning, pool, Watchdog(), link, min_free_mb, nice,
             ReentrantLock(), IdDict{Any,Claim}(), StepResult[], State(state_path), Set{String}(), Set{Symbol}(),
-            ReentrantLock(), Threads.Atomic{Bool}(false))
+            ReentrantLock(), Threads.Atomic{Bool}(false), Channel{Outcome}(Inf))
 end
 
 #==============================================================================#
@@ -85,6 +86,19 @@ function stop_run!(rt::Runtime, failure::StepFailure)
     with_lock(fail_claims!, rt.lock, rt.memo)
 end
 
+"""Let `run` return now (Ctrl-C): Julia code still running is abandoned, it cannot be stopped."""
+abandon_run!(rt::Runtime) = run_safely(Call(put!, (rt.result, FAILED)))    # closed once the root finished
+
+"""Whether the run was stopped (interrupted, guard lost) or has ended: start nothing more."""
+stopped(rt::Runtime) = rt.pool.refusal !== nothing
+
+"""Run the root node in its own task and return its outcome, or FAILED as soon as the run is stopped."""
+function run_root(root::AbstractNode, rt::Runtime, scope::Scope)
+    task = Threads.@spawn put!(rt.result, run_node(root, rt, scope, nothing))
+    bind(rt.result, task)               # a Ctrl-C inside the run reaches take! as an exception
+    take!(rt.result)
+end
+
 """Save the recipes of the steps that finished; the file is written outside the lock."""
 save_run_state!(rt::Runtime) = rt.planning || save_state(rt.state.path, with_lock(take_changes!, rt.lock, rt.state))
 
@@ -110,23 +124,31 @@ function run_node(node::AbstractNode, rt::Runtime, scope::Scope, input=nothing)
     settle(with_lock(claim!, rt.lock, rt.memo, key), node, rt, scope, input, key)
 end
 
-# The first visitor gets `nothing` and must execute; later ones get the result or wait.
-claim!(memo, key) = haskey(memo, key) ? memo[key] : (memo[key] = Channel{Outcome}(1); nothing)
+"""The first visitor of a key claims it and must execute; later ones get the result or wait."""
+struct Claimed
+    waiting::Channel{Outcome}
+end
+claim!(memo, key) = haskey(memo, key) ? memo[key] : Claimed(setindex!(memo, Channel{Outcome}(1), key)[key])
 
 settle(done::Outcome, _...) = done
 settle(running::Channel{Outcome}, _...) = fetch(running)
-function settle(::Nothing, node, rt::Runtime, scope::Scope, input, key)
+function settle(c::Claimed, node, rt::Runtime, scope::Scope, input, key)
     done = run_safely(Call(exec, (node, rt, scope, input)); interrupted=interrupt_all!)
     out = done.ok ? done.value : internal_error!(rt, done.value)
-    with_lock(publish!, rt.lock, rt.memo, key, out)
+    with_lock(publish!, rt.lock, rt.memo, key, c.waiting, out)
     out
 end
 
-publish!(memo, key, out::Outcome) = fill_claim!(memo[key], memo, key, out)
-fill_claim!(waiting::Channel{Outcome}, memo, key, out::Outcome) = (memo[key] = out; put!(waiting, out))
-fill_claim!(::Outcome, _, _, ::Outcome) = nothing     # already settled by stop_run!
+# The claim may already be settled (stop_run!) or forgotten (Retry): then only the
+# waiters of this claim, if not yet answered, get the outcome.
+function publish!(memo, key, waiting::Channel{Outcome}, out::Outcome)
+    get(memo, key, nothing) === waiting && (memo[key] = out)
+    isready(waiting) || put!(waiting, out)
+end
 
-fail_claims!(memo) = foreach(key -> fill_claim!(memo[key], memo, key, FAILED), collect(keys(memo)))
+fail_claims!(memo) = foreach(key -> fail_claim!(memo[key], memo, key), collect(keys(memo)))
+fail_claim!(waiting::Channel{Outcome}, memo, key) = publish!(memo, key, waiting, FAILED)
+fail_claim!(::Outcome, _, _) = nothing
 
 """Forget memoized failures so a Retry attempt runs them again."""
 forget_failures!(rt::Runtime) = (with_lock(filter!, rt.lock, live_claim, rt.memo); nothing)
@@ -149,8 +171,7 @@ node_failed!(rt::Runtime, name::Symbol, label::AbstractString, failure::StepFail
     (record!(rt, StepResult(marker_step(name), String(label), :failed, 0.0, failure)); FAILED)
 
 # An exception escaping `exec` is a bug in this package; report it instead of hanging.
-internal_error!(rt::Runtime, f::StepFailure) = node_failed!(rt, :pipeline, "internal error",
-    StepFailure(:exception, "internal error: " * f.message; detail=f.detail))
+internal_error!(rt::Runtime, f::StepFailure) = node_failed!(rt, :pipeline, "internal error", f)
 
 """True the first time `note` is asked for in this run (for messages shown once)."""
 first_note!(rt::Runtime, note::Symbol) = with_lock(add_new!, rt.lock, rt.notes, note)

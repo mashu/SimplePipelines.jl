@@ -111,13 +111,35 @@ confine(c::Base.ErrOrCmds, vars) = Base.ErrOrCmds(confine(c.a, vars), confine(c.
 confine(c::Base.AndCmds, vars) = Base.AndCmds(confine(c.a, vars), confine(c.b, vars))
 confine(c::Base.CmdRedirect, vars) = Base.CmdRedirect(confine(c.cmd, vars), c.handle, c.stream_no, c.readable)
 
-"""Thread variables a command sets itself to something other than the granted threads."""
-overridden(c::Base.AbstractCmd, threads::Int) =
-    filter(e -> first(split(e, '='; limit=2)) in THREAD_VARIABLES && last(split(e, '='; limit=2)) != string(threads),
-           own_environment(c))
+"""Thread variables a command sets itself (not inherited) to something other than the granted threads."""
+overridden(c::Base.AbstractCmd, threads::Int) = filter(e -> conflicting(split(e, '='; limit=2), threads), own_environment(c))
+conflicting(entry, threads::Int) = length(entry) == 2 && entry[1] in THREAD_VARIABLES &&
+    entry[2] != string(threads) && get(ENV, entry[1], nothing) != entry[2]
 own_environment(c::Cmd) = c.env === nothing ? String[] : c.env
 own_environment(c::Union{Base.OrCmds,Base.ErrOrCmds,Base.AndCmds}) = [own_environment(c.a); own_environment(c.b)]
 own_environment(c::Base.CmdRedirect) = own_environment(c.cmd)
+
+"""
+Why a command cannot start, checked before anything is spawned: a pipeline whose later
+program is missing would otherwise leave its earlier programs running unwatched.
+"""
+unstartable(c::Cmd) = isempty(c.exec) ? "the command is empty" :
+    !isempty(c.dir) && !isdir(c.dir) ? "its directory $(c.dir) does not exist" :
+    program_missing(first(c.exec), c) ? "`$(first(c.exec))` was not found; check the spelling and that it is installed and on PATH" :
+    nothing
+unstartable(c::Union{Base.OrCmds,Base.ErrOrCmds,Base.AndCmds}) = something(unstartable(c.a), unstartable(c.b), Some(nothing))
+unstartable(c::Base.CmdRedirect) = unstartable(c.cmd)
+
+# A command with its own PATH is not checked: we cannot know where it looks.
+program_missing(program::String, c::Cmd) =
+    occursin('/', program) ? !Sys.isexecutable(isempty(c.dir) ? program : joinpath(c.dir, program)) :
+    !own_path(c) && Sys.which(program) === nothing
+own_path(c::Cmd) = c.env !== nothing && any(e -> startswith(e, "PATH="), c.env)
+
+"""A spawn failure without the command's environment (which may hold secrets) in the message."""
+spawn_failure(f::StepFailure, cmd::Base.AbstractCmd) = StepFailure(:process_failed,
+    "could not start `$(shorten(command_text(cmd), 200))`: " * something(spawn_reason(f.message), f.message))
+spawn_reason(message::String) = (m = match(r"\): ([^():]+ \([A-Z]+\))$", message); m === nothing ? nothing : String(m[1]))
 
 """
 Start `cmd` and remember its leaders' sessions before anything can interrupt us: the
@@ -144,24 +166,46 @@ leader_pids(::StepFailure) = Int32[]
 
 """Run a command to completion: Outcome(true, stdout), Outcome(false, StepFailure) or Evicted."""
 function run_command(cmd::Base.AbstractCmd, l::Launch)
+    problem = unstartable(cmd)
+    problem === nothing || return Outcome(false, StepFailure(:process_failed, "could not start the command: " * problem))
     rt, id = l.rt, l.grant.id
     conflicts = overridden(cmd, l.need.threads)
     isempty(conflicts) || log_thread_override(rt, l.label, conflicts, l.need.threads)
+    line = step_line(id, rt.id, l.need, remaining_ms(l.watchdog), l.label)
     out, err = Pipe(), Pipe()
     spawned, sids = spawn_leaders(confine(cmd, thread_variables(l.need.threads)), out, err, id)
-    spawned.ok || (close(out); close(err); return spawned)
+    spawned.ok || (close(out); close(err); return Outcome(false, spawn_failure(spawned.value, cmd)))
     close(out.in)
     close(err.in)
-    register!(rt.link, l.grant, rt.id, l.need, remaining_ms(l.watchdog), l.label, sids)
+    register!(rt.link, id, line, sids)
     watch!(l.watchdog, id) && terminate!(rt.link, id, :node_timeout)
     stdout_task = @async read_capped(out, STDOUT_LIMIT, () -> terminate!(rt.link, id, :stdout))
     stderr_task = @async read_tail(err, STDERR_TAIL)
-    wait(spawned.value)
-    gone = finish_step!(rt.link, id)        # returns once no process of the command is left
+    gone = finish_step!(rt.link, id, spawned.value)     # once no process of the command is left
     unwatch!(l.watchdog, id)
     measures(rt.link) && (l.grant.peak_mb = gone.peak_mb)
-    command_outcome(spawned.value, gone, fetch(stdout_task), fetch(stderr_task), l)
+    held = !drained(stdout_task, stderr_task, out, err)
+    outcome = command_outcome(spawned.value, gone, fetch(stdout_task), fetch(stderr_task), l)
+    held ? output_held(outcome) : outcome
 end
+
+"""
+Whether the output readers finished on their own. Every process of the step is gone, so
+a writer still holding the pipes escaped the step (a daemon); stop reading after a
+moment instead of waiting for it.
+"""
+function drained(stdout_task::Task, stderr_task::Task, out::Pipe, err::Pipe)
+    finished() = istaskdone(stdout_task) && istaskdone(stderr_task)
+    timedwait(finished, 1.0; pollint=0.01) === :ok && return true
+    close(out)
+    close(err)
+    false
+end
+
+output_held(out::Outcome) = out.ok ? Outcome(false, StepFailure(:process_failed,
+    "a process that left the step (a daemon) still holds its output open; redirect its output to a file " *
+    "(`cmd > log 2>&1 &`), or better, do not leave processes running")) : out
+output_held(e::Evicted) = e
 
 function read_capped(io::IO, limit::Int, on_overflow)
     buf = IOBuffer()
@@ -217,7 +261,8 @@ ended(::Val{:stdout}, p, gone, out, err, l) = failed(:stdout_limit,
     "(`cmd > out.txt`) and declare it as an output", err)
 ended(::Val{:leftover}, p, gone, out, err, l) = success(p) ? failed(:process_failed,
     "the command finished but left background processes running ($(gone.detail)); they were terminated. " *
-    "End the script with `wait`, or start them with `setsid` if they must outlive the step", err) :
+    "End the script with `wait`; an output process substitution `>(...)` cannot be waited for, so write to " *
+    "a file and process it in a following command", err) :
     Outcome(false, exit_failure(p, gone, err, l))
 ended(::Val{:unkillable}, p, gone, out, err, l) =
     failed(:process_failed, "could not be terminated: $(gone.detail) is stuck in uninterruptible I/O", err)

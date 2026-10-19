@@ -18,14 +18,17 @@ the pipeline started if Julia is interrupted or dies. There is nothing to set up
   `MKL_NUM_THREADS`, `RAYON_NUM_THREADS`, `JULIA_NUM_THREADS`, `GOMAXPROCS` and
   similar variables set to it, so multithreaded libraries do not start one thread
   per core in every step. These variables are advice that a tool may ignore; pass
-  `{threads}` to tools that take a thread flag.
-- `mem_mb`: the step's memory limit in MiB. The step starts only when that much
-  memory is free, and it is terminated if its processes use more (`:memory_limit`).
+  `{threads}` to tools that take a thread flag. `nproc` follows `OMP_NUM_THREADS`, so
+  `$(nproc)` in a script equals the step's `threads`.
+- `mem_mb`: the step's memory limit in MiB. The step starts when that much fits in the
+  free memory not promised to running steps (or alone, when nothing else runs and
+  memory is not low), and it is terminated if its processes use more (`:memory_limit`).
   `{mem_mb}` in the template is the same number. Give the tool about 80% of it,
   because tools need memory beyond their own setting, and per-thread settings
   multiply: `samtools sort -@ 4 -m 1500M` may use 4 × 1500 MiB.
-- `timeout`: seconds. A step still running after that long is terminated
-  (`:timed_out`).
+- `timeout`: seconds. A command still running after that long is terminated
+  (`:timed_out`). Julia functions cannot be stopped: wrap such a step in a
+  [`Timeout`](@ref) to stop waiting for it (it is abandoned and its resources freed).
 
 [`with_resources`](@ref)`(node; threads, mem_mb, timeout)` sets defaults for every
 step inside `node` that does not declare its own.
@@ -37,7 +40,7 @@ step inside `node` that does not declare its own.
 | a command uses more memory than its `mem_mb` | terminated within a fraction of a second; the step fails with `:memory_limit` |
 | a command runs longer than its `timeout` | SIGTERM, then SIGKILL 5 s later; the step fails with `:timed_out` |
 | a [`Timeout`](@ref) node expires | its commands are terminated; its steps that have not started never start |
-| free memory gets low | new steps wait (`⏸ waiting for memory`) |
+| free memory gets low | new steps wait (`⏸ waiting for memory`); if it stays low for 120 s while nothing of the pipeline runs, the waiting steps fail with `:out_of_memory` instead of waiting forever |
 | free memory keeps falling | the pipeline's own commands are stopped, those using more than they declared first, and queued again when memory is free (`↺`); a step that does not fit even when it runs alone fails with `:out_of_memory` |
 | other programs use the memory | nothing is stopped; the run waits and says so |
 | a step leaves background processes running | they are terminated and the step fails |
@@ -70,7 +73,7 @@ run(pipeline; jobs=16, mem_mb=64_000, min_free_mb=0, nice=10, guard=true)
 | `mem_mb` | 80% of the memory this process may use | budget for the steps running at once, in MiB (0: none); a step's `mem_mb` above it is lowered to it |
 | `min_free_mb` | automatic: 5% of memory, between 256 and 2048 MiB | memory to keep free: below twice this new steps wait, below it commands are stopped |
 | `nice` | `10` | priority of commands (0–19), so the computer stays responsive |
-| `guard` | `true` | `false` runs without the guard: no memory limits, timeouts or cleanup |
+| `guard` | `true` (`false` on Windows) | `false` runs without the guard: no memory limits, step timeouts or memory-pressure handling, and no cleanup if Julia is killed; `Timeout` nodes and the cleanup at the end of each step still work |
 
 The CPU and memory defaults follow the process's CPU affinity and cgroup limits, so
 `jobs` and `mem_mb` are right inside containers and cluster jobs.
@@ -104,22 +107,35 @@ step runs it.
   fails instead of hanging.
 - Commands run at `nice` 10 and are the system's preferred victims if it runs out of
   memory despite everything, so Julia and your desktop survive.
+- An output process substitution such as `tee >(sort > x)` is not waited for by bash,
+  so a still running `sort` counts as a leftover. Write to a file and process it in a
+  following command instead.
+- A process that must outlive the step does not belong in a pipeline step. One that
+  escapes anyway (below) must not keep the step's output open: the step then fails
+  instead of hanging.
 
 ## Limits
 
 - **Linux** has every guarantee above. On **macOS** timeouts, cleanup and Ctrl-C
-  work, but memory is not measured. On **Windows** only `guard=false` is supported.
+  work, but memory is not measured. On **Windows** the guard is not available: runs
+  say so and work without it.
 - Memory is sampled every 0.5 s (0.1 s near a limit), so a command that allocates
   very fast can overshoot briefly. If the system runs out of memory in that moment,
   its out-of-memory killer picks the command, which fails with `:out_of_memory`.
-- A program that turns itself into a daemon (a new session and a double fork in less
-  than a sampling interval) escapes the guard.
+- A process escapes the guard when it leaves the step's session and its parent exits
+  within one sampling interval, for example a command `setsid -f cmd` or a daemon that
+  double-forks. `setsid -w cmd` is tracked.
+- Containers started through a daemon (`docker run`, `podman run` with a service) run
+  outside the step's processes: they get no memory limit and are not cleaned up. Use
+  `apptainer`/`singularity`, which run as child processes, or give the container its
+  own limit (`docker run --rm --init --memory={mem_mb}m ...`).
 - Files written to memory-backed filesystems such as `/dev/shm` count as used memory
   but belong to no step.
 - Several `run`s at the same time in one Julia session share the guard but not
   their budgets.
-- The guard uses about 110 MiB and starts in about 0.3 s, once per Julia session. It
-  stops with Julia.
+- The guard is one small Julia process per Julia session: it starts in about 0.4 s
+  with the first `run`, uses about 120 MiB of its own memory (about 210 MB resident,
+  most of it shared with Julia's libraries), and stops with Julia.
 
 ## Failures
 

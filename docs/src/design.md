@@ -97,10 +97,13 @@ cannot be reaped before it is registered, and Ctrl-C is deferred meanwhile.
 
 Enforcement cannot live in the Julia process that runs the pipeline: a busy function
 step, the garbage collector or a single thread would delay it, and processes would
-outlive Julia when it is killed. The guard is a separate Julia process (`-O0`, one
-thread), one per Julia session, started by the first `run`. It shares the session's
-process group, so Ctrl-C and SIGTERM reach it; it ignores SIGHUP and kills everything
-when its stdin closes, which is how it notices that Julia died.
+outlive Julia when it is killed. The guard is a separate Julia process (one thread),
+one per Julia session, started by the first `run`. It runs this package's precompiled
+code (`using SimplePipelines; guard_main()`, about 0.4 s); while the package is being
+precompiled or its cache is stale it compiles `guard.jl` itself at `-O0` instead. It
+shares the session's process group, so Ctrl-C reaches it; it ignores SIGHUP and (on
+Linux) SIGTERM, and kills everything when its stdin closes, which is how it notices
+that Julia died. All its tasks defer Ctrl-C, which it handles between ticks.
 
 The driver writes one line per event (`run`, `step`, `sess`, `done`, `term`,
 `endrun`) and a reader task handles the guard's lines (`ready`, `sample`, `gone`,
@@ -148,7 +151,8 @@ produce its inputs).
 
 ## Latency
 
-The package loads in about 0.2 s, and a first `run` adds about 0.1 s.
+The package loads in about 0.2 s. A first `run` adds about 0.5 s, most of it starting
+the guard; later runs add about 20 ms.
 
 - Node, result and outcome types are not parametric, and the runtime files are
   compiled with `@nospecialize`. User functions and values come in endless types;
