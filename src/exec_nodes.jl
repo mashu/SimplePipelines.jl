@@ -99,11 +99,14 @@ end
 
 """The node's (false, outcome), or (true, FAILED) after `seconds`, when `on_expiry` runs first."""
 function wait_first(first_done::Channel{Tuple{Bool,Outcome}}, seconds::Float64, on_expiry)
-    timer = Timer(_ -> (on_expiry(); run_safely(Call(put!, (first_done, (true, FAILED))))), seconds)
+    timer = Timer(_ -> run_safely(Call(expiry!, (on_expiry, first_done)); interrupted=interrupt_all!), seconds)
     first = take!(first_done)
     close(timer)
     first
 end
+
+expiry!(on_expiry, first_done::Channel{Tuple{Bool,Outcome}}) =
+    (on_expiry(); run_safely(Call(put!, (first_done, (true, FAILED)))))     # closed if the node finished first
 
 """Terminate the commands running under `w` and refuse the steps waiting under it."""
 function expire!(w::Watchdog, rt::Runtime)

@@ -147,13 +147,13 @@ function start_guard(o::GuardOptions)
     errors = Pipe()
     process = open(pipeline(guard_command(o); stderr=errors), "r+")
     close(errors.in)
-    tail = @async read_tail(errors, GUARD_STDERR_TAIL)
+    tail = @async run_safely(Call(read_tail, (errors, GUARD_STDERR_TAIL)); interrupted=interrupt_all!)
     hello, first_sample = first_lines(process)
     words = split(hello, ' ')
     if words[1] != "ready" || isempty(first_sample)
         kill(process, Base.SIGKILL)
         reason = isempty(hello) && process_running(process) ? "no answer within $(round(Int, GUARD_WAIT)) s" :
-                 "it exited: " * strip(fetch(tail))
+                 "it exited: " * stderr_tail(tail)
         error("could not start the resource guard ($reason). SimplePipelines does not run commands without ",
               "memory protection; pass guard=false to run without it (no memory limits, timeouts or cleanup).")
     end
@@ -162,6 +162,8 @@ function start_guard(o::GuardOptions)
     Threads.@spawn :interactive watch_guard(link)
     link
 end
+
+stderr_tail(reader::Task) = (read = fetch(reader); read.ok ? String(strip(read.value)) : "")
 
 """The `ready` line and the first `sample`, or empty strings after GUARD_WAIT seconds or EOF."""
 function first_lines(process::Base.Process)
@@ -238,15 +240,19 @@ Wait until the guard reports the command gone: once its leaders have exited (we 
 send `done`) and no process of it is left; leftovers are terminated first. A command
 stuck in uninterruptible I/O is reported without waiting for its leaders.
 """
-function finish_step!(link::GuardLink, id::Int, process::Base.AbstractPipe)
+function finish_step!(link::GuardLink, id::Int, procs::Vector{Base.Process})
     reply = with_lock(get, link.lock, link.replies, id, Channel{Gone}(1))
-    @async (wait(process); send!(link, "done $id\n"))
+    @async run_safely(Call(leaders_exited, (link, id, procs)); interrupted=interrupt_all!)
     gone = await_gone(link, reply)
     gone.kind === :lost && guard_lost!(link, "it did not answer for $(round(Int, GUARD_WAIT)) s")
     with_lock(delete!, link.lock, link.replies, id)
     forget_sessions!(id)
     gone.kind === :lost ? Gone(:stopped) : gone
 end
+
+# A Ctrl-C that lands in any task of ours stops the runs (interrupt_all!) instead of
+# ending that task silently, which would leave others waiting for it.
+leaders_exited(link::GuardLink, id::Int, procs::Vector{Base.Process}) = (foreach(wait, procs); send!(link, "done $id\n"))
 
 """
 The guard's reply. Its samples, every tick, are its heartbeat: it counts as lost only
@@ -255,17 +261,17 @@ reading) does not count against it.
 """
 function await_gone(link::GuardLink, reply::Channel{Gone})
     while true
-        timer = Timer(_ -> put!(reply, Gone(:check)), GUARD_WAIT)
+        timer = Timer(_ -> run_safely(Call(put!, (reply, Gone(:check))); interrupted=interrupt_all!), GUARD_WAIT)
         gone = take!(reply)
         close(timer)
         gone.kind === :check || return gone
         yield()                                     # a starved reader catches up first
-        process_exited(link.process) || time() - (@atomic link.heard) >= GUARD_WAIT && return Gone(:lost)
+        (process_exited(link.process) || time() - (@atomic link.heard) >= GUARD_WAIT) && return Gone(:lost)
     end
 end
 
-function finish_step!(::NoGuard, id::Int, process::Base.AbstractPipe)
-    wait(process)
+function finish_step!(::NoGuard, id::Int, procs::Vector{Base.Process})
+    foreach(wait, procs)
     kill_all!(forget_sessions!(id))                 # nothing the step started outlives it
     Gone(with_lock(pop!, SESSIONS_LOCK, TERMINATED, id, :none))
 end
@@ -345,7 +351,7 @@ function guard_lost!(link::GuardLink, reason::String)
     kill(link.process, Base.SIGKILL)
     ids = with_lock(collect ∘ keys, link.lock, link.replies)
     kill_all!(reduce(vcat, map(forget_sessions!, ids); init=Int32[]))
-    tail = strip(fetch(link.errors))
+    tail = stderr_tail(link.errors)
     failure = StepFailure(:stopped, "stopped: the resource guard exited unexpectedly")
     for rt in active_runs()
         rt.link === link || continue

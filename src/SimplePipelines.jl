@@ -62,8 +62,10 @@ function precompile_guard(g::G) where {G<:GuardState}
     compile_guard(g)
     foreach(f -> precompile(f, (G,)), (run_guard, serve!, read_commands!))
 end
-precompile(guard_main, ())
-precompile_guard(GuardState(Sys.islinux() ? ProcfsBackend() : GroupBackend(), memory_source(""), GUARD_TICK))
+if GUARD_SUPPORTED
+    precompile(guard_main, ())
+    precompile_guard(GuardState(Sys.islinux() ? ProcfsBackend() : GroupBackend(), memory_source(""), GUARD_TICK))
+end
 # Interrupt and shutdown paths run while Julia may be exiting: nothing there should compile.
 foreach(f -> precompile(f, ()), (interrupt_all!, kill_at_exit, take_all_sessions!))
 precompile(kill_all!, (Vector{Int32},))

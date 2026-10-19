@@ -42,6 +42,14 @@ SP.restart_guard!(; interval=0.05)
         r = quiet(Step(:typo, pipeline(`sleep 316`, `nonexistent_tool_xyz`)))
         @test r[1].result.kind === :process_failed && occursin("nonexistent_tool_xyz` was not found", r[1].result.message)
         @test !occursin("THREADS", r[1].result.message) && !alive("sleep 316")
+        # a later program that exists but cannot be executed (no #! line) leaves nothing running
+        write("noshebang.sh", "sleep 1\n"); chmod("noshebang.sh", 0o755)
+        r = quiet(Step(:noexec, pipeline(`sleep 317`, Cmd(["./noshebang.sh"]))))
+        @test r[1].result.kind === :process_failed && occursin("could not be executed", r[1].result.message)
+        @test !occursin("THREADS", r[1].result.message) && !alive("sleep 317")
+        # a command may redirect its own output
+        r = quiet(Step(:redirect, pipeline(`echo hi`; stdout="redirected.txt")))
+        @test r.success && read("redirected.txt", String) == "hi\n"
         # without the guard, steps still run (and the run says what is not enforced), and
         # the end of a step still cleans up, including children in their own process group
         r, text = logged(() -> run(sh"echo free"; guard=false))

@@ -120,8 +120,8 @@ own_environment(c::Union{Base.OrCmds,Base.ErrOrCmds,Base.AndCmds}) = [own_enviro
 own_environment(c::Base.CmdRedirect) = own_environment(c.cmd)
 
 """
-Why a command cannot start, checked before anything is spawned: a pipeline whose later
-program is missing would otherwise leave its earlier programs running unwatched.
+Why a command cannot start (a missing program or directory), checked before anything is
+spawned, for a clear message.
 """
 unstartable(c::Cmd) = isempty(c.exec) ? "the command is empty" :
     !isempty(c.dir) && !isdir(c.dir) ? "its directory $(c.dir) does not exist" :
@@ -136,33 +136,72 @@ program_missing(program::String, c::Cmd) =
     !own_path(c) && Sys.which(program) === nothing
 own_path(c::Cmd) = c.env !== nothing && any(e -> startswith(e, "PATH="), c.env)
 
-"""A spawn failure without the command's environment (which may hold secrets) in the message."""
+"""A spawn failure, without the command's environment (which may hold secrets) in the message."""
 spawn_failure(f::StepFailure, cmd::Base.AbstractCmd) = StepFailure(:process_failed,
-    "could not start `$(shorten(command_text(cmd), 200))`: " * something(spawn_reason(f.message), f.message))
+    "could not start `$(shorten(command_text(cmd), 200))`: " * something(spawn_reason(f.message),
+        "it could not be executed (a script without a #! line, or a program built for another system?)"))
 spawn_reason(message::String) = (m = match(r"\): ([^():]+ \([A-Z]+\))$", message); m === nothing ? nothing : String(m[1]))
 
 """
 Start `cmd` and remember its leaders' sessions before anything can interrupt us: the
 iolock keeps the exit callback from clearing a fast command's handle before its pid is
-read, and deferring Ctrl-C keeps an interrupt from leaving the iolock held.
+read, and deferring Ctrl-C keeps an interrupt from leaving the iolock held. When a later
+leaf of a pipeline cannot start, the leaves already started are killed.
 """
 function spawn_leaders(cmd::Base.AbstractCmd, out::Pipe, err::Pipe, id::Int)
+    started, links = Base.Process[], RawFD[]
     Base.sigatomic_begin()
     Base.iolock_begin()
-    spawned = run_safely(Call(start_process, (cmd, out, err)))
-    sids = leader_pids(spawned.value)
+    spawned = run_safely(Call(GUARD_SUPPORTED ? start_leaves! : start_whole!, (started, links, cmd, devnull, out, err)))
+    sids = reduce(vcat, map(leader_pids, started); init=Int32[])
     Base.iolock_end()
     remember_sessions!(id, sids)
     Base.sigatomic_end()
-    spawned, sids
+    foreach(close_fd, links)
+    spawned.ok || kill_all!(forget_sessions!(id))
+    spawned, started, sids
 end
 
-start_process(cmd::Base.AbstractCmd, out::Pipe, err::Pipe) =
-    run(pipeline(cmd; stdin=devnull, stdout=out, stderr=err); wait=false)
+"""
+Start the leaves of a command one at a time, each in the list before the next starts
+(Base starts a whole pipeline at once and loses the started part when a later leaf fails).
+Leaves are joined by blocking, close-on-exec pipes, closed here once both ends are given.
+"""
+start_leaves!(started, links, c::Cmd, in, out, err) =
+    (push!(started, run(pipeline(c; stdin=in, stdout=out, stderr=err); wait=false)); nothing)
+function start_leaves!(started, links, c::Base.OrCmds, in, out, err)
+    r, w = leaf_pipe!(links)
+    start_leaves!(started, links, c.a, in, w, err)
+    start_leaves!(started, links, c.b, r, out, err)
+end
+function start_leaves!(started, links, c::Base.ErrOrCmds, in, out, err)
+    r, w = leaf_pipe!(links)
+    start_leaves!(started, links, c.a, in, out, w)
+    start_leaves!(started, links, c.b, r, out, err)
+end
+start_leaves!(started, links, c::Base.AndCmds, in, out, err) =
+    (start_leaves!(started, links, c.a, in, out, err); start_leaves!(started, links, c.b, in, out, err))
+start_leaves!(started, links, c::Base.CmdRedirect, in, out, err) =
+    redirected!(started, links, c, Val(c.stream_no), in, out, err)
+redirected!(started, links, c, ::Val{0}, in, out, err) = start_leaves!(started, links, c.cmd, c.handle, out, err)
+redirected!(started, links, c, ::Val{1}, in, out, err) = start_leaves!(started, links, c.cmd, in, c.handle, err)
+redirected!(started, links, c, ::Val{2}, in, out, err) = start_leaves!(started, links, c.cmd, in, out, c.handle)
+redirected!(_, _, c, ::Val, _, _, _) = throw(ArgumentError("cannot redirect file descriptor $(c.stream_no) of a step's command"))
+
+# Windows (no guard, no sessions): Base starts the whole command.
+start_whole!(started, _, cmd, in, out, err) = add_processes!(started, run(pipeline(cmd; stdin=in, stdout=out, stderr=err); wait=false))
+add_processes!(started, p::Base.Process) = (push!(started, p); nothing)
+add_processes!(started, c::Base.ProcessChain) = (append!(started, c.processes); nothing)
+
+function leaf_pipe!(links::Vector{RawFD})
+    fds = Cint[-1, -1]
+    ccall(:uv_pipe, Cint, (Ptr{Cint}, Cint, Cint), fds, 0, 0) == 0 || error("could not create a pipe")
+    push!(links, RawFD(fds[1]), RawFD(fds[2]))
+    RawFD(fds[1]), RawFD(fds[2])
+end
+close_fd(fd::RawFD) = (ccall(:close, Cint, (RawFD,), fd); nothing)
 
 leader_pids(p::Base.Process) = p.handle == C_NULL ? Int32[] : Int32[ccall(:jl_uv_process_pid, Int32, (Ptr{Cvoid},), p.handle)]
-leader_pids(c::Base.ProcessChain) = reduce(vcat, map(leader_pids, c.processes); init=Int32[])
-leader_pids(::StepFailure) = Int32[]
 
 """Run a command to completion: Outcome(true, stdout), Outcome(false, StepFailure) or Evicted."""
 function run_command(cmd::Base.AbstractCmd, l::Launch)
@@ -172,8 +211,8 @@ function run_command(cmd::Base.AbstractCmd, l::Launch)
     conflicts = overridden(cmd, l.need.threads)
     isempty(conflicts) || log_thread_override(rt, l.label, conflicts, l.need.threads)
     line = step_line(id, rt.id, l.need, remaining_ms(l.watchdog), l.label)
-    out, err = Pipe(), Pipe()
-    spawned, sids = spawn_leaders(confine(cmd, thread_variables(l.need.threads)), out, err, id)
+    out, err = capture_pipe(), capture_pipe()
+    spawned, procs, sids = spawn_leaders(confine(cmd, thread_variables(l.need.threads)), out, err, id)
     spawned.ok || (close(out); close(err); return Outcome(false, spawn_failure(spawned.value, cmd)))
     close(out.in)
     close(err.in)
@@ -181,13 +220,16 @@ function run_command(cmd::Base.AbstractCmd, l::Launch)
     watch!(l.watchdog, id) && terminate!(rt.link, id, :node_timeout)
     stdout_task = @async read_capped(out, STDOUT_LIMIT, () -> terminate!(rt.link, id, :stdout))
     stderr_task = @async read_tail(err, STDERR_TAIL)
-    gone = finish_step!(rt.link, id, spawned.value)     # once no process of the command is left
+    gone = finish_step!(rt.link, id, procs)             # once no process of the command is left
     unwatch!(l.watchdog, id)
     measures(rt.link) && (l.grant.peak_mb = gone.peak_mb)
     held = !drained(stdout_task, stderr_task, out, err)
-    outcome = command_outcome(spawned.value, gone, fetch(stdout_task), fetch(stderr_task), l)
+    outcome = command_outcome(procs, gone, fetch(stdout_task), fetch(stderr_task), l)
     held ? output_held(outcome) : outcome
 end
+
+"""A pipe for a command's output, ready before any leaf starts (a leaf may redirect elsewhere)."""
+capture_pipe() = (p = Pipe(); Base.link_pipe!(p; reader_supports_async=true, writer_supports_async=false); p)
 
 """
 Whether the output readers finished on their own. Every process of the step is gone, so
@@ -240,7 +282,8 @@ end
 # How a command ended
 #==============================================================================#
 
-command_outcome(p, gone::Gone, out::Vector{UInt8}, err::String, l::Launch) = ended(Val(gone.kind), p, gone, out, err, l)
+command_outcome(p::Vector{Base.Process}, gone::Gone, out::Vector{UInt8}, err::String, l::Launch) =
+    ended(Val(gone.kind), p, gone, out, err, l)
 
 failed(kind::Symbol, message::AbstractString, err::String) = Outcome(false, StepFailure(kind, message; detail=err))
 
@@ -293,9 +336,9 @@ function exit_failure(p, gone::Gone, err::String, l::Launch)
 end
 
 exit_status(p::Base.Process) = (Int(p.termsignal), Int(p.exitcode))
-function exit_status(c::Base.ProcessChain)
-    i = findfirst(!success, c.processes)
-    i === nothing ? (0, 1) : exit_status(c.processes[i])
+function exit_status(procs::Vector{Base.Process})
+    i = findfirst(!success, procs)
+    i === nothing ? (0, 1) : exit_status(procs[i])
 end
 
 """Remove declared output files written by a failed attempt, so they never look up to date."""
