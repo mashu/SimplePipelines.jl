@@ -565,6 +565,10 @@ const STUBBORN = `sh -c 'trap "" TERM; while :; do sleep 0.1; done'`
             @test GD.process_pss_kb(buf, getpid()) > 1000
             @test GD.process_comm(buf, getpid()) == "julia"
             @test GD.process_usage_kb(buf, typemax(Int32)) == 0
+            # steps get Julia's OOM score raised by 500, at most 1000; unreadable counts as 0
+            own = parse(Int, read("/proc/self/oom_score_adj", String))
+            @test GD.step_oom_adj(Int32(getpid())) == string(min(1000, own + 500))
+            @test GD.step_oom_adj(typemax(Int32)) == "500"
         end
 
         @testset "kill_sessions!: orphans in sessions that descendants created" begin

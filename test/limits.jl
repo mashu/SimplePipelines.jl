@@ -5,14 +5,16 @@
 alive(cmdline) = success(pipeline(`pgrep -x -f $cmdline`; stdout=devnull))
 
 """Wait until the guard tracks the processes running `cmdline`: on Linux it raises the OOM score
-of every process it tracks. A command is registered just after it starts, which takes long
-while the driver still compiles (coverage runs); elsewhere wait a moment."""
+of every process it tracks above Julia's (`step_oom_adj`), which they inherit. A command is
+registered just after it starts, which takes long while the driver still compiles (coverage
+runs); elsewhere, or when Julia's score is already the highest, wait a moment."""
 function tracked(cmdline)
-    Sys.islinux() || return (sleep(0.3); true)
-    adj(pid) = (path = "/proc/$pid/oom_score_adj"; isfile(path) ? strip(read(path, String)) : "")
+    adj(pid) = (path = "/proc/$pid/oom_score_adj"; isfile(path) ? parse(Int, read(path, String)) : 1000)
+    raised = min(1000, adj("self") + 500)
+    Sys.islinux() && raised > adj("self") || return (sleep(0.3); true)
     timedwait(30) do
         pids = readlines(ignorestatus(`pgrep -x -f $cmdline`))
-        !isempty(pids) && all(pid -> adj(pid) == "500", pids)
+        !isempty(pids) && all(pid -> adj(pid) == raised, pids)
     end === :ok
 end
 
