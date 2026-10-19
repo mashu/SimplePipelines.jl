@@ -27,7 +27,7 @@ const SIGNAL_POLL = 0.1             # longest wait between two checks for Ctrl-C
 const UNKILLABLE_AFTER = 10.0       # seconds after the first SIGKILL
 const EXIT_GRACE = 1.0              # Ctrl-C: SIGTERM, wait this long, SIGKILL
 const FATAL_SIGNAL_EXIT = 128       # the exit code Julia gives atexit hooks after a fatal signal
-const OOM_SCORE_ADJ = "500"         # the kernel OOM killer then prefers a step to Julia
+const OOM_SCORE_RAISE = 500         # added to Julia's oom_score_adj for steps: the OOM killer prefers them
 const MAX_NICE = 19
 const PRIO_PGRP = 1
 const SIGNAL_HUP = 1
@@ -143,6 +143,7 @@ mutable struct GuardState{B,M}
     const pid::Int32
     const driver::Int32
     const autogroup::Bool
+    const oom_adj::String              # written to the oom_score_adj of every member
     const steps::Dict{Int,GuardStep}
     const by_sid::Dict{Int32,Int}      # sessions of the leaders the driver started
     const adopted_sids::Dict{Int32,Int}   # sessions that members started with setsid
@@ -174,12 +175,23 @@ mutable struct GuardState{B,M}
     finished::Bool                     # every process has been killed; atexit has nothing to do
 end
 
-GuardState(backend, memory, interval::Float64) =
-    GuardState(backend, memory, interval, Int32(getpid()), Int32(ccall(:getppid, Cint, ())), autogroup_enabled(),
+function GuardState(backend, memory, interval::Float64)
+    driver = Int32(ccall(:getppid, Cint, ()))
+    GuardState(backend, memory, interval, Int32(getpid()), driver, autogroup_enabled(), step_oom_adj(driver),
                Dict{Int,GuardStep}(), Dict{Int32,Int}(), Dict{Int32,Int}(), Dict{Int,GuardRun}(), Set{Int}(),
                ProcInfo[], String[], Set{Int32}(), Vector{UInt8}(undef, 8192), Tuple{Float64,Int,Int}[], UInt8[],
                Dict{Int32,Owner}(), Dict{Int32,Owner}(), MemorySample(0, 0, -1.0),
                0, 0, :ok, false, false, false, 0, 0, 0.0, 0.0, -Inf, -Inf, 0, false, false)
+end
+
+"""The oom_score_adj of step processes: the driver's raised by OOM_SCORE_RAISE (at most 1000), so the
+kernel OOM killer prefers a step to Julia also where Julia's own score is raised (CI runners,
+containers, systemd units)."""
+function step_oom_adj(driver::Int32)
+    buf = Vector{UInt8}(undef, 16)
+    n = read_file!(buf, string("/proc/", driver, "/oom_score_adj"))
+    string(min(1000, (n > 0 ? parse_int(buf, 1, n)[1] : 0) + OOM_SCORE_RAISE))
+end
 
 function autogroup_enabled()
     Sys.islinux() || return false
@@ -419,7 +431,7 @@ function add_member!(g::GuardState, s::GuardStep, p::ProcInfo)
     p.state == UInt8('D') && push!(s.stuck, p.pid)
     s.usage_kb += process_usage_kb(g.buf, p.pid)
     if !(p.pid in s.raised)
-        write_file(string("/proc/", p.pid, "/oom_score_adj"), OOM_SCORE_ADJ)   # may fail; harmless
+        write_file(string("/proc/", p.pid, "/oom_score_adj"), g.oom_adj)   # may fail; harmless
         push!(s.raised, p.pid)
     end
 end
