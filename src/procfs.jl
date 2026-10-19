@@ -659,31 +659,43 @@ end
 session, process group or pid (a stale or bogus id must not take down the caller or its shell)."""
 foreign_session(sid::Integer) = sid > 1 && sid != getpid() && sid != own_pgrp() && sid != own_sid()
 
+const KILL_ROUNDS = 5
+
 """SIGKILL every process of the sessions `sids`: each session's group, and on Linux every member
 found in /proc with its descendants, the sessions that setsid'd descendants lead, and all of their
-process groups. Sessions that are not foreign are skipped. Never throws; used by the driver's
-atexit and guard-lost paths."""
+process groups. /proc is scanned again until a scan finds no process it has not killed yet: a
+member that moved to a group of its own and forked between a scan and the kill keeps its session,
+so the next scan finds the child. Sessions that are not foreign are skipped. Never throws; used by
+the driver wherever it kills commands itself (step end without the guard, Ctrl-C, a lost guard,
+exit)."""
 function kill_sessions!(sids::AbstractVector{Int32})
     Sys.iswindows() && return nothing
-    targets = filter(foreign_session, sids)
-    # Found before anything is killed: a killed parent's children are reparented, and lost.
-    doomed = Sys.islinux() ? session_processes(targets) : ProcInfo[]
-    for sid in targets
-        send_signal(-Int(sid), SIGNAL_KILL)     # needs no file descriptor, unlike the scan
-    end
-    for p in doomed
-        send_signal(p.pid, SIGNAL_KILL)
-        send_signal(-Int(p.pgrp), SIGNAL_KILL)
+    sessions = Set{Int32}(filter(foreign_session, sids))
+    isempty(sessions) && return nothing
+    killed = Set{Tuple{Int32,Int}}()
+    for round in 1:KILL_ROUNDS
+        # Found before anything is killed: a killed parent's children are reparented, and lost.
+        doomed = Sys.islinux() ? session_processes!(sessions) : ProcInfo[]
+        round == 1 && foreach(sid -> send_signal(-Int(sid), SIGNAL_KILL), sessions)   # needs no file descriptor, unlike the scan
+        fresh = false
+        for p in doomed
+            (p.pid, p.starttime) in killed && continue
+            push!(killed, (p.pid, p.starttime))
+            send_signal(p.pid, SIGNAL_KILL)
+            send_signal(-Int(p.pgrp), SIGNAL_KILL)
+            fresh = true
+        end
+        fresh || break
     end
     nothing
 end
 
-"""The processes of the sessions `sids` with their descendants and everything in the sessions
-those lead, from one scan of /proc (none when /proc cannot be listed)."""
-function session_processes(sids::Vector{Int32})
+"""The processes of the sessions `sessions` with their descendants and everything in the sessions
+those lead, from one scan of /proc (none when /proc cannot be listed). Adds the sessions found to
+`sessions`."""
+function session_processes!(sessions::Set{Int32})
     procs = ProcInfo[]
     scan_processes!(procs, Vector{UInt8}(undef, 4096), String[]) || return procs
-    sessions = Set{Int32}(sids)
     doomed = Set{Int32}()
     grown = true
     while grown

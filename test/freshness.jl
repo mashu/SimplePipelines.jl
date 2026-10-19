@@ -23,7 +23,7 @@ end
 
 @testset "steps without outputs always run" begin
     in_tempdir() do _
-        # regression: value steps used to be skipped and pass "up to date (not re-run)" on
+        # a step without outputs runs every time and passes its fresh value on
         a = @step a = () -> 41
         b = @step b = x -> x + 1
         quiet(a >> b)
@@ -69,7 +69,7 @@ end
         quiet(s)
         text = read(".pipeline_state", String)
         @test startswith(text, "# SimplePipelines state v2") && occursin("\tout.txt", text)
-        @test filesize(".pipeline_state") < 200                 # regression: used to be 8 MB
+        @test filesize(".pipeline_state") < 200                 # one short line per output
         # outputs made without a record (first run, deleted state) are judged by timestamps
         clear_state!()
         @test !isfile(".pipeline_state") && is_fresh(s)

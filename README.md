@@ -51,5 +51,4 @@ show_total = @step show_total = paths -> read(only(paths), String)
 run(prep >> total >> show_total).value      # "5050\n"
 ```
 
-See the [documentation](https://mashu.github.io/SimplePipelines.jl/dev) for the guide,
-examples, and notes on [migrating from 0.3](https://mashu.github.io/SimplePipelines.jl/dev/reference/migration/).
+See the [documentation](https://mashu.github.io/SimplePipelines.jl/dev) for the guide and examples.

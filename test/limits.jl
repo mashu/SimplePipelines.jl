@@ -4,6 +4,18 @@
 
 alive(cmdline) = success(pipeline(`pgrep -x -f $cmdline`; stdout=devnull))
 
+"""Wait until the guard tracks the processes running `cmdline`: on Linux it raises the OOM score
+of every process it tracks. A command is registered just after it starts, which takes long
+while the driver still compiles (coverage runs); elsewhere wait a moment."""
+function tracked(cmdline)
+    Sys.islinux() || return (sleep(0.3); true)
+    adj(pid) = (path = "/proc/$pid/oom_score_adj"; isfile(path) ? strip(read(path, String)) : "")
+    timedwait(30) do
+        pids = readlines(ignorestatus(`pgrep -x -f $cmdline`))
+        !isempty(pids) && all(pid -> adj(pid) == "500", pids)
+    end === :ok
+end
+
 """Write the guard's fake memory file atomically: available and total MiB."""
 function set_memory(path, available, total)
     write(path * ".tmp", "$available $total 0\n")
@@ -190,8 +202,15 @@ end
             rm("started"; force=true)
             p = start_driver(dir, body; threads)
             @test timedwait(() -> isfile("started"), 300) === :ok
-            sleep(0.3)
+            @test tracked("sleep 309")
             ccall(:kill, Cint, (Cint, Cint), group ? -getpid(p) : getpid(p), signal)
+            # Julia's exit on SIGINT or SIGTERM can get stuck when the signal lands while its
+            # main thread holds a runtime lock, as when it compiles (likely in coverage runs);
+            # a second signal ends it, as a second Ctrl-C does
+            if timedwait(() -> process_exited(p), 20) !== :ok
+                @warn "the script did not exit after signal $signal; sending it again" threads read(joinpath(dir, "stderr.txt"), String)
+                ccall(:kill, Cint, (Cint, Cint), group ? -getpid(p) : getpid(p), signal)
+            end
             @test timedwait(() -> process_exited(p), 20) === :ok
             process_exited(p) || kill(p, 9)
             sleep(0.5)
@@ -207,7 +226,7 @@ end
             rm("started"; force=true)
             p = start_driver(dir, repl; threads)
             @test timedwait(() -> isfile("started"), 300) === :ok
-            sleep(0.3)
+            @test tracked("sleep 309")
             ccall(:kill, Cint, (Cint, Cint), -getpid(p), 2)
             @test timedwait(() -> process_exited(p), 10) === :ok
             process_exited(p) || kill(p, 9)

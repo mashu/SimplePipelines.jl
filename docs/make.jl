@@ -36,7 +36,6 @@ makedocs(
         "Reference" => [
             "Quick reference" => "reference/quickref.md",
             "API" => "api.md",
-            "Migrating from 0.3" => "reference/migration.md",
         ],
         "Contributing" => [
             "Design" => "design.md",
