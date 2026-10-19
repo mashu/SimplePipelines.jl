@@ -1,140 +1,40 @@
-# SimplePipelines.jl - Basic Examples
-# ====================================
+# SimplePipelines.jl — basic examples. Run with `julia --project examples/basic.jl`.
 
 using SimplePipelines
 
-println("═══ Example 1: Sequential Execution ═══\n")
+cd(mktempdir())
 
-# Chain shell commands with >>
-pipeline = sh"echo 'Step 1: Downloading'" >> 
-           sh"echo 'Step 2: Processing'" >> 
-           sh"echo 'Step 3: Uploading'"
-
-run(pipeline)
-
-
-println("\n═══ Example 2: Named Steps ═══\n")
-
-# Use @step macro for named steps
-download = @step download = sh"echo 'Downloading data...'"
-process  = @step process  = sh"echo 'Processing data...'"
-upload   = @step upload   = sh"echo 'Uploading results...'"
-
-pipeline = download >> process >> upload
-run(pipeline)
-
-
-println("\n═══ Example 3: Parallel Execution ═══\n")
-
-# Use & for parallel execution
-task_a = @step task_a = sh"sleep 0.2"
-task_b = @step task_b = sh"sleep 0.2"
-task_c = @step task_c = sh"sleep 0.2"
-merge  = @step merge  = sh"echo 'Merging results'"
-
-# All tasks run in parallel (~0.2s total, not 0.6s)
-pipeline = (task_a & task_b & task_c) >> merge
-run(pipeline)
-
-
-println("\n═══ Example 4: Julia Functions ═══\n")
-
-# Mix Julia code with shell commands
-data = Ref{Vector{Float64}}()
-
-generate = @step generate = () -> begin
-    println("  Generating random data...")
-    data[] = rand(100)
-    return "Generated $(length(data[])) values"
-end
-
-analyze = @step analyze = (_msg) -> begin
-    println("  Analyzing data...")
-    println("    Mean: $(sum(data[]) / length(data[]))")
-    println("    Max:  $(maximum(data[]))")
-end
-
-pipeline = generate >> analyze
-run(pipeline)
-
-
-println("\n═══ Example 5: Complex DAG ═══\n")
-
-# Diamond pattern: fetch -> (branch_a & branch_b) -> merge
-fetch    = @step fetch    = sh"echo 'Fetching data'"
-branch_a = @step branch_a = sh"echo 'Analysis A'"
-branch_b = @step branch_b = sh"echo 'Analysis B'"
-report   = @step report   = sh"echo 'Generating report'"
-
-pipeline = fetch >> (branch_a & branch_b) >> report
-
-# Preview structure
-println("DAG structure:")
+println("═══ 1. Steps with declared files ═══")
+prepare = @step prepare([] => "data.txt") = "seq 10 -1 1 > {output}"
+sorted = @step sorted("data.txt" => "sorted.txt") = "sort -n {input} > {output}"
+lines = @step lines("sorted.txt" => "lines.txt") = "wc -l < {input} > {output}"
+total = @step total("sorted.txt" => "total.txt") = "paste -sd+ {input} | bc > {output}"
+pipeline = prepare >> sorted >> (lines & total)
 print_dag(pipeline)
-println()
-
 run(pipeline)
 
-
-println("\n═══ Example 6: Fallback ═══\n")
-
-# If primary fails, run fallback
-primary = @step primary = sh"false"  # Always fails
-fallback = @step fallback = sh"echo 'Fallback succeeded'"
-
-pipeline = primary | fallback
+println("\n═══ 2. A second run skips what is up to date ═══")
 run(pipeline)
 
-
-println("\n═══ Example 7: Retry ═══\n")
-
-# Retry a flaky step (simulated here)
-attempt_count = Ref(0)
-flaky = @step flaky = () -> begin
-    attempt_count[] += 1
-    if attempt_count[] < 3
-        error("Attempt $(attempt_count[]) failed")
-    end
-    println("  Success on attempt $(attempt_count[])!")
-    return "ok"
+println("\n═══ 3. Julia functions and values ═══")
+stats = @step stats("sorted.txt" => "stats.txt") = function (input, output)
+    xs = parse.(Int, readlines(input))
+    write(output, "mean=$(sum(xs) / length(xs))\n")
 end
+show_stats = @step show_stats = paths -> read(only(paths), String)
+println(run(sorted >> stats >> show_stats; verbose=false).value)
 
-pipeline = Retry(flaky, 3)
-run(pipeline)
+println("═══ 4. Parallel values ═══")
+squares = ForEach(1:5) do i
+    @step square = () -> i^2
+end
+println("sum of squares: ", run(squares >> sum; verbose=false).value)
 
+println("\n═══ 5. Failure handling ═══")
+flaky = @step flaky = sh"test $((RANDOM % 2)) -eq 0"
+backup = @step backup = sh"echo backup used"
+result = run(Retry(flaky, 3) | backup)
+println("success: ", success(result))
 
-println("\n═══ Example 8: Branch (Conditional) ═══\n")
-
-# Choose path based on condition
-use_fast = Ref(true)
-
-fast_path = @step fast = sh"echo 'Taking fast path'"
-slow_path = @step slow = sh"echo 'Taking slow path'"
-
-pipeline = Branch(() -> use_fast[], fast_path, slow_path)
-
-println("With use_fast=true:")
-run(pipeline)
-
-use_fast[] = false
-println("\nWith use_fast=false:")
-run(pipeline)
-
-
-println("\n═══ Example 9: Combined Error Handling ═══\n")
-
-# Robust pipeline: retry primary, fallback if all retries fail
-primary = @step primary = sh"false"  # Always fails
-backup = @step backup = sh"echo 'Backup method succeeded'"
-
-pipeline = Retry(primary, 2) | backup
-run(pipeline)
-
-
-println("\n═══ Example 10: Dry Run ═══\n")
-
-# Preview what would execute without running
-complex = (sh"step 1" >> sh"step 2") & (sh"step 3" >> sh"step 4") >> sh"step 5"
-
-println("Pipeline structure (dry run):")
-run(complex, dry_run=true)
+println("\n═══ 6. Inspecting without running ═══")
+check(pipeline >> stats)

@@ -1,115 +1,65 @@
-# Extending SimplePipelines
+# Development
 
-SimplePipelines is designed for easy extension via Julia's multiple dispatch.
-
-## Testing and coverage
-
-Tests live under `test/suites/` (included from `test/runtests.jl`) so each file stays a manageable size. Run the full suite:
+## Tests
 
 ```bash
-julia --project=. -e 'using Pkg; Pkg.test()'
+julia --project=. -t 4 -e 'using Pkg; Pkg.test()'
 ```
 
-Table I/O tests need the optional test extras (`CSV`, `DataFrames`) declared in the root `Project.toml` `[targets] test = [...]`.
+The suite lives in `test/`, one file per area (`execution.jl`, `rules.jl`,
+`scheduler.jl`, …), all included from `test/runtests.jl`. Every test runs in its own
+temporary directory, so state files and outputs never collide. Run it with one and
+with several threads: the scheduler and memoization tests exercise concurrency. The
+first testset checks the package for method ambiguities and unbound type parameters.
 
-## Building the docs
-
-The docs project lives in `docs/` (`docs/Project.toml`). `docs/make.jl` sets `root = dirname(@__FILE__)`, so you can run it from any working directory.
-
-```bash
-julia --project=docs -e 'using Pkg; Pkg.develop(path=".."); Pkg.instantiate(); include("make.jl")'
-```
-
-Run from the **repository root** (so `path=".."` resolves to the package), or use an absolute path to the package instead of `".."`.
-
-### Doctests
-
-Runnable examples live in `docs/src/doctests.md` as Documenter `jldoctest` fenced code blocks. They run whenever `makedocs` runs (see the `doctest` keyword in `docs/make.jl`).
-
-- Full HTML build plus doctests: default `DOCUMENTER_DOCTEST` unset or `true`.
-- **Doctests only** (no HTML; fast): set `DOCUMENTER_DOCTEST=only` before `include("make.jl")`. This is what `Pkg.test()` runs in a subprocess so CI exercises the same checks as the doc build.
-- To skip doctests temporarily: `DOCUMENTER_DOCTEST=false`.
-
-Run tests with code coverage (for local profiling or CI):
+Coverage:
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test(coverage=true)'
 ```
 
-Coverage is reported in `lcov.info`; CI uploads it to Codecov.
+## Documentation
 
-## Architecture
-
-All nodes inherit from `AbstractNode`. To add custom behavior, define a new subtype and implement dispatch methods:
-
-```
-AbstractNode
-    ├── Step{F}           # Leaf node
-    ├── Sequence          # Sequential (`Vector{AbstractNode}`)
-    ├── Parallel          # Concurrent (`Vector{AbstractNode}`)
-    ├── Retry{N}          # Retry on failure
-    ├── Fallback{A,B}     # Try A, else B
-    └── Branch{C,T,F}     # Conditional
+```bash
+julia --project=docs -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate(); include("docs/make.jl")'
 ```
 
-## Custom Node in 4 Steps
+`docs/make.jl` runs the doctests in `docs/src/doctests.md` during the build. Set
+`DOCUMENTER_DOCTEST=only` to run only the doctests, or `false` to skip them. The
+Documentation workflow builds the docs, with doctests, on every pull request.
+
+## Adding a node type
+
+A node is a subtype of `AbstractNode` with an `exec` method. Implement the pieces
+the runtime and display use:
 
 ```julia
-using SimplePipelines
-import SimplePipelines: AbstractNode, RunContext, run_node, print_dag, count_steps, steps
-
-# 1. Define type (parametric for type stability)
-struct Timeout{N<:AbstractNode} <: AbstractNode
-    node::N
-    seconds::Float64
+struct Repeat <: SimplePipelines.AbstractNode
+    node::SimplePipelines.AbstractNode
+    times::Int
 end
 
-# 2. Implement execution (match package signature: ctx, forced, context_input)
-function run_node(t::Timeout, ctx::RunContext, forced::Bool=false, context_input=nothing)
-    # ... timeout logic ...
-    return run_node(t.node, ctx, forced, context_input)
+function SimplePipelines.exec(r::Repeat, rt, scope, input)
+    out = SimplePipelines.run_node(r.node, rt, scope, input)
+    for _ in 2:r.times
+        out.ok || return out
+        SimplePipelines.forget_failures!(rt)
+        out = SimplePipelines.exec(r.node, rt, scope, input)   # bypass the memo: run again
+    end
+    out
 end
 
-# 3. Implement visualization (signature: io, node, pre, cont, color)
-function print_dag(io::IO, t::Timeout, pre::String, cont::String, color::Bool)
-    print(io, pre, "⏱ Timeout ", t.seconds, "s\n")
-    print_dag(io, t.node, cont * "    ", cont * "    ", color)
-end
-
-# 4. Implement utilities
-count_steps(t::Timeout) = count_steps(t.node)
-steps(t::Timeout) = steps(t.node)
+SimplePipelines.children(r::Repeat) = SimplePipelines.AbstractNode[r.node]
+SimplePipelines.dag(pr::SimplePipelines.DagPrinter, r::Repeat, prefix, cont) =
+    SimplePipelines.composite(pr, r, prefix, cont, "⟳ ", :yellow, "Repeat ×$(r.times)")
 ```
 
-## Custom Operator
+`children` makes `steps`, `count_steps` and `print_dag` work. These are internals,
+not part of the stable API.
 
-```julia
-import Base: ^
+## Code conventions
 
-# Node^3 means repeat 3 times
-^(node::AbstractNode, n::Int) = Repeat(node, n)
-```
-
-## Custom Step Executor
-
-Extend `execute` for new work types:
-
-```julia
-struct HTTPGet
-    url::String
-end
-
-function SimplePipelines.execute(step::Step{HTTPGet})
-    start = time()
-    resp = HTTP.get(step.work.url)
-    return StepResult(step, resp.status == 200, time() - start, step.inputs, step.outputs, String(resp.body))
-end
-
-# Usage: Step(:fetch, HTTPGet("https://api.example.com"))
-```
-
-## Type Stability Rules
-
-1. Use parametric types for leaf/runtime payloads (`Step{F}`, result wrappers, node decorators).
-2. Use `Vector{AbstractNode}` for wide child collections when encoding every child in the type would hurt compile time.
-3. Dispatch on types, don't check with `isa`.
+The repository's standards are in `.cursor/rules/julia-standards.mdc`. In short:
+dispatch instead of `isa`, no leading underscores, no `try` outside `run_safely`,
+validation in constructors, and small named functions. See [Design](design.md) for
+the architecture and the reasons behind the type layout.

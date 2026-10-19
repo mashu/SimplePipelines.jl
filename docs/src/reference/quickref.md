@@ -1,84 +1,64 @@
 # Quick reference
 
-One-page lookup for syntax and APIs. Narrative explanations live in the [user guide](../guide/steps-and-shell.md).
-
 ## Steps
 
-| Syntax | Meaning |
-|--------|---------|
-| `@step name = sh"cmd"` | Shell command |
-| `@step name = sh("\$(var)")` | Shell with Julia interpolation |
-| `@step name = sh(cmd_func)` | Run-time command, e.g. `sh(() -> "tool " * ref)` |
-| `shell_raw"..."`, `shell_raw"""..."""` | Literal shell (`\$VAR` not expanded by Julia) |
-| `@step name = () -> expr` | Julia function step |
+| syntax | meaning |
+|:-------|:--------|
+| `@step name = sh"cmd"` / `= "cmd"` | shell command (`bash -e -o pipefail`) |
+| `@step name = sh("cmd $(x)")` | with Julia interpolation |
+| `@step name = () -> expr` | Julia function |
+| `@step name = f(args)` | call deferred until the step runs |
+| `@step name(in => out) = "tool {input} > {output}"` | declared paths and a template |
+| `@step name([a, b] => [c]; threads=4, mem_mb=8000, timeout=600) = ...` | several paths, limits (MiB, seconds) |
+| `@step name(in => out) = julia("script.jl {input} {output}")` | Julia script in a separate, limited process |
+| `@step name(in => out) = (i, o) -> ...` | function receiving the paths |
+| `@step name(in) = ...` | inputs only |
+| `Step(name, work, inputs, outputs; threads, mem_mb, timeout)` | constructor form |
 
-## Wildcard steps and workflows
+Placeholders: `{input}`, `{output}`, `{input[i]}`, `{output[i]}`, `{threads}`,
+`{mem_mb}`, `{wildcard}`; `{{word}}` is a literal `{word}`. `{threads}` and `{mem_mb}`
+are filled in when the step starts, with what it was granted.
 
-| Syntax | Meaning |
-|--------|---------|
-| `@step name("in/{x}" => "out/{x}") = "cmd {input} > {output}"` | Pattern-backed step template |
-| `@step name("in/{x}" => "out/{x}") = function(input, output) ... end` | Julia function template |
-| `@rule name("in/{x}" => "out/{x}") = "cmd {input} > {output}"` | Pattern rule |
-| `check(rule; limit=20)` | Inspect template + auto-preview matches from disk (wildcard inputs) |
-| `check(rule, "out/A")` | Preview one concrete output target |
-| `@targets "out/{x}" x=["A", "B"]` | Expand target pattern |
-| `@workflow "name" begin ... end` | Collect rules and targets |
-| `explain(wf; target="out/A")` | Explain rule dependency chain |
+## Composition
 
-## Operators
+| syntax | meaning | value |
+|:-------|:--------|:------|
+| `a >> b` | then | value of `b` (receives value of `a`) |
+| `a & b` | in parallel; write `(a & b) >> c` | `[va, vb]` |
+| `a \| b` | fallback | value of the one that succeeded |
+| `a^n`, `Retry(a, n; delay)` | retry | |
+| `Branch(cond, a, b)`, `@branch cond a b` | conditional | |
+| `Timeout(a, seconds)` | deadline; kills commands | |
+| `Force(a)` | ignore freshness | |
+| `with_resources(a; threads, mem_mb, timeout)` | default limits | |
+| `ForEach(items) do x ... end` | one branch per item | vector |
+| `ForEach("dir/{w}.ext") do w ... end` | one branch per file | vector |
+| `Sequence(nodes...)`, `Parallel(nodes...)` | function forms | |
 
-| Op | Meaning | Example |
-|----|---------|---------|
-| `>>` | Sequence; passes output into the next **function** step | `a >> b >> c` |
-| `&` | Parallel | `a & b & c` |
-| `\|` | Fallback if primary fails | `a \| b` |
-| `^n` | Retry up to *n* times | `a^3` |
-| `\|>` | Pipe outputs into RHS | `a \|> b` |
-| `>>>` | Same input to both sides | `a >>> b` |
-| `.>>` | Broadcast: attach RHS to each branch | `fe .>> step` |
+## Rules and workflows
 
-## Sequencing and piping
+| syntax | meaning |
+|:-------|:--------|
+| `@rule name("in/{s}.x" => "out/{s}.y"; threads) = "cmd {input} > {output}"` | rule |
+| `@step name("in/{s}.x" => "out/{s}.y") = ...` | the same (wildcards make a rule) |
+| `gather("bam/{s}.bam")` | input collecting every value of `{s}` |
+| `r1 >> r2 >> r3` | merge rules into a [`Workflow`](@ref) |
+| `Workflow(rules_and_steps...; targets, filter, name)` | explicit workflow |
+| `@workflow "name" begin ... end` | workflow from a block |
+| `run(wf; targets="out/{s}.y")` | pattern target: every `s` with sources |
+| `run(wf; filter = w -> w.s != "ctl")` | drop wildcard values |
+| `expand("out/{s}.y"; s=["A", "B"])` | concrete paths |
+| `discover("raw/{s}_R1.fq.gz")` | wildcard values on disk |
+| `plan(wf; targets)` | concrete DAG, without running |
 
-When the left side has **multiple** outputs (`ForEach`, `Parallel`), `>>`, `|>`, and `.>>` differ:
+## Running and inspecting
 
-| Left | `>>` | `|>` | `.>>` |
-|:-----|:-----|:-----|:------|
-| Single | one value → next | one value | one value |
-| Multi | **last** only | **vector** of all | **per branch** |
-
-## Control-flow helpers
-
-| API | Role |
-|-----|------|
-| `Timeout(a, secs)` | Fail if overrun |
-| `Branch(cond, a, b)` | Conditional subgraph (`cond()` or `cond(upstream)` after `>>`) |
-| `@branch flag[] a b` | Sugar for `Branch(() -> flag[], a, b)` |
-| `ForEach(xs) do ... end` | Fan-out over collection |
-| `ForEach("pat/{x}.ext") do ... end` | Fan-out from glob pattern |
-| `Reduce(f, a & b)` | Merge parallel outputs |
-| `Retry(a, n; delay=d)` | Retries with optional delay |
-
-## Execution
-
-| Call / field | Role |
-|--------------|------|
-| `run(p)` / `p \|> run` | Execute; returns result vector |
-| `run(..., jobs=N)` | Cap live parallel branches |
-| `with_resources(step; mem_mb=M, threads=T)` | Declare heavy-node resource use |
-| `run(..., verbose=false)` | Quiet (no command echo) |
-| `run(..., dry_run=true)` | Preview only |
-| `run(..., report=(res; pipeline) -> …)` | Hook after run, before saving state |
-| `.success`, `.duration`, `.result`, `.inputs`, `.outputs` | Per-step outcome fields |
-| `materialize_table(FilePath(p))` | After `using CSV, DataFrames`: CSV → `DataFrame` |
-
-## Utilities
-
-| API | Role |
-|-----|------|
-| `print_dag(node)` | Print structure |
-| `count_steps(node)` | Step count |
-| `steps(node)` | Flat list of steps |
-
-## Full detail
-
-Narrative walkthroughs: [User guide](../guide/steps-and-shell.md) and [Examples](../examples/basics.md). Generated docstrings: [API](../api.md).
+| call | meaning |
+|:-----|:--------|
+| `run(x; jobs, mem_mb, min_free_mb, nice, guard, force, verbose, state_path)` | run; returns a [`RunResult`](@ref) |
+| `check(x; ...)` | what would run and why; runs nothing |
+| `print_dag(x)` | tree with paths and commands |
+| `success(r)`, `r.value`, `r[i]` | overall success, pipeline value, step results |
+| `r[i].label`, `.status`, `.result`, `.duration`, `.peak_mb` | per-step fields |
+| `steps(x)`, `count_steps(x)` | steps of a node |
+| `is_fresh(step)`, `clear_state!()` | freshness state |

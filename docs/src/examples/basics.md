@@ -1,115 +1,67 @@
 # Examples: basics
 
-Runnable recipes for the core DAG operators. These examples assume you have read
-[Getting started](../guide/getting-started.md), or already know `@step`, `>>`,
-`&`, and `run`.
+Short, runnable recipes. Each one works in an empty directory.
 
-**More examples:** [Control flow](control-flow.md) · [Complex DAGs](complex-dags.md) · [Bioinformatics](bioinformatics.md)
-
-## 1.1 Basic pipeline
-
-**Flow:** Three steps in sequence.
-
-```
-  download  ──►  process  ──►  upload
-```
-
-**Goal:** Create a file, process it, then copy the result (runnable without network).
+## A diamond
 
 ```julia
 using SimplePipelines
 
-download = @step download = sh"(echo line3; echo line1; echo line2) > data.txt"
-process = @step process = sh"sort data.txt > sorted.txt"
-upload = @step upload = sh"cp sorted.txt uploaded.txt"
+fetch   = @step fetch([] => "data.csv") = "printf 'id,value\n1,10\n2,20\n' > {output}"
+rows    = @step rows("data.csv" => "rows.txt") = "tail -n +2 {input} | wc -l > {output}"
+total   = @step total("data.csv" => "total.txt") = "tail -n +2 {input} | cut -d, -f2 | paste -sd+ | bc > {output}"
+summary = @step summary(["rows.txt", "total.txt"] => "summary.txt") = "paste {input} > {output}"
 
-pipeline = download >> process >> upload
-run(pipeline)
+run(fetch >> (rows & total) >> summary)
 ```
 
-## 1.2 Parallel processing
-
-**Flow:** Three steps run in parallel, then one step merges.
-
-```
-       ┌── file_a ──┐
-       ├── file_b ──┼──►  archive
-       └── file_c ──┘
-```
-
-**Goal:** Create three files, compress them concurrently, then archive.
+## Julia and shell together
 
 ```julia
-using SimplePipelines
+numbers = @step numbers([] => "numbers.txt") = "seq 1 100 > {output}"
+stats = @step stats("numbers.txt" => "stats.txt") = function (input, output)
+    xs = parse.(Int, readlines(input))
+    write(output, "mean=$(sum(xs) / length(xs)) max=$(maximum(xs))\n")
+end
+show_stats = @step show_stats = paths -> read(only(paths), String)
 
-file_a = @step a = sh"echo content_a > file_a.txt && gzip -k file_a.txt"
-file_b = @step b = sh"echo content_b > file_b.txt && gzip -k file_b.txt"
-file_c = @step c = sh"echo content_c > file_c.txt && gzip -k file_c.txt"
-archive = @step archive = sh"tar -cvf archive.tar file_a.txt.gz file_b.txt.gz file_c.txt.gz"
-
-pipeline = (file_a & file_b & file_c) >> archive
-run(pipeline)
+run(numbers >> stats >> show_stats).value       # "mean=50.5 max=100\n"
 ```
 
-## 1.3 Julia + shell
-
-**Flow:** Julia step → shell step → Julia step.
-
-```
-  generate  ──►  process  ──►  report
-   (Julia)       (shell)      (Julia)
-```
-
-**Goal:** Generate data in Julia, run a shell tool, then summarize in Julia.
+## Values without files
 
 ```julia
-using SimplePipelines
-using DelimitedFiles
+a = @step a = () -> 2
+b = @step b = () -> 3
+product = @step product = xs -> prod(xs)
 
-generate = @step generate = () -> begin
-    data = rand(100, 10)
-    writedlm("matrix.csv", data, ',')
-    return "Generated $(size(data)) matrix"
+run((a & b) >> product).value                   # 6
+```
+
+## One step per file
+
+```julia
+for name in ["a", "b", "c"]
+    write("$name.txt", "hello $name\n")
 end
 
-process = @step process = sh"wc -l matrix.csv"
-
-report = @step report = () -> begin
-    lines = read("matrix.csv", String)
-    nrows = count(==('\n'), lines)
-    return "Matrix has $nrows rows"
-end
-
-pipeline = generate >> process >> report
-run(pipeline)
+upper = @rule upper("{name}.txt" => "upper/{name}.txt") = "tr a-z A-Z < {input} > {output}"
+run(upper)                       # three steps: upper[name=a], upper[name=b], upper[name=c]
 ```
 
-## 1.4 Data passing and pipe
-
-**Flow:** Function steps receive the previous step's output; `|>` pipes output forward; `.>>` attaches the next step to each branch.
-
-```
-  download(id)  ──►  process(path)     # >> passes path
-  ForEach .>> step                     # each branch: branch >> step
-```
-
-**Goal:** Pass output between function steps; use broadcast for per-branch follow-up.
+## Retry, fallback and timeout
 
 ```julia
-using SimplePipelines
+flaky   = @step flaky = sh"test $((RANDOM % 3)) -eq 0"
+backup  = @step backup = sh"echo using the backup"
+pipeline = Timeout(flaky^5 | backup, 60)
 
-download() = "data.csv"
-process(path) = path * "_done"
-pipeline = @step dl = download >> @step proc = process
 run(pipeline)
+```
 
-fetch = @step fetch = `echo "hello"`
-pipeline = fetch |> @step process = (s -> "got: " * strip(String(s)))
-run(pipeline)
+## Inspect first
 
-fe = ForEach([1, 2]) do x
-    Step(Symbol("gen_", x), `echo $x`)
-end
-pipeline = fe .>> @step process = (s -> "got_" * strip(String(s)))
-run(pipeline, force=true)
+```julia
+print_dag(fetch >> (rows & total) >> summary)
+check(fetch >> (rows & total) >> summary)
 ```

@@ -1,93 +1,111 @@
 # Getting started
 
-This page builds one small pipeline from scratch. It is intentionally simple:
-create a file, sort it, then compute two summaries in parallel.
-
-The point is not the shell commands. The point is the shape:
+This page builds a small pipeline: make a data file, sort it, then compute two
+summaries in parallel.
 
 ```text
-prepare -> sort_file -> count_lines
-                    \-> count_bytes
+prepare ── sort_file ──┬── count_lines
+                       └── count_bytes
 ```
 
-## Define The Work
-
-A pipeline is made from steps. Each step has a name and some work to run.
-When a step reads or writes files, declare those files so the runtime can check
-inputs, verify outputs, and skip fresh work later.
+## Steps declare what they read and write
 
 ```julia
 using SimplePipelines
 
-prepare = @step prepare([] => ["data.txt"]) =
-    sh"(echo line3; echo line1; echo line2) > data.txt"
+prepare = @step prepare([] => "data.txt") = "seq 3 -1 1 > {output}"
 
-sort_file = @step sort_file(["data.txt"] => ["sorted.txt"]) =
-    sh"sort data.txt > sorted.txt"
+sort_file = @step sort_file("data.txt" => "sorted.txt") =
+    "sort {input} > {output}"
+
+count_lines = @step count_lines("sorted.txt" => "lines.txt") =
+    "wc -l < {input} > {output}"
+
+count_bytes = @step count_bytes("sorted.txt" => "bytes.txt") =
+    "wc -c < {input} > {output}"
 ```
 
-The first step has no input files and promises `data.txt`. The second step needs
-`data.txt` and promises `sorted.txt`.
+`name(inputs => outputs) = command` declares the files. In the command, `{input}`
+and `{output}` are replaced by those paths. Declaring files is what makes the
+pipeline incremental and safe: the step is skipped when its outputs are up to date,
+its output directory is created for it, and it fails clearly if an input is missing
+or an output was not produced.
 
-## Add Parallel Work
-
-After the file is sorted, two summaries can run independently.
-
-```julia
-count_lines = @step count_lines(["sorted.txt"] => ["lines.txt"]) =
-    sh"wc -l sorted.txt > lines.txt"
-
-count_bytes = @step count_bytes(["sorted.txt"] => ["bytes.txt"]) =
-    sh"wc -c sorted.txt > bytes.txt"
-```
-
-## Compose The DAG
-
-Use `>>` for "then" and `&` for "at the same time".
+## Compose with `>>` and `&`
 
 ```julia
 pipeline = prepare >> sort_file >> (count_lines & count_bytes)
 ```
 
-This is the whole DAG. You can inspect it before running:
+`>>` means "then" and `&` means "at the same time". Keep the parentheses: in Julia,
+`>>` binds tighter than `&`.
+
+## Look before you run
 
 ```julia
-print_dag(pipeline)
+print_dag(pipeline)      # the structure, with paths and commands
+check(pipeline)          # what would run, and why
 ```
 
-## Run It
+`check` runs nothing. It reports each step as *planned* (with the reason, such as
+`missing output sorted.txt`), *up to date*, or as a problem, such as an input that
+no step produces.
+
+## Run
 
 ```julia
 results = run(pipeline)
 ```
 
-`run` returns one [`StepResult`](@ref) per step that ran. The printed log is for
-you; the result vector is for code.
-
-```julia
-all(r -> r.success, results)
-last(results).outputs
+```text
+═══ Pipeline: pipeline ═══
+▶ prepare
+    $ seq 3 -1 1 > data.txt
+✓ prepare (0.01s)
+▶ sort_file
+    $ sort data.txt > sorted.txt
+✓ sort_file (0.01s)
+...
+═══ 4 done, 0 up to date, 0 failed in 0.05s ═══
 ```
 
-If you run the same pipeline again, steps with fresh declared outputs can be
-skipped.
-
-## Where This Goes Next
-
-This example used fixed filenames. When filenames follow a pattern such as
-`raw/{sample}.fq` -> `out/{sample}.bam`, use rules and check them before running:
+`run` returns a [`RunResult`](@ref): a vector with one [`StepResult`](@ref) per
+step, plus the overall `success` and the pipeline's `value`.
 
 ```julia
-align = @step align("raw/{sample}.fq" => "out/{sample}.bam") =
-    "bwa mem ref.fa {input} > {output}"
-
-check(align, "out/A.bam")
+success(results)                   # true
+results[2].label, results[2].status
 ```
 
-For now, keep the mental model:
+Run it again and every step is skipped: the outputs exist and nothing changed.
+Touch `data.txt`, or edit a command, and exactly the affected steps run again.
 
-- steps are units of work;
-- `>>` and `&` draw the DAG;
-- `run` executes the DAG and returns structured results.
+## Julia functions are steps too
 
-**Next:** [Steps and shell](steps-and-shell.md) explains how to write steps well.
+A function can be a step. With declared paths it receives them as arguments; the
+last step below receives the value of the previous one.
+
+```julia
+total = @step total("lines.txt" => "report.txt") = (lines, report) ->
+    write(report, "lines: " * strip(read(lines, String)))
+
+show_report = @step show_report = paths -> read(only(paths), String)
+
+run(pipeline >> total >> show_report).value     # "lines: 3"
+```
+
+## Many samples: rules
+
+Real pipelines repeat the same steps for many files. Instead of writing one step
+per file, write a rule with a `{wildcard}`:
+
+```julia
+align = @rule align("reads/{sample}.fq" => "bam/{sample}.bam") =
+    "bwa mem ref.fa {input} | samtools sort -o {output}"
+
+run(align)        # once for every reads/*.fq on disk
+```
+
+That is the subject of [Wildcard rules and workflows](rules.md).
+
+**Next:** [Steps](steps.md).

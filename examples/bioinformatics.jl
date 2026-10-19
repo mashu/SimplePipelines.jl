@@ -1,65 +1,48 @@
-# SimplePipelines.jl - Bioinformatics Examples
-# ============================================
-# Immune repertoire (PEAR → IgBLAST → Julia filter) and variant calling (FastQC → trim → BWA → bcftools).
-# Uses echo to simulate tools; replace with real commands for actual runs.
+# SimplePipelines.jl — a variant-calling workflow with placeholder commands.
+# Run with `julia --project examples/bioinformatics.jl`. Replace the commands by the
+# real tools (fastp, bwa, samtools, bcftools) for actual data.
 
 using SimplePipelines
 
-println("═══ Immune Repertoire Pipeline ═══\n")
+cd(mktempdir())
 
-# Paired-end FASTQ → PEAR (merge) → FASTQ to FASTA → IgBLAST (V/D/J) → Julia filter
-pear       = @step pear       = sh"echo '[PEAR] Merging paired-end R1.fastq R2.fastq'"
-to_fasta   = @step to_fasta   = sh"echo '[seqtk] Converting merged.assembled.fastq to FASTA'"
-igblast    = @step igblast    = sh"echo '[IgBLAST] V/D/J assignment with V.fasta D.fasta J.fasta'"
-filter_id  = @step filter_id  = (_msg) -> "Filtered by v_identity and j_identity > 90.0"
+# Simulated paired-end reads for four samples, one of them without its R2 file.
+mkpath("raw")
+for s in ["S1", "S2", "S3"], r in ["R1", "R2"]
+    write("raw/$(s)_$(r).fq.gz", "reads $s $r\n")
+end
+write("raw/S4_R1.fq.gz", "reads S4 R1\n")
+mkpath("ref")
+write("ref/genome.fa", ">chr1\nACGT\n")
 
-immune = pear >> to_fasta >> igblast >> filter_id
-println("Pipeline structure:")
-print_dag(immune)
+index_ref = @step index_ref("ref/genome.fa" => "ref/genome.fa.bwt") =
+    "echo '[bwa index] {input}' > {output}"
+
+trim = @rule trim(["raw/{s}_R1.fq.gz", "raw/{s}_R2.fq.gz"] => "trim/{s}.fq.gz"; threads=2) =
+    "echo '[fastp -w {threads}]' | cat - {input} > {output}"
+
+align = @rule align(["trim/{s}.fq.gz", "ref/genome.fa.bwt"] => "bam/{s}.bam"; threads=4, mem_mb=500) =
+    "sleep 0.2; echo '[bwa mem -t {threads} | samtools sort] {s}' | cat - {input[1]} > {output}"
+
+index = @rule index("bam/{s}.bam" => "bam/{s}.bam.bai") = "echo '[samtools index]' > {output}"
+
+call = @rule call(gather("bam/{s}.bam") => "calls/all.vcf") =
+    "echo '[bcftools mpileup | call] {input}' > {output}"
+
+wf = Workflow(index_ref, trim, align, index, call; name="variant calling")
+
+println("Samples on disk: ", [w.s for w in discover("raw/{s}_R1.fq.gz")])
+println("S4 has no R2 file, so it is not a target.\n")
+
+print_dag(wf)
 println()
-run(Pipeline(immune, name="Immune Repertoire"))
-
-
-println("\n═══ Multi-Donor Immune Repertoire (ForEach) ═══\n")
-
-# Create temp files to simulate multiple donors
-dir = mktempdir()
-for donor in ["donor1", "donor2", "donor3"]
-    touch(joinpath(dir, "$(donor)_R1.fq.gz"))
-end
-
-# ForEach: discovers files, creates parallel branches - just return Cmd!
-cd(dir) do
-    pipeline = ForEach("{donor}_R1.fq.gz") do donor
-        sh("echo '[Processing $donor]'")
-    end
-    println("Pipeline structure (3 donors discovered):")
-    print_dag(pipeline)
-    println()
-    run(Pipeline(pipeline, name="Multi-Donor"))
-end
-
-rm(dir; recursive=true)
-
-
-println("\n═══ Variant Calling Pipeline ═══\n")
-
-# Paired-end → FastQC → Trimmomatic → BWA (GRCh38) → bcftools call → filter
-fastqc   = @step fastqc   = sh"echo '[FastQC] R1.fq.gz R2.fq.gz'"
-trim     = @step trim     = sh"echo '[Trimmomatic PE] Trim adapters and quality'"
-align    = @step align    = sh"echo '[BWA mem] Align to GRCh38.fa'"
-index    = @step index    = sh"echo '[samtools index] aligned.bam'"
-call     = @step call     = sh"echo '[bcftools mpileup/call] variants.vcf.gz'"
-filter_v = @step filter_v = sh"echo '[bcftools filter] QUAL>=20'"
-
-variant = fastqc >> trim >> align >> index >> call >> filter_v
-println("Pipeline structure:")
-print_dag(variant)
+check(wf)
 println()
-results = run(Pipeline(variant, name="Variant Calling"))
+result = run(wf; jobs=8)
 
-println("\nExecution summary:")
-for r in results
-    status = r.success ? "✓" : "✗"
-    println("  $status $(r.step.name): $(round(r.duration * 1000, digits=1))ms")
-end
+println("\nTargets: ", result.value)
+println("\n", read("calls/all.vcf", String))
+
+println("Adding a sample reruns only that sample and the joint call:")
+write("raw/S4_R2.fq.gz", "reads S4 R2\n")
+run(wf; jobs=8)
