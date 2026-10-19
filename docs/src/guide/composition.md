@@ -1,98 +1,81 @@
 # Composing pipelines
 
-Once steps are clear, composition should read like the workflow diagram you have
-in mind. SimplePipelines uses a few operators for this. Most pipelines only need
-two at first:
+Four operators draw the graph. Any shell command (`sh"..."`, a `String` or a `Cmd`)
+or function next to a node is lifted to a step automatically.
 
-- `>>` for "then";
-- `&` for "at the same time".
-
-The other operators are for data-flow details once your graph has branches.
-
-## Run One Step After Another
-
-Use `>>` when a later step should wait for an earlier step.
+| operator | meaning | node |
+|:---------|:--------|:-----|
+| `a >> b` | run `b` after `a` succeeds | [`Sequence`](@ref) |
+| `a & b` | run `a` and `b` at the same time | [`Parallel`](@ref) |
+| `a \| b` | run `b` only if `a` fails | [`Fallback`](@ref) |
+| `a^n` | retry `a` up to `n` times | [`Retry`](@ref) |
 
 ```julia
-prepare = @step prepare([] => ["data.txt"]) =
-    sh"(echo line3; echo line1; echo line2) > data.txt"
-
-sort_file = @step sort_file(["data.txt"] => ["sorted.txt"]) =
-    sh"sort data.txt > sorted.txt"
-
-pipeline = prepare >> sort_file
-run(pipeline)
+fetch >> (qc & align) >> report
+download^3 | use_cached_copy
 ```
 
-This shape is useful even when the shell commands already mention file names,
-because the DAG now knows ordering, freshness, and failure boundaries.
+!!! warning "Precedence"
+    Julia gives `>>` higher precedence than `&`, and `&` higher than `|`. So
+    `a & b >> c` means `a & (b >> c)`: write `(a & b) >> c` when `c` should wait
+    for both.
 
-## Fork, Then Join
+Composition is cheap and has no side effects: nothing runs until
+[`run`](@ref) is called. A node can be reused in several places; a node that
+appears in several branches of one pipeline runs once, and every branch sees its
+result.
 
-Use `&` when independent branches can run concurrently.
+## Data flow
 
-```text
-prepare -> sort_file -> count_lines
-                    \-> count_bytes
-```
+Every node has a *value*, and `>>` passes it to the next node:
+
+| node | value |
+|:-----|:------|
+| step with declared outputs | the output paths (`Vector{String}`) |
+| other shell step | its stdout (`String`) |
+| other function step | its return value |
+| `a & b`, [`ForEach`](@ref) | the vector of branch values, in order |
+| `a >> b` | the value of `b` |
+| [`Workflow`](@ref) | the paths of its targets |
+
+A function step without declared paths receives the upstream value when it takes
+one argument, and is called with none otherwise:
 
 ```julia
-count_lines = @step count_lines(["sorted.txt"] => ["lines.txt"]) =
-    sh"wc -l sorted.txt > lines.txt"
+half = @step half = () -> 21
+double = @step double = x -> 2x
+announce = @step announce = () -> println("done")
 
-count_bytes = @step count_bytes(["sorted.txt"] => ["bytes.txt"]) =
-    sh"wc -c sorted.txt > bytes.txt"
-
-pipeline = prepare >> sort_file >> (count_lines & count_bytes)
+run(half >> double >> announce)        # announce takes no argument: fine
+run(half >> double).value              # 42
 ```
 
-Parentheses matter: `(a & b) >> c` means both `a` and `b` must finish before
-`c` runs.
-
-## Passing Values, Not Just Files
-
-File paths are often enough. When you use function steps, step results can also
-flow directly into the next function.
+Parallel branches produce a vector, which makes reductions direct:
 
 ```julia
-emit_path = @step emit_path = () -> "sorted.txt"
-read_text = @step read_text = path -> read(path, String)
-
-pipeline = emit_path >> read_text
+sizes = ForEach(["a.txt", "b.txt"]) do f
+    @step size = () -> filesize(f)
+end
+run(sizes >> sum).value                # total size
 ```
 
-For a single upstream result, `>>` and `|>` both pass that value to a function
-step. The difference matters when the left side has many branch results.
+For file-based pipelines the paths are usually all you need: a step after another
+one simply reads the files it declares.
 
-## Advanced: Many Branch Outputs
+## Nodes as values
 
-When a parallel node produces multiple results, choose the operator based on what
-the next function step should receive:
-
-- `a >> b`: pass the last branch result to `b`;
-- `a |> b`: pass a vector of all branch outputs to one function step;
-- `a .>> b`: run `b` once per branch;
-- `a >>> b`: run the second step with the same input as the first.
+All composition results are ordinary Julia values, so pipelines can be built with
+ordinary code:
 
 ```julia
-left = (@step a = `echo A`) & (@step b = `echo B`)
+per_chrom = [@step call(["sample.bam"] => "calls/chr$c.vcf") =
+                 "bcftools mpileup -r chr$c -f ref.fa {input} | bcftools call -mv -o {output}"
+             for c in 1:22]
 
-collect_all = @step collect_all = xs -> join(strip.(String.(xs)), ",")
-per_branch = @step per_branch = x -> "saw " * strip(String(x))
-
-pipeline_a = left |> collect_all
-pipeline_b = left .>> per_branch
+pipeline = align >> Parallel(per_chrom) >> merge_vcfs
 ```
 
-Use these only when you need this value-passing behavior. For file-oriented
-workflows, plain `>>` and `&` usually keep the graph easier to read. For repeated
-branches over samples or files, continue to [Fan-out and reduce](foreach-reduce.md).
+`Sequence(nodes...)` and `Parallel(nodes...)` (or a vector of nodes) are the
+function forms of `>>` and `&`.
 
-## What To Remember
-
-Write the DAG the way you would draw it. Start with `>>` and `&`; reach for the
-pipe variants only when a function step needs a particular value from branch
-outputs.
-
-**Next:** [Rules and diagnostics](rules-and-diagnostics.md) shows how to describe
-many file targets from patterns and inspect the result before running.
+**Next:** [Wildcard rules and workflows](rules.md).

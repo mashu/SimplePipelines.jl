@@ -1,19 +1,11 @@
 using Documenter
 using SimplePipelines
 
-# Resolve paths regardless of process working directory (CI runs `julia docs/make.jl` from repo root).
 const DOCS_DIR = dirname(@__FILE__)
 
-# `true` / unset: full build + doctests. `only`: doctests only (used from `Pkg.test()`). `false`: skip doctests.
+# `true` / unset: full build with doctests. `only`: doctests only. `false`: skip doctests.
 const DOCTEST_ENV = get(ENV, "DOCUMENTER_DOCTEST", "true")
-const DOCTEST = if DOCTEST_ENV == "only"
-    :only
-elseif DOCTEST_ENV == "false"
-    false
-else
-    true
-end
-const CHECKDOCS = DOCTEST === :only ? :none : :exports
+const DOCTEST = DOCTEST_ENV == "only" ? :only : DOCTEST_ENV != "false"
 
 makedocs(
     root = DOCS_DIR,
@@ -22,39 +14,36 @@ makedocs(
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
         canonical = "https://mashu.github.io/SimplePipelines.jl",
-        edit_link = "main",  # avoid git remote lookup when building locally
+        edit_link = "main",
         assets = ["assets/custom.css"],
     ),
     pages = [
         "Home" => "index.md",
-        "User guide" => [
+        "Guide" => [
             "Getting started" => "guide/getting-started.md",
-            "Steps and shell" => "guide/steps-and-shell.md",
+            "Steps" => "guide/steps.md",
             "Composing pipelines" => "guide/composition.md",
-            "Running and inspecting" => "guide/running-and-results.md",
-            "Rules and diagnostics" => "guide/rules-and-diagnostics.md",
-            "Fan-out and reduce" => "guide/foreach-reduce.md",
+            "Wildcard rules and workflows" => "guide/rules.md",
+            "Fan-out with ForEach" => "guide/foreach.md",
             "Control flow" => "guide/control-flow.md",
-            "Choosing the right shape" => "guide/decision-guide.md",
+            "Running, freshness and resources" => "guide/running.md",
         ],
         "Examples" => [
             "Basics" => "examples/basics.md",
-            "Control flow" => "examples/control-flow.md",
-            "Complex DAGs" => "examples/complex-dags.md",
             "Bioinformatics" => "examples/bioinformatics.md",
         ],
         "Reference" => [
             "Quick reference" => "reference/quickref.md",
-            "Public API policy" => "reference/public-api.md",
             "API" => "api.md",
+            "Migrating from 0.3" => "reference/migration.md",
         ],
-        "Internals" => "design.md",
         "Contributing" => [
-            "Extending & dev workflow" => "development.md",
-            "Doctest blocks" => "doctests.md",
+            "Design" => "design.md",
+            "Development" => "development.md",
+            "Doctests" => "doctests.md",
         ],
     ],
-    checkdocs = CHECKDOCS,
+    checkdocs = DOCTEST === :only ? :none : :exports,
     doctest = DOCTEST,
 )
 

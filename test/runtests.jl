@@ -1,35 +1,42 @@
 using SimplePipelines
 using Test
 
-clear_state!()
+const SP = SimplePipelines
 
-@testset "SimplePipelines" begin
-    include("suites/01_shell_steps_display.jl")
-    include("suites/02_utilities_run_display.jl")
-    include("suites/03_errors_control_flow.jl")
-    include("suites/04_foreach_pipe_reduce.jl")
-    include("suites/05_dag_rules_resources.jl")
-    include("suites/06_report_branch_timeout_tables.jl")
-    include("suites/07_rule_onboarding.jl")
+"""Run `f(dir)` inside a fresh temporary directory (so state files stay there)."""
+in_tempdir(f) = mktempdir(dir -> cd(() -> f(dir), dir))
+
+quiet(x; kwargs...) = run(x; verbose=false, kwargs...)
+statuses(r) = [s.status for s in r]
+labels(r) = [s.label for s in r]
+nstatus(r, status) = count(s -> s.status === status, r)
+
+"""Tracks how many callers are inside `busy` at once."""
+struct Gauge
+    active::Threads.Atomic{Int}
+    peak::Threads.Atomic{Int}
+end
+Gauge() = Gauge(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+function busy(g::Gauge, seconds=0.15)
+    now = Threads.atomic_add!(g.active, 1) + 1
+    Threads.atomic_max!(g.peak, now)
+    sleep(seconds)
+    Threads.atomic_sub!(g.active, 1)
+    nothing
 end
 
-# Documenter `jldoctest` blocks in `docs/src/` (see `doctests.md`). Spawn a fresh Julia with a
-# normal `JULIA_LOAD_PATH` (the `Pkg.test` sandbox hides `Pkg` from the parent process).
-@testset "Documentation (Documenter doctest :only)" begin
-    root = dirname(@__DIR__)
-    docs = joinpath(root, "docs")
-    make_jl = joinpath(docs, "make.jl")
-    code = string(
-        "import Pkg; ",
-        "Pkg.activate(", repr(docs), "); ",
-        "Pkg.develop(path=", repr(root), "); ",
-        "Pkg.instantiate(); ",
-        "ENV[\"DOCUMENTER_DOCTEST\"]=\"only\"; ",
-        "include(", repr(make_jl), ")",
-    )
-    cmd = `$(Base.julia_cmd()) -e $(code)`
-    ok = withenv("JULIA_LOAD_PATH" => "@:@stdlib") do
-        success(run(cmd))
+@testset "SimplePipelines" begin
+    @testset "package hygiene" begin
+        @test isempty(Test.detect_ambiguities(SimplePipelines))
+        @test isempty(Test.detect_unbound_args(SimplePipelines))
     end
-    @test ok
+    include("shell_and_patterns.jl")
+    include("steps_and_operators.jl")
+    include("execution.jl")
+    include("control_flow.jl")
+    include("foreach.jl")
+    include("rules.jl")
+    include("freshness.jl")
+    include("scheduler.jl")
+    include("display.jl")
 end

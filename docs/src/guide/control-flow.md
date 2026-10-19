@@ -1,92 +1,67 @@
 # Control flow
 
-Control flow wraps an existing node with a policy: try again, use a backup,
-choose one branch, or stop waiting after a deadline. Use these when the workflow
-needs operational behavior, not as a substitute for clear DAG structure.
+Control-flow nodes wrap other nodes with a policy. They compose with everything
+else.
 
-## Use A Backup With `|`
-
-Fallback is useful when two methods can produce an acceptable result and the
-second should run only if the first fails.
+## Retry
 
 ```julia
-fast_method = @step fast = sh"fast_tool input.txt"
-slow_method = @step slow = sh"slow_tool input.txt"
+download = @step download([] => "data.tar") = "curl -fsSL -o {output} https://example.org/data.tar"
 
-pipeline = fast_method | slow_method
+download^3                         # up to three attempts
+Retry(download, 5; delay=10)       # five attempts, 10 s apart
 ```
 
-This is different from `fast_method & slow_method`: fallback does not spend time
-on the backup unless it is needed.
+Only the parts that failed run again: a successful upstream step inside the retried
+node is not repeated.
 
-## Retry A Flaky Step
+## Fallback
 
 ```julia
-flaky_api_call = @step api = sh"echo 'mock response'"
-pipeline = flaky_api_call^3
+fast = @step fast("in.txt" => "out.txt") = "fast_tool {input} > {output}"
+slow = @step slow("in.txt" => "out.txt") = "slow_tool {input} > {output}"
+
+fast | slow
+Retry(fast, 2) | slow
 ```
 
-Use `Retry` when you want a delay:
+The fallback runs only if the primary fails. A pipeline that recovers through a
+fallback succeeds (`success(result)` is true), while the primary's failure stays
+visible in the results.
+
+## Branch
 
 ```julia
-fetch = @step fetch = sh"curl -L -o data.txt https://example.com/data.txt"
-pipeline = Retry(fetch, 5; delay=2.0)
+Branch(() -> filesize("data.txt") > 10^9, big_file_path, small_file_path)
+@branch isfile("cache.bin") load_cache rebuild          # condition written inline
 ```
 
-Retry composes with fallback:
+The condition runs when the branch is reached. It may take the upstream value:
 
 ```julia
-pipeline = Retry(fetch, 3; delay=1.0) | @step cached = sh"cp cache.txt data.txt"
+detect = @step detect = () -> occursin("PE", read("meta.txt", String))
+detect >> Branch(paired -> paired, paired_end_steps, single_end_steps)
 ```
 
-## Choose A Branch
+It must return a `Bool`; anything else, or an exception, is reported as a failure.
+
+## Timeout
 
 ```julia
-large_file_pipeline = @step large = sh"process_large data.txt"
-small_file_pipeline = @step small = sh"process_small data.txt"
-
-pipeline = Branch(
-    () -> filesize("data.txt") > 1_000_000,
-    large_file_pipeline,
-    small_file_pipeline,
-)
+Timeout(long_step, 3600)
 ```
 
-Use the `@branch` macro for the common zero-argument case:
+If the node is not done in time, the timeout fails with kind `:timed_out`. Commands
+still running are terminated, together with everything they started (a shell, a
+pipe of tools, their children). Steps inside the node that have not started yet are
+not started. A Julia function that is already running cannot be stopped safely;
+the pipeline stops waiting for it.
+
+## Force
 
 ```julia
-use_fast = Ref(true)
-pipeline = @branch use_fast[] fast_method slow_method
+Force(step)                  # run even if up to date
+run(pipeline; force=true)    # the same, for everything
 ```
 
-When a branch follows a step that passes a value forward, the predicate can
-accept that value:
-
-```julia
-emit_path = @step emit_path = () -> "data.csv"
-csv_step = @step csv = sh"process_csv data.csv"
-txt_step = @step txt = sh"process_txt data.txt"
-
-pipeline = emit_path >> Branch(path -> endswith(path, ".csv"), csv_step, txt_step)
-```
-
-## Stop Waiting With `Timeout`
-
-```julia
-long_running_step = @step long = sh"sleep 1"
-pipeline = Timeout(long_running_step, 30.0)
-```
-
-Timeout returns a failed result if the deadline passes. It reports
-`:timed_out` for a timeout and `:inner_exception` if the wrapped node throws
-before finishing. External shell subprocesses may continue after Julia stops
-waiting for them, so treat timeout as a pipeline-level failure signal rather
-than a guaranteed process killer.
-
-## What To Remember
-
-Keep the main DAG readable first. Add retry, fallback, branching, or timeout only
-where the workflow really needs that behavior.
-
-**Next:** [Fan-out and reduce](foreach-reduce.md) shows how to repeat a branch
-over many items and combine results.
+**Next:** [Running, freshness and resources](running.md).

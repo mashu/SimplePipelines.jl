@@ -1,145 +1,134 @@
 # Design
 
-## Interface Overview
+This page is for contributors. It explains how the package is put together and why.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    SimplePipelines.jl                       │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  @step name = sh"cmd"       Shell step                      │
-│  @step name = sh"cmd > f"   Shell with redirection/pipes    │
-│  @step name = () -> ...     Julia step                      │
-│                                                             │
-│  a >> b                     Sequential; pass output to next (function step) │
-│  a & b                      Parallel: a and b together      │
-│  a |> b                     Pipe: run b with a's output(s)  │
-│  a >>> b                    Same input: both get same context │
-│  a .>> b                    Broadcast: attach b to each branch of a │
-│                                                             │
-│  run(p)                     Execute the pipeline            │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
+## Concepts
 
-## Type Hierarchy
+There are three kinds of objects:
 
-```
-AbstractNode
-    │
-    ├── Step{F}           Single unit of work
-    │                     F = Cmd | Function
-    │
-    ├── Sequence          Sequential execution
-    │                     children::Vector{AbstractNode}
-    │
-    └── Parallel          Concurrent execution
-                          children::Vector{AbstractNode}
-```
+- **Nodes** (`AbstractNode`) are what runs: `Step` (one command or function),
+  composites built by operators (`Sequence`, `Parallel`, `Fallback`, `Retry`,
+  `Branch`, `Timeout`, `Force`, `Resourced`), and two *lazy* nodes that are expanded
+  when they run: `ForEach` (fan-out) and `Workflow` (rules resolved against the
+  filesystem).
+- **Rules** (`Rule`) are templates. They are not nodes: they become `Step`s inside a
+  `Workflow`. Using a rule where a node is expected wraps it in a `Workflow`.
+- **Results**: `StepResult` per step and `RunResult` per run.
 
-Leaf and wrapper nodes are parametric where it matters (`Step{F}`,
-`Retry{N}`, `StepResult{S,I,O,V}`), while wide child lists use
-`Vector{AbstractNode}` to keep large DAGs practical to compile.
+Everything a user writes reduces to these, so there is one execution path, one
+freshness model and one way to report errors.
 
-## Composition Model
+## Source layout
 
-```
-# User writes:
-sh"echo a" >> (sh"echo b" & sh"echo c") >> sh"echo d"
+| file | contents |
+|:-----|:---------|
+| `shell.jl` | `Shell`, `sh`, the bash strict-mode invocation, shell quoting |
+| `patterns.jl` | wildcard `Pattern`s, globbing, `discover`, `expand`, template rendering |
+| `nodes.jl` | `Step` and composite nodes; constructors validate their input |
+| `rules.jl` | `Rule`, `gather`, `Workflow` |
+| `operators.jl` | `>>`, `&`, `\|`, `^` |
+| `macros.jl` | `@step`, `@rule`, `@branch`, `@workflow` |
+| `results.jl` | `StepFailure`, `StepResult`, `RunResult`, `Outcome`, `run_safely` |
+| `resolve.jl` | rule resolution and pattern tracing; `plan` |
+| `state.jl` | freshness and the recipe file |
+| `scheduler.jl` | admission control (`Pool`) and process termination (`Watchdog`) |
+| `execute.jl` | running one step: processes, function calls, output checks |
+| `runtime.jl` | `run_node`/`exec` for every node type, memoization |
+| `logging.jl`, `display.jl` | progress output, `show`, `print_dag` |
+| `run.jl` | `run` and `check` |
 
-# Becomes:
-Sequence(AbstractNode[
-    Step{Cmd}(...),
-    Parallel(AbstractNode[Step{Cmd}(...), Step{Cmd}(...)]),
-    Step{Cmd}(...),
-])
-```
+## Execution
 
-The node kind still drives execution through dispatch. Child lists are stored as
-vectors so pipelines with hundreds or thousands of nodes do not create enormous
-tuple types.
+`run` builds a `Runtime` (budgets, memo, results, state) and calls
+`run_node(root, runtime, scope, input)`. `run_node` memoizes; `exec` dispatches on
+the node type. A `Scope` carries what is inherited down the tree: the force flag,
+default resources, the active `Watchdog`, the scheduling priority and the log tag.
 
-## Execution Flow
+Each node returns an `Outcome(ok, value)`; the value is what `>>` passes on.
+`Parallel`, `ForEach` and `Job` spawn one task per branch. Tasks are cheap, and
+concurrency is limited at the leaves instead: a step must `acquire!` its threads and
+memory from the `Pool` before it runs. Limiting at the leaves keeps the limit global
+however the graph is nested, and it cannot deadlock, because waiting branches hold
+nothing.
 
-Execution is recursive: dispatch on node type and recurse.
+The pool admits waiters in priority order. A step's priority is its position in the
+tree (the vector of branch indices on the path to it), so earlier samples go first.
+The head of the queue blocks smaller requests behind it, which prevents a large step
+from starving.
 
-```
-run(Pipeline)
-       │
-       ▼
-run_node(root, v, force)  ─── dispatch on node type
-       │
-       ├─► Step:     execute(step) → StepResult
-       ├─► Sequence: run_node each in order; break on first failure
-       ├─► Parallel: @spawn run_node each; fetch and concat
-       ├─► ForEach:  (String) find file matches, or (Vector) iterate items; get nodes from block (cycle check), then run like Parallel
-       └─► Retry/Fallback/Branch/Timeout/Force/Reduce: recurse on inner node(s)
-       │
-       ▼
-Vector{AbstractStepResult}
-```
+### Memoization
 
-## Key Design Decisions
+`run_node` memoizes on `(node, input)`: the first visitor executes, concurrent
+visitors wait on a channel, and later visitors get the stored outcome. A step with
+declared outputs is keyed by its outputs instead, so two distinct `Step` objects
+that write the same file run once. Memoizing composites, not just steps, keeps a
+shared sub-DAG linear in its size. `Retry` clears failed entries before each new
+attempt.
 
-### 1. Vector-Backed Child Lists
+### Steps
 
-```julia
-# Used intentionally for scalable graph shape
-Sequence(nodes::Vector{AbstractNode})
+`exec(::Step)`:
 
-# Leaf/runtime payloads remain parametric
-Step{Cmd}
-StepResult{S,I,O,V}
-```
+1. `staleness` decides whether the step must run, under the runtime lock.
+2. In `check` mode, the step is recorded as planned and its outputs added to the
+   pending set.
+3. Otherwise the step acquires resources, `perform` creates the output directories,
+   checks the inputs, runs the work and checks the outputs, and the step releases
+   its resources.
+4. `finish!` records the result, updates the recipe state, and removes partial
+   outputs when the step failed.
 
-This trades a small amount of dynamic dispatch at graph traversal points for
-much lower compile-time and memory pressure on wide DAGs.
+Commands run with `run(...; wait=false)` and stream stdout and stderr through
+pipes. Readers keep at most 32 MiB of stdout and the last 16 KiB of stderr. Plain
+commands are started in their own process group, so a timeout or an interrupt can
+terminate the shell together with everything it started.
 
-### 2. Multiple Dispatch, Not Type Checks
+### Errors
 
-```julia
-# ✗ Runtime type checking (type unstable)
-function run_node(node)
-    if node isa Step
-        # ...
-    elseif node isa Sequence
-        # ...
-    end
-end
+User code runs inside `run_safely`, the package's single `try`/`catch`. It turns
+exceptions into failed outcomes carrying a `StepFailure`, and it rethrows
+interrupts after terminating running commands. Every other function reports
+problems through return values: `Unresolved` in resolution, `Outcome(false, …)`
+during execution.
 
-# ✓ Multiple dispatch (type stable)
-run_node(step::Step, v) = execute(step)
-run_node(seq::Sequence, v) = _run_sequence!([], seq.nodes, v)
-run_node(par::Parallel, v) = _spawn_parallel(par.nodes, v)
-```
+## Resolution
 
-### 3. Bounded Parallel Traversal
+`plan_workflow` turns a `Workflow` into a DAG of `Job`s (a step plus the jobs that
+produce its inputs).
 
-```julia
-tasks = [@spawn run_node(nodes[k], ctx, forced, contexts[k]) for k in rng]
-append!(results, fetch(t))
-```
+- **Concrete paths** resolve backward. Candidate rules are sorted by specificity
+  (characters captured by wildcards), and the first whose inputs resolve wins. A
+  path no rule can build is a `Leaf` if it exists, and `Unresolved` with a reason
+  otherwise. Results are cached per path, so shared inputs give shared jobs.
+- **Patterns** (pattern targets, `gather`, output-less rules) are *traced*. A
+  pattern is unified with every rule output that can produce it: its wildcards are
+  replaced by probe tokens made of control characters, which cannot occur in rule
+  literals. The rule's inputs are then rewritten in terms of the pattern's
+  wildcards, traced recursively, and the resulting assignments natural-joined.
+  Patterns no rule produces are globbed on disk. Globbing walks only directories
+  the pattern can match.
 
-Parallel and `ForEach` traversal runs in batches controlled by `jobs`, with
-optional resource hints from `with_resources`.
+## Latency
 
-### 4. Per-Run Context
+The package loads in about 0.2 s, and a first `run` adds about 0.1 s.
 
-```julia
-ctx = RunContext(verbose=verbose, jobs=jobs, state_path=state_path)
-run_node(root, ctx, force, nothing)
-```
+- Node, result and outcome types are not parametric, and the runtime files are
+  compiled with `@nospecialize`. User functions and values come in endless types;
+  specializing the runtime on them would recompile it for every new closure. The
+  traversal uses dynamic dispatch either way, so this costs nothing at run time.
+- Locks are taken through `with_lock(f, lock, args...)` with named functions rather
+  than capturing closures, whose types would differ for every value.
+- A PrecompileTools workload runs the common paths (steps, rules, gather, check,
+  ForEach, control flow, display) during precompilation.
 
-Mutable run state, logging locks, resource budgets, spill policy, and memoization
-live in one `RunContext`, so concurrent `run(...)` calls do not share scheduler
-state.
+Per-step overhead is about 30 µs for a Julia function. A shell step costs what
+starting bash costs (a few ms).
 
-## Performance Characteristics
+## Conventions
 
-| Aspect | Design Choice | Benefit |
-|--------|--------------|---------|
-| Node storage | `Vector{AbstractNode}` for children | Scales to wide DAGs |
-| Dispatch | Multiple dispatch | Avoids runtime type-check trees |
-| Iteration | Bounded loops + `@spawn` | Predictable concurrency |
-| Results | Parametric `StepResult` values in `Vector{AbstractStepResult}` | Heterogeneous traces without `Any` fields |
-| State | Per-run `RunContext` | Isolates memoization and resource budgets |
+The code follows the repository's standards (`.cursor/rules/julia-standards.mdc`):
+multiple dispatch instead of `isa` branching, no leading underscores, no `try` beyond
+`run_safely`, and small named functions. Type parameters are used where something
+dispatches on them (`ForEach{S}` on its source, `Candidate{E}`). Fields that hold
+arbitrary user values (`StepResult.result`, `Outcome.value`) are deliberately
+untyped, for the latency reason above.
